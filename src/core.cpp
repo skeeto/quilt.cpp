@@ -354,7 +354,18 @@ std::string pc_patch_dir(const QuiltState &q, std::string_view patch) {
 std::vector<std::string> files_in_patch(const QuiltState &q, std::string_view patch) {
     std::string dir = pc_patch_dir(q, patch);
     if (!is_directory(dir)) return {};
-    return find_files_recursive(dir);
+    auto all = find_files_recursive(dir);
+    std::vector<std::string> result;
+    for (auto &f : all) {
+        // Skip quilt metadata files (e.g. .timestamp, .needs_refresh)
+        auto slash = f.rfind('/');
+        std::string_view base = (slash != std::string::npos)
+            ? std::string_view(f).substr(slash + 1)
+            : std::string_view(f);
+        if (!base.empty() && base[0] == '.') continue;
+        result.push_back(std::move(f));
+    }
+    return result;
 }
 
 bool backup_file(QuiltState &q, std::string_view patch, std::string_view file) {

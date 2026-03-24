@@ -121,7 +121,7 @@ int cmd_new(QuiltState &q, int argc, char **argv) {
         }
     }
 
-    out_line("Patch " + path_join(q.patches_dir, patch_name) + " is now on top");
+    out_line("Patch " + patch_name + " is now on top");
     return 0;
 }
 
@@ -155,13 +155,11 @@ int cmd_add(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    std::string patch_display = path_join(q.patches_dir, patch);
-
     for (const auto &file : files) {
         // Check if file is already tracked by this patch
         std::string backup_path = path_join(pc_patch_dir(q, patch), file);
         if (file_exists(backup_path)) {
-            err_line("File " + file + " is already in patch " + patch_display);
+            err_line("File " + file + " is already in patch " + patch);
             return 2;
         }
 
@@ -171,7 +169,7 @@ int cmd_add(QuiltState &q, int argc, char **argv) {
             return 1;
         }
 
-        out_line("File " + file + " added to patch " + patch_display);
+        out_line("File " + file + " added to patch " + patch);
     }
 
     return 0;
@@ -207,13 +205,11 @@ int cmd_remove(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    std::string patch_display = path_join(q.patches_dir, patch);
-
     for (const auto &file : files) {
         // Check if file is tracked by this patch
         std::string backup_path = path_join(pc_patch_dir(q, patch), file);
         if (!file_exists(backup_path)) {
-            err_line("File " + file + " is not in patch " + patch_display);
+            err_line("File " + file + " is not in patch " + patch);
             return 1;
         }
 
@@ -226,7 +222,7 @@ int cmd_remove(QuiltState &q, int argc, char **argv) {
         // Remove backup file
         delete_file(backup_path);
 
-        out_line("File " + file + " removed from patch " + patch_display);
+        out_line("File " + file + " removed from patch " + patch);
     }
 
     return 0;
@@ -253,7 +249,6 @@ int cmd_edit(QuiltState &q, int argc, char **argv) {
     }
 
     std::string patch = q.applied.back();
-    std::string patch_display = path_join(q.patches_dir, patch);
 
     // Add each file to the top patch if not already tracked
     for (const auto &file : files) {
@@ -263,7 +258,7 @@ int cmd_edit(QuiltState &q, int argc, char **argv) {
                 err_line("Failed to back up " + file);
                 return 1;
             }
-            out_line("File " + file + " added to patch " + patch_display);
+            out_line("File " + file + " added to patch " + patch);
         }
     }
 
@@ -287,8 +282,11 @@ int cmd_edit(QuiltState &q, int argc, char **argv) {
 // Helper: generate diff for a single file
 // ---------------------------------------------------------------------------
 
+// p_format: "ab" for a/b labels, "0" for bare filenames, "1" (default) for dir.orig/dir
 static std::string generate_file_diff(const QuiltState &q, std::string_view patch,
-                                      std::string_view file, bool reverse = false) {
+                                      std::string_view file,
+                                      std::string_view p_format = "1",
+                                      bool reverse = false) {
     std::string backup_path = path_join(pc_patch_dir(q, patch), file);
     std::string working_path = path_join(q.work_dir, file);
 
@@ -316,10 +314,21 @@ static std::string generate_file_diff(const QuiltState &q, std::string_view patc
         new_path = working_path;
     }
 
-    // Build label arguments for nice headers
-    std::string work_base = basename(q.work_dir);
-    std::string old_label = work_base + ".orig/" + std::string(file);
-    std::string new_label = work_base + "/" + std::string(file);
+    // Build label arguments based on -p format
+    std::string old_label;
+    std::string new_label;
+    if (p_format == "ab") {
+        old_label = "a/" + std::string(file);
+        new_label = "b/" + std::string(file);
+    } else if (p_format == "0") {
+        old_label = std::string(file);
+        new_label = std::string(file);
+    } else {
+        // Default -p1: dir.orig/file and dir/file
+        std::string work_base = basename(q.work_dir);
+        old_label = work_base + ".orig/" + std::string(file);
+        new_label = work_base + "/" + std::string(file);
+    }
 
     if (backup_empty) {
         old_label = "/dev/null";
@@ -425,6 +434,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
 
     // Parse options
     std::string patch;
+    std::string p_format = "1";  // default: dir.orig/dir labels
     int i = 1;
     bool no_timestamps = false;
     bool no_index = false;
@@ -435,10 +445,12 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     while (i < argc) {
         std::string_view arg = argv[i];
         if (arg == "-p" && i + 1 < argc) {
+            p_format = std::string(argv[i + 1]);
             i += 2;
             continue;
         }
-        if (starts_with(arg, "-p")) {
+        if (starts_with(arg, "-p") && arg.size() > 2) {
+            p_format = std::string(arg.substr(2));
             i += 1;
             continue;
         }
@@ -520,7 +532,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
             }
             continue;
         }
-        std::string diff_out = generate_file_diff(q, patch, file);
+        std::string diff_out = generate_file_diff(q, patch, file, p_format);
         if (!diff_out.empty()) {
             if (!no_index) {
                 patch_content += "Index: " + work_base + "/" + file + "\n";
@@ -546,13 +558,16 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
+    // Update .timestamp
+    write_file(path_join(pc_patch_dir(q, patch), ".timestamp"), "");
+
     // Clear .needs_refresh marker if present
     std::string nr = path_join(pc_patch_dir(q, patch), ".needs_refresh");
     if (file_exists(nr)) {
         delete_file(nr);
     }
 
-    out_line("Refreshed patch " + path_join(q.patches_dir, patch));
+    out_line("Refreshed patch " + patch);
     return 0;
 }
 
@@ -568,6 +583,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
 
     // Parse options
     std::string patch;
+    std::string p_format = "1";
     std::vector<std::string> file_filter;
     bool no_timestamps = false;
     bool no_index = false;
@@ -584,10 +600,12 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
             continue;
         }
         if (arg == "-p" && i + 1 < argc) {
+            p_format = std::string(argv[i + 1]);
             i += 2;
             continue;
         }
-        if (starts_with(arg, "-p")) {
+        if (starts_with(arg, "-p") && arg.size() > 2) {
+            p_format = std::string(arg.substr(2));
             i += 1;
             continue;
         }
@@ -652,9 +670,9 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
     std::string work_base = basename(q.work_dir);
 
     if (since_refresh) {
-        // diff -z: show changes since last refresh
-        // Generate fresh diff and compare to stored patch — output the fresh diff
-        // only for files that have changed since last refresh
+        // diff -z: show changes since last refresh.
+        // For each tracked file, reconstruct the "refreshed state" by applying
+        // the stored patch to the backup, then diff that against the working file.
         std::string patch_file = path_join(q.work_dir, q.patches_dir, patch);
         std::string stored_content;
         std::map<std::string, std::string> stored_sections;
@@ -663,23 +681,111 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
             stored_sections = split_patch_by_file(stored_content);
         }
 
+        // Create temp directory for reconstructing refreshed state
+        std::string tmpdir = get_env("TMPDIR");
+        if (tmpdir.empty()) tmpdir = "/tmp";
+        std::string tmp_base = tmpdir + "/quilt-diff-z-XXXXXX";
+        std::vector<char> tmp_buf(tmp_base.begin(), tmp_base.end());
+        tmp_buf.push_back('\0');
+        char *tmp_result = mkdtemp(tmp_buf.data());
+        if (!tmp_result) {
+            err_line("Failed to create temp directory");
+            return 1;
+        }
+        std::string tmp_dir(tmp_result);
+
         for (const auto &file : tracked) {
-            std::string fresh_diff = generate_file_diff(q, patch, file, reverse);
-            std::string stored_diff;
+            std::string backup_path = path_join(pc_patch_dir(q, patch), file);
+            std::string working_path = path_join(q.work_dir, file);
+            std::string tmp_file = path_join(tmp_dir, file);
+
+            // Ensure temp subdirectory exists
+            std::string tmp_file_dir = dirname(tmp_file);
+            if (!is_directory(tmp_file_dir)) {
+                make_dirs(tmp_file_dir);
+            }
+
+            // Copy backup to temp (empty backup = file didn't exist)
+            if (file_exists(backup_path)) {
+                std::string backup_content = read_file(backup_path);
+                write_file(tmp_file, backup_content);
+            } else {
+                write_file(tmp_file, "");
+            }
+
+            // Apply stored patch section to temp file
             auto it = stored_sections.find(file);
-            if (it != stored_sections.end()) stored_diff = it->second;
-            // If the fresh diff differs from stored, output it
-            if (fresh_diff != stored_diff && !fresh_diff.empty()) {
+            if (it != stored_sections.end() && !it->second.empty()) {
+                // Build a minimal patch with correct paths for -p0
+                std::string mini_patch = "--- " + file + "\n+++ " + file + "\n";
+                // Extract just the hunk lines from the stored section
+                auto section_lines = split_lines(it->second);
+                bool in_hunk = false;
+                for (const auto &sl : section_lines) {
+                    if (starts_with(sl, "@@")) {
+                        in_hunk = true;
+                        mini_patch += sl + "\n";
+                    } else if (in_hunk) {
+                        mini_patch += sl + "\n";
+                    }
+                }
+                if (in_hunk) {
+                    std::vector<std::string> patch_cmd = {
+                        "patch", "-p0", "-s", "--no-backup-if-mismatch",
+                        "-d", tmp_dir
+                    };
+                    run_cmd_input(patch_cmd, mini_patch);
+                }
+            }
+
+            // Now diff the reconstructed "refreshed" file against working file
+            if (!file_exists(working_path) && !file_exists(tmp_file)) continue;
+
+            std::string old_label, new_label;
+            if (p_format == "ab") {
+                old_label = "a/" + file;
+                new_label = "b/" + file;
+            } else if (p_format == "0") {
+                old_label = file;
+                new_label = file;
+            } else {
+                old_label = work_base + ".orig/" + file;
+                new_label = work_base + "/" + file;
+            }
+
+            std::string old_f = tmp_file;
+            std::string new_f = working_path;
+            if (!file_exists(working_path)) new_f = "/dev/null";
+
+            if (reverse) {
+                std::swap(old_f, new_f);
+                std::swap(old_label, new_label);
+            }
+
+            std::vector<std::string> diff_cmd = {"diff", "-u"};
+            auto extra_diff_opts = split_on_whitespace(get_env("QUILT_DIFF_OPTS"));
+            for (const auto &opt : extra_diff_opts) diff_cmd.push_back(opt);
+            diff_cmd.push_back("--label");
+            diff_cmd.push_back(old_label);
+            diff_cmd.push_back("--label");
+            diff_cmd.push_back(new_label);
+            diff_cmd.push_back(old_f);
+            diff_cmd.push_back(new_f);
+
+            ProcessResult result = run_cmd(diff_cmd);
+            if (result.exit_code == 1 && !result.out.empty()) {
                 if (!no_index) {
                     out("Index: " + work_base + "/" + file + "\n");
                     out("===================================================================\n");
                 }
-                out(fresh_diff);
+                out(result.out);
             }
         }
+
+        delete_dir_recursive(tmp_dir);
     } else {
         for (const auto &file : tracked) {
-            std::string diff_out = generate_file_diff(q, patch, file, reverse);
+            std::string diff_out = generate_file_diff(q, patch, file, p_format, reverse);
             if (!diff_out.empty()) {
                 if (!no_index) {
                     out("Index: " + work_base + "/" + file + "\n");
@@ -723,13 +829,11 @@ int cmd_revert(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    std::string patch_display = path_join(q.patches_dir, patch);
-
     for (const auto &file : files) {
         // Check if file is tracked by the patch
         std::string backup_path = path_join(pc_patch_dir(q, patch), file);
         if (!file_exists(backup_path)) {
-            err_line("File " + file + " is not in patch " + patch_display);
+            err_line("File " + file + " is not in patch " + patch);
             return 1;
         }
 

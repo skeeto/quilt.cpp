@@ -21,8 +21,8 @@ static std::string strip_patches_prefix(const QuiltState &q, std::string_view na
     return std::string(name);
 }
 
-static std::string format_patch(const QuiltState &q, std::string_view name) {
-    return q.patches_dir + "/" + std::string(name);
+static std::string format_patch(const QuiltState &, std::string_view name) {
+    return std::string(name);
 }
 
 static void write_applied_patches(QuiltState &q) {
@@ -30,9 +30,9 @@ static void write_applied_patches(QuiltState &q) {
     write_applied(path, q.applied);
 }
 
-// Parse affected files from a unified diff.
-// Looks for "+++ b/file" lines (or "+++ file" without b/ prefix).
-static std::vector<std::string> parse_patch_files(std::string_view content) {
+// Parse affected files from a unified diff, stripping path components
+// to match what `patch -pN` would do.
+static std::vector<std::string> parse_patch_files(std::string_view content, int strip = 1) {
     std::vector<std::string> files;
     auto lines = split_lines(content);
     for (const auto &line : lines) {
@@ -40,16 +40,19 @@ static std::vector<std::string> parse_patch_files(std::string_view content) {
         std::string_view rest = std::string_view(line).substr(4);
         // Skip /dev/null
         if (starts_with(rest, "/dev/null")) continue;
-        // Strip "b/" prefix if present
-        if (starts_with(rest, "b/")) {
-            rest = rest.substr(2);
-        }
         // Strip trailing tab and timestamp (e.g., "\t2024-01-01 ...")
         auto tab = rest.find('\t');
         if (tab != std::string_view::npos) {
             rest = rest.substr(0, tab);
         }
         std::string f = trim(rest);
+        // Strip N leading path components (like patch -pN)
+        for (int i = 0; i < strip && !f.empty(); ++i) {
+            auto slash = f.find('/');
+            if (slash != std::string::npos) {
+                f = f.substr(slash + 1);
+            }
+        }
         if (!f.empty()) {
             files.push_back(std::move(f));
         }
@@ -341,7 +344,8 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
         }
 
         // Parse affected files and back them up
-        auto affected = parse_patch_files(patch_content);
+        int strip_level = q.get_strip_level(name);
+        auto affected = parse_patch_files(patch_content, strip_level);
         std::string pc_dir = pc_patch_dir(q, name);
         if (!is_directory(pc_dir)) {
             make_dirs(pc_dir);
@@ -352,9 +356,8 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
         }
 
         // Apply the patch using external patch command
-        int strip = q.get_strip_level(name);
         std::vector<std::string> patch_args = {
-            "patch", "-p" + std::to_string(strip), "-E", "--no-backup-if-mismatch"
+            "patch", "-p" + std::to_string(strip_level), "-E", "--no-backup-if-mismatch"
         };
         if (force) {
             patch_args.push_back("--force");

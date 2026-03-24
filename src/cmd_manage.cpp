@@ -31,7 +31,7 @@ static std::string strip_patches_prefix(const QuiltState &q, std::string_view na
 // Helper: parse a patch file to extract filenames from +++ lines
 // ---------------------------------------------------------------------------
 
-static std::vector<std::string> parse_patch_files(std::string_view content) {
+static std::vector<std::string> parse_patch_files(std::string_view content, int strip = 1) {
     std::vector<std::string> files;
     auto lines = split_lines(content);
     for (const auto &line : lines) {
@@ -42,12 +42,17 @@ static std::vector<std::string> parse_patch_files(std::string_view content) {
         if (tab != std::string::npos) {
             path = std::string(path.substr(0, tab));
         }
-        // Strip b/ prefix
-        if (starts_with(path, "b/")) {
-            path = std::string(std::string_view(path).substr(2));
-        }
         // Skip /dev/null
         if (path == "/dev/null") continue;
+        path = trim(std::string_view(path));
+        if (path.empty()) continue;
+        // Strip N leading path components (like patch -pN)
+        for (int i = 0; i < strip && !path.empty(); ++i) {
+            auto slash = path.find('/');
+            if (slash != std::string::npos) {
+                path = path.substr(slash + 1);
+            }
+        }
         if (path.empty()) continue;
         // Deduplicate
         bool found = false;
@@ -217,7 +222,7 @@ int cmd_delete(QuiltState &q, int argc, char **argv) {
         }
     }
 
-    out_line("Removed patch " + path_join(q.patches_dir, patch));
+    out_line("Removed patch " + patch);
     return 0;
 }
 
@@ -301,8 +306,7 @@ int cmd_rename(QuiltState &q, int argc, char **argv) {
         }
     }
 
-    out_line("Patch " + path_join(q.patches_dir, old_patch) +
-             " renamed to " + path_join(q.patches_dir, new_name));
+    out_line("Patch " + old_patch + " renamed to " + new_name);
     return 0;
 }
 
@@ -362,7 +366,7 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
         // Check if target exists in series
         auto existing = q.find_in_series(name);
         if (existing && !force) {
-            err_line("Patch " + path_join(q.patches_dir, name) +
+            err_line("Patch " + name +
                      " already exists in series, use -f to override");
             return 1;
         }
@@ -386,7 +390,7 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
         }
 
         out_line("Importing patch " + patchfile +
-                 " (stored as " + path_join(q.patches_dir, name) + ")");
+                 " (stored as " + name + ")");
     }
 
     return 0;
@@ -550,7 +554,7 @@ int cmd_files(QuiltState &q, int argc, char **argv) {
 
         for (const auto &f : file_list) {
             if (opt_verbose) {
-                out_line(f + "\t" + path_join(q.patches_dir, patch));
+                out_line(f + "\t" + patch);
             } else {
                 out_line(f);
             }
@@ -614,7 +618,7 @@ int cmd_patches(QuiltState &q, int argc, char **argv) {
         }
 
         if (touches) {
-            std::string display = path_join(q.patches_dir, patch);
+            std::string display = patch;
             if (opt_verbose) {
                 // Show applied status
                 if (q.is_applied(patch)) {
@@ -779,7 +783,7 @@ int cmd_fork(QuiltState &q, int argc, char **argv) {
         rename_path(old_pc, new_pc);
     }
 
-    out_line("Fork of patch " + path_join(q.patches_dir, old_name) +
-             " created as " + path_join(q.patches_dir, new_name));
+    out_line("Fork of patch " + old_name +
+             " created as " + new_name);
     return 0;
 }

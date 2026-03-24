@@ -994,6 +994,139 @@ test_diff_reverse() {
 }
 
 # -----------------------------------------------------------------------
+# quilt.html Section 4 example — full workflow test
+# -----------------------------------------------------------------------
+
+test_quilt_example() {
+    begin_test "quilt_example"
+
+    # Start with the poem
+    cat > Oberon.txt << 'POEM'
+Yet mark'd I where the bolt of Cupid fell:
+It fell upon a little western flower,
+Before milk-white, now purple with love's wound,
+And girls call it love-in-idleness.
+POEM
+
+    # Create patch and add file
+    local out
+    out=$($QUILT new flower.diff 2>&1)
+    echo "$out" | grep -q "Patch flower.diff is now on top" \
+        || { fail "new output: $out"; return; }
+
+    out=$($QUILT add Oberon.txt 2>&1)
+    echo "$out" | grep -q "File Oberon.txt added to patch flower.diff" \
+        || { fail "add output: $out"; return; }
+
+    # Edit: add 3 lines
+    cat > Oberon.txt << 'POEM'
+Yet mark'd I where the bolt of Cupid fell:
+It fell upon a little western flower,
+Before milk-white, now purple with love's wound,
+And girls call it love-in-idleness.
+The juice of it on sleeping eye-lids laid
+Will make a man or woman madly dote
+Upon the next live creature that it sees.
+POEM
+
+    $QUILT refresh >/dev/null 2>&1 || { fail "first refresh"; return; }
+    [ -f patches/flower.diff ] || { fail "patch file missing after refresh"; return; }
+    grep -q "+The juice of it" patches/flower.diff \
+        || { fail "patch content wrong"; return; }
+
+    # diff -z with no changes since refresh: should be empty
+    out=$($QUILT diff -z 2>/dev/null)
+    [ -z "$out" ] || { fail "diff -z should be empty after refresh, got: $out"; return; }
+
+    # Edit: add one more line
+    cat > Oberon.txt << 'POEM'
+Yet mark'd I where the bolt of Cupid fell:
+It fell upon a little western flower,
+Before milk-white, now purple with love's wound,
+And girls call it love-in-idleness.
+Fetch me that flower; the herb I shew'd thee once:
+The juice of it on sleeping eye-lids laid
+Will make a man or woman madly dote
+Upon the next live creature that it sees.
+POEM
+
+    # diff -z should show only the new line
+    out=$($QUILT diff -z 2>/dev/null)
+    echo "$out" | grep -q "+Fetch me that flower" \
+        || { fail "diff -z should show Fetch line"; return; }
+    # Should NOT show the previously-refreshed lines as additions
+    echo "$out" | grep -q "+The juice" \
+        && { fail "diff -z should not show already-refreshed lines as additions"; return; }
+
+    $QUILT refresh >/dev/null 2>&1 || { fail "second refresh"; return; }
+
+    # Delete patch file and re-refresh with -p ab
+    rm patches/flower.diff
+    $QUILT refresh -p ab --no-index --no-timestamps >/dev/null 2>&1 \
+        || { fail "refresh after delete failed"; return; }
+    [ -f patches/flower.diff ] || { fail "patch not recreated after delete"; return; }
+    # Check -p ab labels
+    grep -q "^--- a/Oberon.txt" patches/flower.diff \
+        || { fail "refresh -p ab should use a/ prefix"; return; }
+    grep -q "^+++ b/Oberon.txt" patches/flower.diff \
+        || { fail "refresh -p ab should use b/ prefix"; return; }
+
+    # Pop
+    out=$($QUILT pop 2>&1)
+    echo "$out" | grep -q "Removing patch flower.diff" \
+        || { fail "pop output: $out"; return; }
+    echo "$out" | grep -q "No patches applied" \
+        || { fail "pop should say no patches applied"; return; }
+
+    # Simulate upstream change: girls -> maidens
+    cat > Oberon.txt << 'POEM'
+Yet mark'd I where the bolt of Cupid fell:
+It fell upon a little western flower,
+Before milk-white, now purple with love's wound,
+And maidens call it love-in-idleness.
+POEM
+
+    # Push should fail (patch doesn't apply cleanly)
+    $QUILT push >/dev/null 2>&1
+    [ $? -ne 0 ] || { fail "push should fail on conflict"; return; }
+
+    # Force push
+    out=$($QUILT push -f 2>&1)
+    echo "$out" | grep -q "forced; needs refresh" \
+        || { fail "push -f output: $out"; return; }
+
+    # Backup should be at correct path (not with extra directory prefix)
+    [ -f .pc/flower.diff/Oberon.txt ] \
+        || { fail "backup at wrong path after push"; return; }
+
+    # top should show bare name
+    out=$($QUILT top 2>&1)
+    [ "$out" = "flower.diff" ] || { fail "top should be 'flower.diff', got: $out"; return; }
+
+    # Refresh should clear needs_refresh
+    # First fix up the file with the correct content
+    cat > Oberon.txt << 'POEM'
+Yet mark'd I where the bolt of Cupid fell:
+It fell upon a little western flower,
+Before milk-white, now purple with love's wound,
+And maidens call it love-in-idleness.
+Fetch me that flower; the herb I shew'd thee once:
+The juice of it on sleeping eye-lids laid
+Will make a man or woman madly dote
+Upon the next live creature that it sees.
+POEM
+
+    $QUILT refresh >/dev/null 2>&1 || { fail "refresh after force push"; return; }
+    [ ! -f .pc/flower.diff/.needs_refresh ] \
+        || { fail ".needs_refresh should be cleared"; return; }
+
+    # Pop should work normally now
+    $QUILT pop >/dev/null 2>&1 || { fail "pop after refresh"; return; }
+
+    pass
+}
+
+# -----------------------------------------------------------------------
 # Run all tests
 # -----------------------------------------------------------------------
 
@@ -1046,6 +1179,7 @@ test_force_push_tracking
 test_force_pop
 test_refresh_shadowing
 test_diff_reverse
+test_quilt_example
 
 echo ""
 echo "================================"
