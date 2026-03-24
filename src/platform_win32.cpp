@@ -1,0 +1,571 @@
+// This is free and unencumbered software released into the public domain.
+//
+// Win32 platform implementation for quilt.
+// Provides wmain entry point, UTF-16 <-> UTF-8 conversion at system
+// boundaries, and Win32 implementations of the platform interface.
+//
+// This file is compiled only on Windows.  POSIX builds use
+// platform_posix.cpp instead.  No #ifdef guards -- the build system
+// selects exactly one platform source.
+
+#include "platform.hpp"
+
+#ifndef _WIN32
+#error "platform_win32.cpp must only be compiled on Windows"
+#endif
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <shellapi.h>
+
+#include <cstdlib>
+#include <cstring>
+
+// ---------------------------------------------------------------------------
+// UTF-8 <-> UTF-16 helpers
+// ---------------------------------------------------------------------------
+
+static std::wstring utf8_to_wide(std::string_view s)
+{
+    if (s.empty()) return {};
+    int len = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(),
+                                  nullptr, 0);
+    if (len <= 0) return {};
+    std::wstring out(len, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(),
+                        out.data(), len);
+    return out;
+}
+
+static std::string wide_to_utf8(const wchar_t *w, int wlen = -1)
+{
+    if (!w) return {};
+    if (wlen < 0) wlen = (int)wcslen(w);
+    if (wlen == 0) return {};
+    int len = WideCharToMultiByte(CP_UTF8, 0, w, wlen,
+                                  nullptr, 0, nullptr, nullptr);
+    if (len <= 0) return {};
+    std::string out(len, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w, wlen,
+                        out.data(), len, nullptr, nullptr);
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// Pipe helpers
+// ---------------------------------------------------------------------------
+
+static std::string read_handle(HANDLE h)
+{
+    std::string result;
+    char buf[4096];
+    for (;;) {
+        DWORD n = 0;
+        if (!ReadFile(h, buf, sizeof(buf), &n, nullptr) || n == 0)
+            break;
+        result.append(buf, n);
+    }
+    return result;
+}
+
+static bool write_handle(HANDLE h, const void *data, size_t len)
+{
+    const char *p = static_cast<const char *>(data);
+    while (len > 0) {
+        DWORD written = 0;
+        if (!WriteFile(h, p, (DWORD)len, &written, nullptr))
+            return false;
+        p   += written;
+        len -= written;
+    }
+    return true;
+}
+
+// Create an inheritable pipe.  read_end and write_end are set.
+// inherit_which: 0 = read end inheritable, 1 = write end inheritable
+static bool create_pipe(HANDLE &read_end, HANDLE &write_end,
+                        int inherit_which)
+{
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+
+    if (!CreatePipe(&read_end, &write_end, &sa, 0))
+        return false;
+
+    // Make the non-inherited end non-inheritable
+    HANDLE &non_inherit = (inherit_which == 0) ? write_end : read_end;
+    SetHandleInformation(non_inherit, HANDLE_FLAG_INHERIT, 0);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Build a command line string from argv (proper quoting)
+// ---------------------------------------------------------------------------
+
+static std::wstring build_cmdline(const std::vector<std::string> &argv)
+{
+    // Windows command-line quoting: wrap each arg in quotes, escape
+    // internal quotes and backslashes before quotes.
+    std::wstring cmdline;
+    for (size_t i = 0; i < argv.size(); ++i) {
+        if (i > 0) cmdline += L' ';
+
+        std::wstring arg = utf8_to_wide(argv[i]);
+
+        // Check if quoting is needed
+        bool needs_quote = arg.empty();
+        for (wchar_t c : arg) {
+            if (c == L' ' || c == L'\t' || c == L'"') {
+                needs_quote = true;
+                break;
+            }
+        }
+
+        if (!needs_quote) {
+            cmdline += arg;
+            continue;
+        }
+
+        cmdline += L'"';
+        int num_backslashes = 0;
+        for (wchar_t c : arg) {
+            if (c == L'\\') {
+                ++num_backslashes;
+            } else if (c == L'"') {
+                // Escape preceding backslashes and the quote
+                for (int j = 0; j < num_backslashes; ++j)
+                    cmdline += L'\\';
+                cmdline += L'\\';
+                cmdline += L'"';
+                num_backslashes = 0;
+            } else {
+                num_backslashes = 0;
+                cmdline += c;
+            }
+        }
+        // Escape trailing backslashes before closing quote
+        for (int j = 0; j < num_backslashes; ++j)
+            cmdline += L'\\';
+        cmdline += L'"';
+    }
+    return cmdline;
+}
+
+// ---------------------------------------------------------------------------
+// Process execution
+// ---------------------------------------------------------------------------
+
+static ProcessResult run_cmd_impl(const std::vector<std::string> &argv,
+                                  const char *stdin_data, size_t stdin_len)
+{
+    ProcessResult result{};
+
+    if (argv.empty()) {
+        result.exit_code = -1;
+        return result;
+    }
+
+    // Create pipes for stdout, stderr, and optionally stdin
+    HANDLE stdout_rd = INVALID_HANDLE_VALUE, stdout_wr = INVALID_HANDLE_VALUE;
+    HANDLE stderr_rd = INVALID_HANDLE_VALUE, stderr_wr = INVALID_HANDLE_VALUE;
+    HANDLE stdin_rd  = INVALID_HANDLE_VALUE, stdin_wr  = INVALID_HANDLE_VALUE;
+
+    if (!create_pipe(stdout_rd, stdout_wr, 1)) {  // write end inheritable
+        result.exit_code = -1;
+        return result;
+    }
+    if (!create_pipe(stderr_rd, stderr_wr, 1)) {
+        CloseHandle(stdout_rd); CloseHandle(stdout_wr);
+        result.exit_code = -1;
+        return result;
+    }
+
+    bool need_stdin = (stdin_data != nullptr);
+    if (need_stdin) {
+        if (!create_pipe(stdin_rd, stdin_wr, 0)) {  // read end inheritable
+            CloseHandle(stdout_rd); CloseHandle(stdout_wr);
+            CloseHandle(stderr_rd); CloseHandle(stderr_wr);
+            result.exit_code = -1;
+            return result;
+        }
+    }
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdOutput = stdout_wr;
+    si.hStdError  = stderr_wr;
+    si.hStdInput  = need_stdin ? stdin_rd : GetStdHandle(STD_INPUT_HANDLE);
+
+    PROCESS_INFORMATION pi{};
+
+    std::wstring cmdline = build_cmdline(argv);
+
+    BOOL ok = CreateProcessW(
+        nullptr,                               // lpApplicationName
+        cmdline.data(),                        // lpCommandLine (mutable)
+        nullptr, nullptr,                      // process/thread security
+        TRUE,                                  // inherit handles
+        CREATE_NO_WINDOW,                      // creation flags
+        nullptr,                               // environment
+        nullptr,                               // current directory
+        &si, &pi
+    );
+
+    // Close child-side handles in parent
+    CloseHandle(stdout_wr);
+    CloseHandle(stderr_wr);
+    if (need_stdin) CloseHandle(stdin_rd);
+
+    if (!ok) {
+        result.exit_code = -1;
+        result.err = "CreateProcessW failed: " + std::to_string(GetLastError());
+        CloseHandle(stdout_rd);
+        CloseHandle(stderr_rd);
+        if (need_stdin) CloseHandle(stdin_wr);
+        return result;
+    }
+
+    // Write stdin data
+    if (need_stdin) {
+        write_handle(stdin_wr, stdin_data, stdin_len);
+        CloseHandle(stdin_wr);
+    }
+
+    // Read stdout and stderr
+    result.out = read_handle(stdout_rd);
+    result.err = read_handle(stderr_rd);
+    CloseHandle(stdout_rd);
+    CloseHandle(stderr_rd);
+
+    // Wait for process
+    WaitForSingleObject(pi.hProcess, INFINITE);
+
+    DWORD exit_code = 0;
+    GetExitCodeProcess(pi.hProcess, &exit_code);
+    result.exit_code = static_cast<int>(exit_code);
+
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    return result;
+}
+
+ProcessResult run_cmd(const std::vector<std::string> &argv)
+{
+    return run_cmd_impl(argv, nullptr, 0);
+}
+
+ProcessResult run_cmd_input(const std::vector<std::string> &argv,
+                            std::string_view stdin_data)
+{
+    return run_cmd_impl(argv, stdin_data.data(), stdin_data.size());
+}
+
+// ---------------------------------------------------------------------------
+// File system operations
+// ---------------------------------------------------------------------------
+
+std::string read_file(std::string_view path)
+{
+    std::wstring wpath = utf8_to_wide(path);
+    HANDLE h = CreateFileW(wpath.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                           nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+                           nullptr);
+    if (h == INVALID_HANDLE_VALUE) return {};
+
+    std::string result = read_handle(h);
+    CloseHandle(h);
+    return result;
+}
+
+bool write_file(std::string_view path, std::string_view content)
+{
+    std::wstring wpath = utf8_to_wide(path);
+    HANDLE h = CreateFileW(wpath.c_str(), GENERIC_WRITE, 0,
+                           nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                           nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+
+    bool ok = write_handle(h, content.data(), content.size());
+    CloseHandle(h);
+    return ok;
+}
+
+bool append_file(std::string_view path, std::string_view content)
+{
+    std::wstring wpath = utf8_to_wide(path);
+    HANDLE h = CreateFileW(wpath.c_str(), FILE_APPEND_DATA, 0,
+                           nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                           nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+
+    bool ok = write_handle(h, content.data(), content.size());
+    CloseHandle(h);
+    return ok;
+}
+
+bool copy_file(std::string_view src, std::string_view dst)
+{
+    std::wstring wsrc = utf8_to_wide(src);
+    std::wstring wdst = utf8_to_wide(dst);
+    return CopyFileW(wsrc.c_str(), wdst.c_str(), FALSE) != 0;
+}
+
+bool rename_path(std::string_view old_path, std::string_view new_path)
+{
+    std::wstring wold = utf8_to_wide(old_path);
+    std::wstring wnew = utf8_to_wide(new_path);
+    return MoveFileExW(wold.c_str(), wnew.c_str(),
+                       MOVEFILE_REPLACE_EXISTING) != 0;
+}
+
+bool delete_file(std::string_view path)
+{
+    std::wstring wpath = utf8_to_wide(path);
+    return DeleteFileW(wpath.c_str()) != 0;
+}
+
+bool delete_dir_recursive(std::string_view path)
+{
+    std::wstring wpath = utf8_to_wide(path);
+    std::wstring pattern = wpath + L"\\*";
+
+    WIN32_FIND_DATAW fd;
+    HANDLE hFind = FindFirstFileW(pattern.c_str(), &fd);
+    if (hFind == INVALID_HANDLE_VALUE) return false;
+
+    bool ok = true;
+    do {
+        if (wcscmp(fd.cFileName, L".") == 0 ||
+            wcscmp(fd.cFileName, L"..") == 0)
+            continue;
+
+        std::wstring child = wpath + L"\\" + fd.cFileName;
+        std::string child_utf8 = wide_to_utf8(child.c_str(), (int)child.size());
+
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            if (!delete_dir_recursive(child_utf8)) ok = false;
+        } else {
+            if (!DeleteFileW(child.c_str())) ok = false;
+        }
+    } while (FindNextFileW(hFind, &fd));
+    FindClose(hFind);
+
+    if (!RemoveDirectoryW(wpath.c_str())) ok = false;
+    return ok;
+}
+
+bool make_dir(std::string_view path)
+{
+    std::wstring wpath = utf8_to_wide(path);
+    if (CreateDirectoryW(wpath.c_str(), nullptr)) return true;
+    return GetLastError() == ERROR_ALREADY_EXISTS;
+}
+
+bool make_dirs(std::string_view path)
+{
+    if (path.empty()) return false;
+
+    std::string p(path);
+    // Normalize separators
+    for (char &c : p) {
+        if (c == '/') c = '\\';
+    }
+
+    // Walk through path components, creating each
+    for (size_t i = 1; i < p.size(); ++i) {
+        if (p[i] == '\\') {
+            p[i] = '\0';
+            std::wstring wp = utf8_to_wide(p.c_str());
+            if (!CreateDirectoryW(wp.c_str(), nullptr)) {
+                if (GetLastError() != ERROR_ALREADY_EXISTS)
+                    return false;
+            }
+            p[i] = '\\';
+        }
+    }
+    std::wstring wp = utf8_to_wide(p);
+    if (!CreateDirectoryW(wp.c_str(), nullptr)) {
+        if (GetLastError() != ERROR_ALREADY_EXISTS)
+            return false;
+    }
+    return true;
+}
+
+bool file_exists(std::string_view path)
+{
+    std::wstring wpath = utf8_to_wide(path);
+    DWORD attr = GetFileAttributesW(wpath.c_str());
+    return attr != INVALID_FILE_ATTRIBUTES;
+}
+
+bool is_directory(std::string_view path)
+{
+    std::wstring wpath = utf8_to_wide(path);
+    DWORD attr = GetFileAttributesW(wpath.c_str());
+    if (attr == INVALID_FILE_ATTRIBUTES) return false;
+    return (attr & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
+std::vector<DirEntry> list_dir(std::string_view path)
+{
+    std::vector<DirEntry> entries;
+    std::wstring wpath = utf8_to_wide(path);
+    std::wstring pattern = wpath + L"\\*";
+
+    WIN32_FIND_DATAW fd;
+    HANDLE hFind = FindFirstFileW(pattern.c_str(), &fd);
+    if (hFind == INVALID_HANDLE_VALUE) return entries;
+
+    do {
+        if (wcscmp(fd.cFileName, L".") == 0 ||
+            wcscmp(fd.cFileName, L"..") == 0)
+            continue;
+
+        DirEntry e;
+        e.name   = wide_to_utf8(fd.cFileName);
+        e.is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+        entries.push_back(std::move(e));
+    } while (FindNextFileW(hFind, &fd));
+    FindClose(hFind);
+
+    return entries;
+}
+
+static void find_files_impl(const std::wstring &base,
+                             const std::string &prefix,
+                             std::vector<std::string> &out)
+{
+    std::wstring pattern = base + L"\\*";
+    WIN32_FIND_DATAW fd;
+    HANDLE hFind = FindFirstFileW(pattern.c_str(), &fd);
+    if (hFind == INVALID_HANDLE_VALUE) return;
+
+    do {
+        if (wcscmp(fd.cFileName, L".") == 0 ||
+            wcscmp(fd.cFileName, L"..") == 0)
+            continue;
+
+        std::string name = wide_to_utf8(fd.cFileName);
+        std::wstring full = base + L"\\" + fd.cFileName;
+        std::string rel = prefix.empty() ? name : prefix + "/" + name;
+
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            find_files_impl(full, rel, out);
+        } else {
+            out.push_back(rel);
+        }
+    } while (FindNextFileW(hFind, &fd));
+    FindClose(hFind);
+}
+
+std::vector<std::string> find_files_recursive(std::string_view dir)
+{
+    std::vector<std::string> result;
+    std::wstring wdir = utf8_to_wide(dir);
+    find_files_impl(wdir, "", result);
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// Environment
+// ---------------------------------------------------------------------------
+
+std::string get_env(std::string_view name)
+{
+    std::wstring wname = utf8_to_wide(name);
+    // First call to get required buffer size
+    DWORD len = GetEnvironmentVariableW(wname.c_str(), nullptr, 0);
+    if (len == 0) return {};
+    std::wstring buf(len, L'\0');
+    GetEnvironmentVariableW(wname.c_str(), buf.data(), len);
+    // Remove trailing null
+    if (!buf.empty() && buf.back() == L'\0') buf.pop_back();
+    return wide_to_utf8(buf.c_str(), (int)buf.size());
+}
+
+std::string get_cwd()
+{
+    DWORD len = GetCurrentDirectoryW(0, nullptr);
+    if (len == 0) return {};
+    std::wstring buf(len, L'\0');
+    GetCurrentDirectoryW(len, buf.data());
+    // Remove trailing null
+    if (!buf.empty() && buf.back() == L'\0') buf.pop_back();
+    std::string result = wide_to_utf8(buf.c_str(), (int)buf.size());
+    // Normalize backslashes to forward slashes for consistency
+    for (char &c : result) {
+        if (c == '\\') c = '/';
+    }
+    return result;
+}
+
+bool set_cwd(std::string_view path)
+{
+    std::wstring wpath = utf8_to_wide(path);
+    return SetCurrentDirectoryW(wpath.c_str()) != 0;
+}
+
+// ---------------------------------------------------------------------------
+// I/O
+// ---------------------------------------------------------------------------
+
+void fd_write_stdout(std::string_view s)
+{
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (h != INVALID_HANDLE_VALUE)
+        write_handle(h, s.data(), s.size());
+}
+
+void fd_write_stderr(std::string_view s)
+{
+    HANDLE h = GetStdHandle(STD_ERROR_HANDLE);
+    if (h != INVALID_HANDLE_VALUE)
+        write_handle(h, s.data(), s.size());
+}
+
+std::string read_stdin()
+{
+    HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+    if (h == INVALID_HANDLE_VALUE) return {};
+    return read_handle(h);
+}
+
+// ---------------------------------------------------------------------------
+// Entry point -- wmain for proper UTF-16 argument handling
+// ---------------------------------------------------------------------------
+
+int wmain(int, wchar_t **)
+{
+    // Use GetCommandLineW + CommandLineToArgvW for reliable parsing
+    int argc = 0;
+    wchar_t **wargv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (!wargv) return 1;
+
+    // Convert to UTF-8
+    std::vector<std::string> args_storage;
+    args_storage.reserve(argc);
+    for (int i = 0; i < argc; ++i)
+        args_storage.push_back(wide_to_utf8(wargv[i]));
+    LocalFree(wargv);
+
+    std::vector<char *> argv_ptrs;
+    argv_ptrs.reserve(argc + 1);
+    for (auto &a : args_storage)
+        argv_ptrs.push_back(a.data());
+    argv_ptrs.push_back(nullptr);
+
+    return quilt_main(argc, argv_ptrs.data());
+}
+
+// Fallback for non-MSVC toolchains that don't support wmain
+#if !defined(_MSC_VER)
+int main(int argc, char **argv)
+{
+    return quilt_main(argc, argv);
+}
+#endif
