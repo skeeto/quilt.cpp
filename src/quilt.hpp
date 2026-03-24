@@ -10,44 +10,40 @@
 #include <functional>
 #include <algorithm>
 
-// UTF-8 string alias — all internal strings are UTF-8
-using Str = std::string;
-using StrView = std::string_view;
-
 // Quilt .pc/ directory state
 struct QuiltState {
-    Str work_dir;        // project root
-    Str patches_dir;     // typically "patches"
-    Str pc_dir;          // typically ".pc"
-    Str series_file;     // "patches/series"
+    std::string work_dir;        // project root
+    std::string patches_dir;     // typically "patches"
+    std::string pc_dir;          // typically ".pc"
+    std::string series_file;     // "patches/series"
 
-    std::vector<Str> series;   // ordered patch names from series file
-    std::vector<Str> applied;  // applied patch names from .pc/applied-patches
+    std::vector<std::string> series;   // ordered patch names from series file
+    std::vector<std::string> applied;  // applied patch names from .pc/applied-patches
 
     // Computed helpers
     int top_index() const;     // index of topmost applied in series (-1 if none)
-    bool is_applied(StrView patch) const;
-    std::optional<int> find_in_series(StrView patch) const;
+    bool is_applied(std::string_view patch) const;
+    std::optional<int> find_in_series(std::string_view patch) const;
 };
 
 // I/O helpers
-void out(StrView s);
-void out_line(StrView s);
-void err(StrView s);
-void err_line(StrView s);
+void out(std::string_view s);
+void out_line(std::string_view s);
+void err(std::string_view s);
+void err_line(std::string_view s);
 
 // Path utilities
-Str path_join(StrView a, StrView b);
-Str path_join(StrView a, StrView b, StrView c);
-Str basename(StrView path);
-Str dirname(StrView path);
-Str strip_trailing_slash(StrView s);
+std::string path_join(std::string_view a, std::string_view b);
+std::string path_join(std::string_view a, std::string_view b, std::string_view c);
+std::string basename(std::string_view path);
+std::string dirname(std::string_view path);
+std::string strip_trailing_slash(std::string_view s);
 
 // String utilities
-Str trim(StrView s);
-std::vector<Str> split_lines(StrView s);
-bool starts_with(StrView s, StrView prefix);
-bool ends_with(StrView s, StrView suffix);
+std::string trim(std::string_view s);
+std::vector<std::string> split_lines(std::string_view s);
+bool starts_with(std::string_view s, std::string_view prefix);
+bool ends_with(std::string_view s, std::string_view suffix);
 
 // Command function type
 using CmdFn = int (*)(QuiltState &q, int argc, char **argv);

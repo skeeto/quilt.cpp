@@ -7,22 +7,22 @@
 
 // Forward declarations for helpers defined in core.cpp
 extern bool ensure_pc_dir(QuiltState &q);
-extern Str pc_patch_dir(const QuiltState &q, StrView patch);
-extern std::vector<Str> files_in_patch(const QuiltState &q, StrView patch);
-extern bool backup_file(QuiltState &q, StrView patch, StrView file);
-extern bool restore_file(QuiltState &q, StrView patch, StrView file);
-extern bool write_series(StrView path, const std::vector<Str> &patches);
-extern bool write_applied(StrView path, const std::vector<Str> &patches);
+extern std::string pc_patch_dir(const QuiltState &q, std::string_view patch);
+extern std::vector<std::string> files_in_patch(const QuiltState &q, std::string_view patch);
+extern bool backup_file(QuiltState &q, std::string_view patch, std::string_view file);
+extern bool restore_file(QuiltState &q, std::string_view patch, std::string_view file);
+extern bool write_series(std::string_view path, const std::vector<std::string> &patches);
+extern bool write_applied(std::string_view path, const std::vector<std::string> &patches);
 
 // ---------------------------------------------------------------------------
 // Helper: read the existing patch header (text before first diff content)
 // ---------------------------------------------------------------------------
 
-static Str read_patch_header(StrView patch_path) {
-    Str content = read_file(patch_path);
+static std::string read_patch_header(std::string_view patch_path) {
+    std::string content = read_file(patch_path);
     if (content.empty()) return "";
 
-    Str header;
+    std::string header;
     auto lines = split_lines(content);
     for (const auto &line : lines) {
         if (starts_with(line, "Index:") ||
@@ -42,10 +42,10 @@ static Str read_patch_header(StrView patch_path) {
 
 int cmd_new(QuiltState &q, int argc, char **argv) {
     // Parse options
-    Str patch_name;
+    std::string patch_name;
     int i = 1;  // skip argv[0] which is "new"
     while (i < argc) {
-        StrView arg = argv[i];
+        std::string_view arg = argv[i];
         if (arg == "-p" && i + 1 < argc) {
             // Store strip level for later; not used immediately
             i += 2;
@@ -57,7 +57,7 @@ int cmd_new(QuiltState &q, int argc, char **argv) {
             continue;
         }
         // First non-option argument is the patch name
-        patch_name = Str(arg);
+        patch_name = std::string(arg);
         i += 1;
         break;
     }
@@ -77,7 +77,7 @@ int cmd_new(QuiltState &q, int argc, char **argv) {
     if (!ensure_pc_dir(q)) return 1;
 
     // Ensure patches/ directory exists
-    Str patches_abs = path_join(q.work_dir, q.patches_dir);
+    std::string patches_abs = path_join(q.work_dir, q.patches_dir);
     if (!is_directory(patches_abs)) {
         if (!make_dirs(patches_abs)) {
             err_line("Failed to create " + patches_abs);
@@ -96,7 +96,7 @@ int cmd_new(QuiltState &q, int argc, char **argv) {
     }
 
     // Write series file
-    Str series_abs = path_join(q.work_dir, q.series_file);
+    std::string series_abs = path_join(q.work_dir, q.series_file);
     if (!write_series(series_abs, q.series)) {
         err_line("Failed to write series file.");
         return 1;
@@ -104,14 +104,14 @@ int cmd_new(QuiltState &q, int argc, char **argv) {
 
     // Add to applied list and write applied-patches
     q.applied.push_back(patch_name);
-    Str applied_abs = path_join(q.work_dir, q.pc_dir, "applied-patches");
+    std::string applied_abs = path_join(q.work_dir, q.pc_dir, "applied-patches");
     if (!write_applied(applied_abs, q.applied)) {
         err_line("Failed to write applied-patches.");
         return 1;
     }
 
     // Create .pc/<patchname>/ directory
-    Str pc_dir = pc_patch_dir(q, patch_name);
+    std::string pc_dir = pc_patch_dir(q, patch_name);
     if (!is_directory(pc_dir)) {
         if (!make_dirs(pc_dir)) {
             err_line("Failed to create " + pc_dir);
@@ -134,13 +134,13 @@ int cmd_add(QuiltState &q, int argc, char **argv) {
     }
 
     // Parse options
-    Str patch = q.applied.back();
-    std::vector<Str> files;
+    std::string patch = q.applied.back();
+    std::vector<std::string> files;
     int i = 1;
     while (i < argc) {
-        StrView arg = argv[i];
+        std::string_view arg = argv[i];
         if (arg == "-P" && i + 1 < argc) {
-            patch = Str(argv[i + 1]);
+            patch = std::string(argv[i + 1]);
             i += 2;
             continue;
         }
@@ -153,11 +153,11 @@ int cmd_add(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    Str patch_display = path_join(q.patches_dir, patch);
+    std::string patch_display = path_join(q.patches_dir, patch);
 
     for (const auto &file : files) {
         // Check if file is already tracked by this patch
-        Str backup_path = path_join(pc_patch_dir(q, patch), file);
+        std::string backup_path = path_join(pc_patch_dir(q, patch), file);
         if (file_exists(backup_path)) {
             err_line("File " + file + " is already in patch " + patch_display);
             return 2;
@@ -186,13 +186,13 @@ int cmd_remove(QuiltState &q, int argc, char **argv) {
     }
 
     // Parse options
-    Str patch = q.applied.back();
-    std::vector<Str> files;
+    std::string patch = q.applied.back();
+    std::vector<std::string> files;
     int i = 1;
     while (i < argc) {
-        StrView arg = argv[i];
+        std::string_view arg = argv[i];
         if (arg == "-P" && i + 1 < argc) {
-            patch = Str(argv[i + 1]);
+            patch = std::string(argv[i + 1]);
             i += 2;
             continue;
         }
@@ -205,11 +205,11 @@ int cmd_remove(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    Str patch_display = path_join(q.patches_dir, patch);
+    std::string patch_display = path_join(q.patches_dir, patch);
 
     for (const auto &file : files) {
         // Check if file is tracked by this patch
-        Str backup_path = path_join(pc_patch_dir(q, patch), file);
+        std::string backup_path = path_join(pc_patch_dir(q, patch), file);
         if (!file_exists(backup_path)) {
             err_line("File " + file + " is not in patch " + patch_display);
             return 1;
@@ -240,7 +240,7 @@ int cmd_edit(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    std::vector<Str> files;
+    std::vector<std::string> files;
     for (int i = 1; i < argc; ++i) {
         files.emplace_back(argv[i]);
     }
@@ -250,12 +250,12 @@ int cmd_edit(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    Str patch = q.applied.back();
-    Str patch_display = path_join(q.patches_dir, patch);
+    std::string patch = q.applied.back();
+    std::string patch_display = path_join(q.patches_dir, patch);
 
     // Add each file to the top patch if not already tracked
     for (const auto &file : files) {
-        Str backup_path = path_join(pc_patch_dir(q, patch), file);
+        std::string backup_path = path_join(pc_patch_dir(q, patch), file);
         if (!file_exists(backup_path)) {
             if (!backup_file(q, patch, file)) {
                 err_line("Failed to back up " + file);
@@ -266,37 +266,36 @@ int cmd_edit(QuiltState &q, int argc, char **argv) {
     }
 
     // Get editor from environment
-    Str editor = get_env("EDITOR");
+    std::string editor = get_env("EDITOR");
     if (editor.empty()) {
         editor = "vi";
     }
 
     // Launch editor with all files as arguments
-    std::vector<Str> cmd_argv;
+    std::vector<std::string> cmd_argv;
     cmd_argv.push_back(editor);
     for (const auto &file : files) {
         cmd_argv.push_back(path_join(q.work_dir, file));
     }
 
-    ProcessResult result = run_cmd(cmd_argv);
-    return result.exit_code;
+    return run_cmd_tty(cmd_argv);
 }
 
 // ---------------------------------------------------------------------------
 // Helper: generate diff for a single file
 // ---------------------------------------------------------------------------
 
-static Str generate_file_diff(const QuiltState &q, StrView patch, StrView file) {
-    Str backup_path = path_join(pc_patch_dir(q, patch), file);
-    Str working_path = path_join(q.work_dir, file);
+static std::string generate_file_diff(const QuiltState &q, std::string_view patch, std::string_view file) {
+    std::string backup_path = path_join(pc_patch_dir(q, patch), file);
+    std::string working_path = path_join(q.work_dir, file);
 
-    Str old_path;
-    Str new_path;
+    std::string old_path;
+    std::string new_path;
     bool backup_empty = false;
 
     // Check if backup is an empty placeholder (file was new)
     if (file_exists(backup_path)) {
-        Str content = read_file(backup_path);
+        std::string content = read_file(backup_path);
         if (content.empty()) {
             backup_empty = true;
         }
@@ -315,9 +314,9 @@ static Str generate_file_diff(const QuiltState &q, StrView patch, StrView file) 
     }
 
     // Build label arguments for nice headers
-    Str work_base = basename(q.work_dir);
-    Str old_label = work_base + ".orig/" + Str(file);
-    Str new_label = work_base + "/" + Str(file);
+    std::string work_base = basename(q.work_dir);
+    std::string old_label = work_base + ".orig/" + std::string(file);
+    std::string new_label = work_base + "/" + std::string(file);
 
     if (backup_empty) {
         old_label = "/dev/null";
@@ -326,7 +325,7 @@ static Str generate_file_diff(const QuiltState &q, StrView patch, StrView file) 
         new_label = "/dev/null";
     }
 
-    std::vector<Str> cmd_argv = {
+    std::vector<std::string> cmd_argv = {
         "diff", "-u",
         "--label", old_label,
         "--label", new_label,
@@ -336,7 +335,7 @@ static Str generate_file_diff(const QuiltState &q, StrView patch, StrView file) 
     ProcessResult result = run_cmd(cmd_argv);
     // diff returns 0 (no diff), 1 (differences), 2 (trouble)
     if (result.exit_code == 2) {
-        err_line("diff failed for " + Str(file));
+        err_line("diff failed for " + std::string(file));
         return "";
     }
 
@@ -354,7 +353,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     }
 
     // Parse options
-    Str patch;
+    std::string patch;
     int i = 1;
     bool no_timestamps = false;
     bool no_index = false;
@@ -363,7 +362,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     (void)no_timestamps; (void)force;
 
     while (i < argc) {
-        StrView arg = argv[i];
+        std::string_view arg = argv[i];
         if (arg == "-p" && i + 1 < argc) {
             i += 2;
             continue;
@@ -394,7 +393,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         }
         // Non-option: patch name
         if (patch.empty()) {
-            patch = Str(arg);
+            patch = std::string(arg);
         }
         i += 1;
     }
@@ -410,18 +409,18 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     }
 
     // Read existing patch header if any
-    Str patch_file = path_join(q.work_dir, q.patches_dir, patch);
-    Str header;
+    std::string patch_file = path_join(q.work_dir, q.patches_dir, patch);
+    std::string header;
     if (file_exists(patch_file)) {
         header = read_patch_header(patch_file);
     }
 
     // Generate diffs
-    Str work_base = basename(q.work_dir);
-    Str patch_content = header;
+    std::string work_base = basename(q.work_dir);
+    std::string patch_content = header;
 
     for (const auto &file : tracked) {
-        Str diff_out = generate_file_diff(q, patch, file);
+        std::string diff_out = generate_file_diff(q, patch, file);
         if (!diff_out.empty()) {
             if (!no_index) {
                 patch_content += "Index: " + work_base + "/" + file + "\n";
@@ -436,7 +435,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     }
 
     // Ensure patches directory exists
-    Str patches_abs = path_join(q.work_dir, q.patches_dir);
+    std::string patches_abs = path_join(q.work_dir, q.patches_dir);
     if (!is_directory(patches_abs)) {
         make_dirs(patches_abs);
     }
@@ -462,17 +461,17 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
     }
 
     // Parse options
-    Str patch;
-    std::vector<Str> file_filter;
+    std::string patch;
+    std::vector<std::string> file_filter;
     bool no_timestamps = false;
     bool no_index = false;
     (void)no_timestamps;
     int i = 1;
 
     while (i < argc) {
-        StrView arg = argv[i];
+        std::string_view arg = argv[i];
         if (arg == "-P" && i + 1 < argc) {
-            patch = Str(argv[i + 1]);
+            patch = std::string(argv[i + 1]);
             i += 2;
             continue;
         }
@@ -524,7 +523,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
 
     // If file filter given, restrict to those files
     if (!file_filter.empty()) {
-        std::vector<Str> filtered;
+        std::vector<std::string> filtered;
         for (const auto &t : tracked) {
             for (const auto &f : file_filter) {
                 if (t == f) {
@@ -536,10 +535,10 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
         tracked = std::move(filtered);
     }
 
-    Str work_base = basename(q.work_dir);
+    std::string work_base = basename(q.work_dir);
 
     for (const auto &file : tracked) {
-        Str diff_out = generate_file_diff(q, patch, file);
+        std::string diff_out = generate_file_diff(q, patch, file);
         if (!diff_out.empty()) {
             if (!no_index) {
                 out("Index: " + work_base + "/" + file + "\n");
@@ -563,13 +562,13 @@ int cmd_revert(QuiltState &q, int argc, char **argv) {
     }
 
     // Parse options
-    Str patch = q.applied.back();
-    std::vector<Str> files;
+    std::string patch = q.applied.back();
+    std::vector<std::string> files;
     int i = 1;
     while (i < argc) {
-        StrView arg = argv[i];
+        std::string_view arg = argv[i];
         if (arg == "-P" && i + 1 < argc) {
-            patch = Str(argv[i + 1]);
+            patch = std::string(argv[i + 1]);
             i += 2;
             continue;
         }
@@ -582,25 +581,25 @@ int cmd_revert(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    Str patch_display = path_join(q.patches_dir, patch);
+    std::string patch_display = path_join(q.patches_dir, patch);
 
     for (const auto &file : files) {
         // Check if file is tracked by the patch
-        Str backup_path = path_join(pc_patch_dir(q, patch), file);
+        std::string backup_path = path_join(pc_patch_dir(q, patch), file);
         if (!file_exists(backup_path)) {
             err_line("File " + file + " is not in patch " + patch_display);
             return 1;
         }
 
         // Restore from backup but keep the backup
-        Str target = path_join(q.work_dir, file);
-        Str content = read_file(backup_path);
+        std::string target = path_join(q.work_dir, file);
+        std::string content = read_file(backup_path);
         if (content.empty()) {
             // Backup was empty placeholder — file didn't exist before, delete it
             delete_file(target);
         } else {
             // Ensure target directory exists
-            Str target_dir = dirname(target);
+            std::string target_dir = dirname(target);
             if (!is_directory(target_dir)) {
                 make_dirs(target_dir);
             }

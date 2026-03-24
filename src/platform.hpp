@@ -15,6 +15,7 @@ struct ProcessResult {
 ProcessResult run_cmd(const std::vector<std::string> &argv);
 ProcessResult run_cmd_input(const std::vector<std::string> &argv,
                             std::string_view stdin_data);
+int run_cmd_tty(const std::vector<std::string> &argv);
 
 // File system operations
 std::string read_file(std::string_view path);

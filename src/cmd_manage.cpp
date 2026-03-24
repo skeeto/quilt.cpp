@@ -3,46 +3,46 @@
 #include "platform.hpp"
 
 // Forward declarations for helpers defined in core.cpp
-extern std::vector<Str> read_series(StrView path);
-extern bool write_series(StrView path, const std::vector<Str> &patches);
-extern std::vector<Str> read_applied(StrView path);
-extern bool write_applied(StrView path, const std::vector<Str> &patches);
+extern std::vector<std::string> read_series(std::string_view path);
+extern bool write_series(std::string_view path, const std::vector<std::string> &patches);
+extern std::vector<std::string> read_applied(std::string_view path);
+extern bool write_applied(std::string_view path, const std::vector<std::string> &patches);
 extern bool ensure_pc_dir(QuiltState &q);
-extern Str pc_patch_dir(const QuiltState &q, StrView patch);
-extern std::vector<Str> files_in_patch(const QuiltState &q, StrView patch);
-extern bool backup_file(QuiltState &q, StrView patch, StrView file);
-extern bool restore_file(QuiltState &q, StrView patch, StrView file);
+extern std::string pc_patch_dir(const QuiltState &q, std::string_view patch);
+extern std::vector<std::string> files_in_patch(const QuiltState &q, std::string_view patch);
+extern bool backup_file(QuiltState &q, std::string_view patch, std::string_view file);
+extern bool restore_file(QuiltState &q, std::string_view patch, std::string_view file);
 
 // ---------------------------------------------------------------------------
 // Helper: strip "patches/" prefix from user-provided patch name
 // ---------------------------------------------------------------------------
 
-static Str strip_patches_prefix(const QuiltState &q, StrView name) {
-    Str prefix = q.patches_dir + "/";
+static std::string strip_patches_prefix(const QuiltState &q, std::string_view name) {
+    std::string prefix = q.patches_dir + "/";
     if (starts_with(name, prefix)) {
-        return Str(name.substr(prefix.size()));
+        return std::string(name.substr(prefix.size()));
     }
-    return Str(name);
+    return std::string(name);
 }
 
 // ---------------------------------------------------------------------------
 // Helper: parse a patch file to extract filenames from +++ lines
 // ---------------------------------------------------------------------------
 
-static std::vector<Str> parse_patch_files(StrView content) {
-    std::vector<Str> files;
+static std::vector<std::string> parse_patch_files(std::string_view content) {
+    std::vector<std::string> files;
     auto lines = split_lines(content);
     for (const auto &line : lines) {
         if (!starts_with(line, "+++ ")) continue;
-        Str path = Str(StrView(line).substr(4));
+        std::string path = std::string(std::string_view(line).substr(4));
         // Strip trailing tab and anything after (timestamps)
         auto tab = path.find('\t');
-        if (tab != Str::npos) {
-            path = Str(path.substr(0, tab));
+        if (tab != std::string::npos) {
+            path = std::string(path.substr(0, tab));
         }
         // Strip b/ prefix
         if (starts_with(path, "b/")) {
-            path = Str(StrView(path).substr(2));
+            path = std::string(std::string_view(path).substr(2));
         }
         // Skip /dev/null
         if (path == "/dev/null") continue;
@@ -64,8 +64,8 @@ static std::vector<Str> parse_patch_files(StrView content) {
 // Header is everything before the first diff/Index/---/=== line.
 // ---------------------------------------------------------------------------
 
-static Str extract_header(StrView content) {
-    Str header;
+static std::string extract_header(std::string_view content) {
+    std::string header;
     auto lines = split_lines(content);
     for (const auto &line : lines) {
         if (starts_with(line, "Index:") ||
@@ -84,8 +84,8 @@ static Str extract_header(StrView content) {
 // Helper: replace header in a patch file (everything before first diff line)
 // ---------------------------------------------------------------------------
 
-static Str replace_header(StrView content, StrView new_header) {
-    Str result;
+static std::string replace_header(std::string_view content, std::string_view new_header) {
+    std::string result;
     auto lines = split_lines(content);
     bool in_diff = false;
     // Find where diffs start
@@ -101,7 +101,7 @@ static Str replace_header(StrView content, StrView new_header) {
         }
     }
 
-    result += Str(new_header);
+    result += std::string(new_header);
     // Ensure header ends with newline if non-empty
     if (!result.empty() && result.back() != '\n') {
         result += '\n';
@@ -121,18 +121,18 @@ static Str replace_header(StrView content, StrView new_header) {
 // Returns 0 on success, 1 on error.
 // ---------------------------------------------------------------------------
 
-static int pop_to_patch(QuiltState &q, StrView patch) {
+static int pop_to_patch(QuiltState &q, std::string_view patch) {
     // Pop all applied patches from top until patch is removed
-    Str applied_path = path_join(q.work_dir, q.pc_dir, "applied-patches");
+    std::string applied_path = path_join(q.work_dir, q.pc_dir, "applied-patches");
     while (!q.applied.empty()) {
-        Str top = q.applied.back();
+        std::string top = q.applied.back();
         // Restore files
         auto tracked = files_in_patch(q, top);
         for (const auto &f : tracked) {
             restore_file(q, top, f);
         }
         // Remove .pc/<patch>/ directory
-        Str pc_dir = pc_patch_dir(q, top);
+        std::string pc_dir = pc_patch_dir(q, top);
         delete_dir_recursive(pc_dir);
         q.applied.pop_back();
         write_applied(applied_path, q.applied);
@@ -150,10 +150,10 @@ int cmd_delete(QuiltState &q, int argc, char **argv) {
     bool opt_remove = false;
     bool opt_backup = false;
     bool opt_next = false;
-    Str patch_arg;
+    std::string patch_arg;
 
     for (int i = 1; i < argc; ++i) {
-        StrView arg = argv[i];
+        std::string_view arg = argv[i];
         if (arg == "-r") {
             opt_remove = true;
         } else if (arg == "--backup") {
@@ -165,7 +165,7 @@ int cmd_delete(QuiltState &q, int argc, char **argv) {
         }
     }
 
-    Str patch;
+    std::string patch;
     if (!patch_arg.empty()) {
         patch = patch_arg;
     } else if (opt_next) {
@@ -201,14 +201,14 @@ int cmd_delete(QuiltState &q, int argc, char **argv) {
 
     // Remove from series
     q.series.erase(q.series.begin() + *idx);
-    Str series_abs = path_join(q.work_dir, q.series_file);
+    std::string series_abs = path_join(q.work_dir, q.series_file);
     write_series(series_abs, q.series);
 
     // Optionally remove the patch file
     if (opt_remove) {
-        Str patch_file = path_join(q.work_dir, q.patches_dir, patch);
+        std::string patch_file = path_join(q.work_dir, q.patches_dir, patch);
         if (opt_backup) {
-            Str backup = patch_file + "~";
+            std::string backup = patch_file + "~";
             rename_path(patch_file, backup);
         } else {
             delete_file(patch_file);
@@ -224,11 +224,11 @@ int cmd_delete(QuiltState &q, int argc, char **argv) {
 // ---------------------------------------------------------------------------
 
 int cmd_rename(QuiltState &q, int argc, char **argv) {
-    Str old_patch;
-    Str new_name;
+    std::string old_patch;
+    std::string new_name;
 
     for (int i = 1; i < argc; ++i) {
-        StrView arg = argv[i];
+        std::string_view arg = argv[i];
         if (arg == "-P" && i + 1 < argc) {
             old_patch = strip_patches_prefix(q, argv[++i]);
         } else if (arg[0] != '-') {
@@ -266,15 +266,15 @@ int cmd_rename(QuiltState &q, int argc, char **argv) {
 
     // Rename in series
     q.series[*idx] = new_name;
-    Str series_abs = path_join(q.work_dir, q.series_file);
+    std::string series_abs = path_join(q.work_dir, q.series_file);
     write_series(series_abs, q.series);
 
     // Rename patch file
-    Str old_file = path_join(q.work_dir, q.patches_dir, old_patch);
-    Str new_file = path_join(q.work_dir, q.patches_dir, new_name);
+    std::string old_file = path_join(q.work_dir, q.patches_dir, old_patch);
+    std::string new_file = path_join(q.work_dir, q.patches_dir, new_name);
     if (file_exists(old_file)) {
         // Ensure target directory exists
-        Str new_dir = dirname(new_file);
+        std::string new_dir = dirname(new_file);
         if (!is_directory(new_dir)) {
             make_dirs(new_dir);
         }
@@ -289,11 +289,11 @@ int cmd_rename(QuiltState &q, int argc, char **argv) {
                 break;
             }
         }
-        Str applied_path = path_join(q.work_dir, q.pc_dir, "applied-patches");
+        std::string applied_path = path_join(q.work_dir, q.pc_dir, "applied-patches");
         write_applied(applied_path, q.applied);
 
-        Str old_pc = pc_patch_dir(q, old_patch);
-        Str new_pc = pc_patch_dir(q, new_name);
+        std::string old_pc = pc_patch_dir(q, old_patch);
+        std::string new_pc = pc_patch_dir(q, new_name);
         if (is_directory(old_pc)) {
             rename_path(old_pc, new_pc);
         }
@@ -310,16 +310,16 @@ int cmd_rename(QuiltState &q, int argc, char **argv) {
 
 int cmd_import(QuiltState &q, int argc, char **argv) {
     int strip_level = -1;
-    Str target_name;
+    std::string target_name;
     bool force = false;
     char dup_mode = 0;  // o=overwrite, a=append, n=next
     (void)strip_level; (void)dup_mode;
-    std::vector<Str> patchfiles;
+    std::vector<std::string> patchfiles;
 
     for (int i = 1; i < argc; ++i) {
-        StrView arg = argv[i];
+        std::string_view arg = argv[i];
         if (arg == "-p" && i + 1 < argc) {
-            strip_level = std::stoi(Str(argv[++i]));
+            strip_level = std::stoi(std::string(argv[++i]));
         } else if (arg == "-P" && i + 1 < argc) {
             target_name = strip_patches_prefix(q, argv[++i]);
         } else if (arg == "-f") {
@@ -339,23 +339,23 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
     ensure_pc_dir(q);
 
     // Ensure patches dir exists
-    Str patches_abs = path_join(q.work_dir, q.patches_dir);
+    std::string patches_abs = path_join(q.work_dir, q.patches_dir);
     if (!is_directory(patches_abs)) {
         make_dirs(patches_abs);
     }
 
-    Str series_abs = path_join(q.work_dir, q.series_file);
+    std::string series_abs = path_join(q.work_dir, q.series_file);
 
     for (const auto &patchfile : patchfiles) {
         // Determine target name
-        Str name;
+        std::string name;
         if (!target_name.empty()) {
             name = target_name;
         } else {
             name = basename(patchfile);
         }
 
-        Str dest = path_join(q.work_dir, q.patches_dir, name);
+        std::string dest = path_join(q.work_dir, q.patches_dir, name);
 
         // Check if target exists in series
         auto existing = q.find_in_series(name);
@@ -398,10 +398,10 @@ int cmd_header(QuiltState &q, int argc, char **argv) {
     enum Mode { PRINT, APPEND, REPLACE, EDIT };
     Mode mode = PRINT;
     bool opt_backup = false;
-    Str patch_arg;
+    std::string patch_arg;
 
     for (int i = 1; i < argc; ++i) {
-        StrView arg = argv[i];
+        std::string_view arg = argv[i];
         if (arg == "-a") {
             mode = APPEND;
         } else if (arg == "-r") {
@@ -419,7 +419,7 @@ int cmd_header(QuiltState &q, int argc, char **argv) {
     }
 
     // Determine patch
-    Str patch;
+    std::string patch;
     if (!patch_arg.empty()) {
         patch = patch_arg;
     } else if (!q.applied.empty()) {
@@ -431,59 +431,59 @@ int cmd_header(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    Str patch_file = path_join(q.work_dir, q.patches_dir, patch);
-    Str content = read_file(patch_file);
+    std::string patch_file = path_join(q.work_dir, q.patches_dir, patch);
+    std::string content = read_file(patch_file);
 
     if (mode == PRINT) {
-        Str header = extract_header(content);
+        std::string header = extract_header(content);
         out(header);
         return 0;
     }
 
     if (mode == APPEND) {
-        Str stdin_data = read_stdin();
-        Str old_header = extract_header(content);
-        Str new_header = old_header + stdin_data;
+        std::string stdin_data = read_stdin();
+        std::string old_header = extract_header(content);
+        std::string new_header = old_header + stdin_data;
         if (opt_backup) {
             copy_file(patch_file, patch_file + "~");
         }
-        Str new_content = replace_header(content, new_header);
+        std::string new_content = replace_header(content, new_header);
         write_file(patch_file, new_content);
         return 0;
     }
 
     if (mode == REPLACE) {
-        Str stdin_data = read_stdin();
+        std::string stdin_data = read_stdin();
         if (opt_backup) {
             copy_file(patch_file, patch_file + "~");
         }
-        Str new_content = replace_header(content, stdin_data);
+        std::string new_content = replace_header(content, stdin_data);
         write_file(patch_file, new_content);
         return 0;
     }
 
     if (mode == EDIT) {
-        Str editor = get_env("EDITOR");
+        std::string editor = get_env("EDITOR");
         if (editor.empty()) editor = "vi";
 
-        Str header = extract_header(content);
-        Str tmp_file = path_join(q.work_dir, ".pc/.quilt_header_tmp");
+        std::string header = extract_header(content);
+        std::string tmp_file = path_join(q.work_dir, ".pc/.quilt_header_tmp");
         write_file(tmp_file, header);
 
-        ProcessResult r = run_cmd({editor, tmp_file});
-        if (r.exit_code != 0) {
+        int rc = run_cmd_tty({editor, tmp_file});
+        if (rc != 0) {
             delete_file(tmp_file);
             err_line("Editor exited with error");
             return 1;
         }
 
-        Str new_header = read_file(tmp_file);
+        std::string new_header = read_file(tmp_file);
         delete_file(tmp_file);
 
         if (opt_backup) {
             copy_file(patch_file, patch_file + "~");
         }
-        Str new_content = replace_header(content, new_header);
+        std::string new_content = replace_header(content, new_header);
         write_file(patch_file, new_content);
         return 0;
     }
@@ -498,10 +498,10 @@ int cmd_header(QuiltState &q, int argc, char **argv) {
 int cmd_files(QuiltState &q, int argc, char **argv) {
     bool opt_verbose = false;
     bool opt_all = false;
-    Str patch_arg;
+    std::string patch_arg;
 
     for (int i = 1; i < argc; ++i) {
-        StrView arg = argv[i];
+        std::string_view arg = argv[i];
         if (arg == "-v") {
             opt_verbose = true;
         } else if (arg == "-a") {
@@ -515,11 +515,11 @@ int cmd_files(QuiltState &q, int argc, char **argv) {
     }
 
     // Build list of patches to show files for
-    std::vector<Str> patches_to_show;
+    std::vector<std::string> patches_to_show;
     if (opt_all) {
         patches_to_show = q.applied;
     } else {
-        Str patch;
+        std::string patch;
         if (!patch_arg.empty()) {
             patch = patch_arg;
         } else if (!q.applied.empty()) {
@@ -532,14 +532,14 @@ int cmd_files(QuiltState &q, int argc, char **argv) {
     }
 
     for (const auto &patch : patches_to_show) {
-        std::vector<Str> file_list;
+        std::vector<std::string> file_list;
 
         if (q.is_applied(patch)) {
             file_list = files_in_patch(q, patch);
         } else {
             // Parse the patch file
-            Str patch_file = path_join(q.work_dir, q.patches_dir, patch);
-            Str content = read_file(patch_file);
+            std::string patch_file = path_join(q.work_dir, q.patches_dir, patch);
+            std::string content = read_file(patch_file);
             file_list = parse_patch_files(content);
         }
 
@@ -564,10 +564,10 @@ int cmd_files(QuiltState &q, int argc, char **argv) {
 
 int cmd_patches(QuiltState &q, int argc, char **argv) {
     bool opt_verbose = false;
-    std::vector<Str> target_files;
+    std::vector<std::string> target_files;
 
     for (int i = 1; i < argc; ++i) {
-        StrView arg = argv[i];
+        std::string_view arg = argv[i];
         if (arg == "-v") {
             opt_verbose = true;
         } else if (arg == "--color") {
@@ -587,9 +587,9 @@ int cmd_patches(QuiltState &q, int argc, char **argv) {
 
         if (q.is_applied(patch)) {
             // Check .pc/<patch>/<file>
-            Str pc_dir = pc_patch_dir(q, patch);
+            std::string pc_dir = pc_patch_dir(q, patch);
             for (const auto &tf : target_files) {
-                Str check = path_join(pc_dir, tf);
+                std::string check = path_join(pc_dir, tf);
                 if (file_exists(check)) {
                     touches = true;
                     break;
@@ -597,8 +597,8 @@ int cmd_patches(QuiltState &q, int argc, char **argv) {
             }
         } else {
             // Parse patch file for references
-            Str patch_file = path_join(q.work_dir, q.patches_dir, patch);
-            Str content = read_file(patch_file);
+            std::string patch_file = path_join(q.work_dir, q.patches_dir, patch);
+            std::string content = read_file(patch_file);
             auto patched_files = parse_patch_files(content);
             for (const auto &tf : target_files) {
                 for (const auto &pf : patched_files) {
@@ -612,7 +612,7 @@ int cmd_patches(QuiltState &q, int argc, char **argv) {
         }
 
         if (touches) {
-            Str display = path_join(q.patches_dir, patch);
+            std::string display = path_join(q.patches_dir, patch);
             if (opt_verbose) {
                 // Show applied status
                 if (q.is_applied(patch)) {
@@ -640,7 +640,7 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
     int strip_level = 1;
 
     for (int i = 1; i < argc; ++i) {
-        StrView arg = argv[i];
+        std::string_view arg = argv[i];
         if (arg == "-R") {
             opt_reverse = true;
         } else if (arg == "-q") {
@@ -648,7 +648,7 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
         } else if (arg == "-f") {
             opt_force = true;
         } else if (arg == "-p" && i + 1 < argc) {
-            strip_level = std::stoi(Str(argv[++i]));
+            strip_level = std::stoi(std::string(argv[++i]));
         }
     }
 
@@ -657,8 +657,8 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    Str top = q.applied.back();
-    Str stdin_data = read_stdin();
+    std::string top = q.applied.back();
+    std::string stdin_data = read_stdin();
 
     if (stdin_data.empty()) {
         err_line("No patch data on stdin");
@@ -681,7 +681,7 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
     }
 
     // Build patch command
-    std::vector<Str> cmd = {"patch", "-p" + std::to_string(strip_level)};
+    std::vector<std::string> cmd = {"patch", "-p" + std::to_string(strip_level)};
     if (opt_reverse) cmd.push_back("-R");
     if (opt_force) cmd.push_back("-f");
     if (opt_quiet) cmd.push_back("-s");
@@ -710,11 +710,11 @@ int cmd_fork(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    Str old_name = q.applied.back();
-    Str new_name;
+    std::string old_name = q.applied.back();
+    std::string new_name;
 
     for (int i = 1; i < argc; ++i) {
-        StrView arg = argv[i];
+        std::string_view arg = argv[i];
         if (arg[0] != '-') {
             new_name = strip_patches_prefix(q, arg);
             break;
@@ -724,7 +724,7 @@ int cmd_fork(QuiltState &q, int argc, char **argv) {
     // Generate default name if none given: add "-2" before extension
     if (new_name.empty()) {
         auto dot = old_name.rfind('.');
-        if (dot != Str::npos && dot > 0) {
+        if (dot != std::string::npos && dot > 0) {
             new_name = old_name.substr(0, dot) + "-2" + old_name.substr(dot);
         } else {
             new_name = old_name + "-2";
@@ -738,10 +738,10 @@ int cmd_fork(QuiltState &q, int argc, char **argv) {
     }
 
     // Copy patch file
-    Str old_file = path_join(q.work_dir, q.patches_dir, old_name);
-    Str new_file = path_join(q.work_dir, q.patches_dir, new_name);
+    std::string old_file = path_join(q.work_dir, q.patches_dir, old_name);
+    std::string new_file = path_join(q.work_dir, q.patches_dir, new_name);
     if (file_exists(old_file)) {
-        Str new_dir = dirname(new_file);
+        std::string new_dir = dirname(new_file);
         if (!is_directory(new_dir)) {
             make_dirs(new_dir);
         }
@@ -752,7 +752,7 @@ int cmd_fork(QuiltState &q, int argc, char **argv) {
     auto idx = q.find_in_series(old_name);
     if (idx) {
         q.series[*idx] = new_name;
-        Str series_abs = path_join(q.work_dir, q.series_file);
+        std::string series_abs = path_join(q.work_dir, q.series_file);
         write_series(series_abs, q.series);
     }
 
@@ -763,12 +763,12 @@ int cmd_fork(QuiltState &q, int argc, char **argv) {
             break;
         }
     }
-    Str applied_path = path_join(q.work_dir, q.pc_dir, "applied-patches");
+    std::string applied_path = path_join(q.work_dir, q.pc_dir, "applied-patches");
     write_applied(applied_path, q.applied);
 
     // Rename .pc/ directory
-    Str old_pc = pc_patch_dir(q, old_name);
-    Str new_pc = pc_patch_dir(q, new_name);
+    std::string old_pc = pc_patch_dir(q, old_name);
+    std::string new_pc = pc_patch_dir(q, new_name);
     if (is_directory(old_pc)) {
         rename_path(old_pc, new_pc);
     }

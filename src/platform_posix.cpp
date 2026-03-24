@@ -155,6 +155,31 @@ ProcessResult run_cmd_input(const std::vector<std::string> &argv,
     return run_cmd_impl(argv, stdin_data.data(), stdin_data.size());
 }
 
+int run_cmd_tty(const std::vector<std::string> &argv)
+{
+    if (argv.empty()) return -1;
+
+    pid_t pid = ::fork();
+    if (pid < 0) return -1;
+
+    if (pid == 0) {
+        // Child inherits stdin/stdout/stderr from parent
+        std::vector<char *> args;
+        args.reserve(argv.size() + 1);
+        for (auto &a : argv)
+            args.push_back(const_cast<char *>(a.c_str()));
+        args.push_back(nullptr);
+        ::execvp(args[0], args.data());
+        ::_exit(127);
+    }
+
+    int status = 0;
+    while (::waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) return -1;
+    }
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
 // ---------------------------------------------------------------------------
 // File system operations
 // ---------------------------------------------------------------------------

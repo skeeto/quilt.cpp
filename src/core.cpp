@@ -8,21 +8,21 @@
 
 int QuiltState::top_index() const {
     if (applied.empty()) return -1;
-    const Str &top = applied.back();
+    const std::string &top = applied.back();
     for (int i = 0; i < (int)series.size(); ++i) {
         if (series[i] == top) return i;
     }
     return -1;
 }
 
-bool QuiltState::is_applied(StrView patch) const {
+bool QuiltState::is_applied(std::string_view patch) const {
     for (const auto &a : applied) {
         if (a == patch) return true;
     }
     return false;
 }
 
-std::optional<int> QuiltState::find_in_series(StrView patch) const {
+std::optional<int> QuiltState::find_in_series(std::string_view patch) const {
     for (int i = 0; i < (int)series.size(); ++i) {
         if (series[i] == patch) return i;
     }
@@ -33,20 +33,20 @@ std::optional<int> QuiltState::find_in_series(StrView patch) const {
 // I/O helpers
 // ---------------------------------------------------------------------------
 
-void out(StrView s) {
+void out(std::string_view s) {
     fd_write_stdout(s);
 }
 
-void out_line(StrView s) {
+void out_line(std::string_view s) {
     fd_write_stdout(s);
     fd_write_stdout("\n");
 }
 
-void err(StrView s) {
+void err(std::string_view s) {
     fd_write_stderr(s);
 }
 
-void err_line(StrView s) {
+void err_line(std::string_view s) {
     fd_write_stderr(s);
     fd_write_stderr("\n");
 }
@@ -55,63 +55,63 @@ void err_line(StrView s) {
 // Path utilities
 // ---------------------------------------------------------------------------
 
-Str path_join(StrView a, StrView b) {
-    if (a.empty()) return Str(b);
-    if (b.empty()) return Str(a);
-    if (a.back() == '/') return Str(a) + Str(b);
-    return Str(a) + "/" + Str(b);
+std::string path_join(std::string_view a, std::string_view b) {
+    if (a.empty()) return std::string(b);
+    if (b.empty()) return std::string(a);
+    if (a.back() == '/') return std::string(a) + std::string(b);
+    return std::string(a) + "/" + std::string(b);
 }
 
-Str path_join(StrView a, StrView b, StrView c) {
+std::string path_join(std::string_view a, std::string_view b, std::string_view c) {
     return path_join(path_join(a, b), c);
 }
 
-Str basename(StrView path) {
+std::string basename(std::string_view path) {
     if (path.empty()) return "";
     // Strip trailing slashes
     while (path.size() > 1 && path.back() == '/')
         path.remove_suffix(1);
     auto pos = path.rfind('/');
-    if (pos == StrView::npos) return Str(path);
-    return Str(path.substr(pos + 1));
+    if (pos == std::string_view::npos) return std::string(path);
+    return std::string(path.substr(pos + 1));
 }
 
-Str dirname(StrView path) {
+std::string dirname(std::string_view path) {
     if (path.empty()) return ".";
     // Strip trailing slashes
     while (path.size() > 1 && path.back() == '/')
         path.remove_suffix(1);
     auto pos = path.rfind('/');
-    if (pos == StrView::npos) return ".";
+    if (pos == std::string_view::npos) return ".";
     if (pos == 0) return "/";
-    return Str(path.substr(0, pos));
+    return std::string(path.substr(0, pos));
 }
 
-Str strip_trailing_slash(StrView s) {
+std::string strip_trailing_slash(std::string_view s) {
     while (!s.empty() && s.back() == '/')
         s.remove_suffix(1);
-    return s.empty() ? Str("/") : Str(s);
+    return s.empty() ? std::string("/") : std::string(s);
 }
 
 // ---------------------------------------------------------------------------
 // String utilities
 // ---------------------------------------------------------------------------
 
-Str trim(StrView s) {
+std::string trim(std::string_view s) {
     while (!s.empty() && (s.front() == ' ' || s.front() == '\t' ||
                           s.front() == '\r' || s.front() == '\n'))
         s.remove_prefix(1);
     while (!s.empty() && (s.back() == ' ' || s.back() == '\t' ||
                           s.back() == '\r' || s.back() == '\n'))
         s.remove_suffix(1);
-    return Str(s);
+    return std::string(s);
 }
 
-std::vector<Str> split_lines(StrView s) {
-    std::vector<Str> lines;
+std::vector<std::string> split_lines(std::string_view s) {
+    std::vector<std::string> lines;
     while (!s.empty()) {
         auto pos = s.find('\n');
-        if (pos == StrView::npos) {
+        if (pos == std::string_view::npos) {
             lines.emplace_back(s);
             break;
         }
@@ -121,12 +121,12 @@ std::vector<Str> split_lines(StrView s) {
     return lines;
 }
 
-bool starts_with(StrView s, StrView prefix) {
+bool starts_with(std::string_view s, std::string_view prefix) {
     if (prefix.size() > s.size()) return false;
     return s.substr(0, prefix.size()) == prefix;
 }
 
-bool ends_with(StrView s, StrView suffix) {
+bool ends_with(std::string_view s, std::string_view suffix) {
     if (suffix.size() > s.size()) return false;
     return s.substr(s.size() - suffix.size()) == suffix;
 }
@@ -135,29 +135,29 @@ bool ends_with(StrView s, StrView suffix) {
 // Series file I/O
 // ---------------------------------------------------------------------------
 
-std::vector<Str> read_series(StrView path) {
-    std::vector<Str> patches;
-    Str content = read_file(path);
+std::vector<std::string> read_series(std::string_view path) {
+    std::vector<std::string> patches;
+    std::string content = read_file(path);
     if (content.empty()) return patches;
     auto lines = split_lines(content);
     for (auto &line : lines) {
-        Str trimmed = trim(line);
+        std::string trimmed = trim(line);
         if (trimmed.empty()) continue;
         if (trimmed[0] == '#') continue;
         // Strip inline comments
         auto hash = trimmed.find(" #");
-        if (hash != Str::npos) {
-            trimmed = trim(StrView(trimmed).substr(0, hash));
+        if (hash != std::string::npos) {
+            trimmed = trim(std::string_view(trimmed).substr(0, hash));
         }
         // Strip options after the patch name (e.g., "-p1")
         // The patch name is the first whitespace-delimited token
         auto sp = trimmed.find(' ');
-        if (sp != Str::npos) {
-            trimmed = Str(trimmed.substr(0, sp));
+        if (sp != std::string::npos) {
+            trimmed = std::string(trimmed.substr(0, sp));
         }
         auto tab = trimmed.find('\t');
-        if (tab != Str::npos) {
-            trimmed = Str(trimmed.substr(0, tab));
+        if (tab != std::string::npos) {
+            trimmed = std::string(trimmed.substr(0, tab));
         }
         if (!trimmed.empty()) {
             patches.push_back(std::move(trimmed));
@@ -166,8 +166,8 @@ std::vector<Str> read_series(StrView path) {
     return patches;
 }
 
-bool write_series(StrView path, const std::vector<Str> &patches) {
-    Str content;
+bool write_series(std::string_view path, const std::vector<std::string> &patches) {
+    std::string content;
     for (const auto &p : patches) {
         content += p;
         content += '\n';
@@ -179,13 +179,13 @@ bool write_series(StrView path, const std::vector<Str> &patches) {
 // Applied patches DB (.pc/applied-patches)
 // ---------------------------------------------------------------------------
 
-std::vector<Str> read_applied(StrView path) {
-    std::vector<Str> patches;
-    Str content = read_file(path);
+std::vector<std::string> read_applied(std::string_view path) {
+    std::vector<std::string> patches;
+    std::string content = read_file(path);
     if (content.empty()) return patches;
     auto lines = split_lines(content);
     for (auto &line : lines) {
-        Str trimmed = trim(line);
+        std::string trimmed = trim(line);
         if (!trimmed.empty()) {
             patches.push_back(std::move(trimmed));
         }
@@ -193,8 +193,8 @@ std::vector<Str> read_applied(StrView path) {
     return patches;
 }
 
-bool write_applied(StrView path, const std::vector<Str> &patches) {
-    Str content;
+bool write_applied(std::string_view path, const std::vector<std::string> &patches) {
+    std::string content;
     for (const auto &p : patches) {
         content += p;
         content += '\n';
@@ -207,7 +207,7 @@ bool write_applied(StrView path, const std::vector<Str> &patches) {
 // ---------------------------------------------------------------------------
 
 bool ensure_pc_dir(QuiltState &q) {
-    Str pc = path_join(q.work_dir, q.pc_dir);
+    std::string pc = path_join(q.work_dir, q.pc_dir);
     if (!is_directory(pc)) {
         if (!make_dirs(pc)) {
             err_line("Failed to create " + pc);
@@ -215,17 +215,17 @@ bool ensure_pc_dir(QuiltState &q) {
         }
     }
     // Write .version
-    Str version_path = path_join(pc, ".version");
+    std::string version_path = path_join(pc, ".version");
     if (!file_exists(version_path)) {
         write_file(version_path, "2\n");
     }
     // Write .quilt_patches
-    Str qp_path = path_join(pc, ".quilt_patches");
+    std::string qp_path = path_join(pc, ".quilt_patches");
     if (!file_exists(qp_path)) {
         write_file(qp_path, q.patches_dir + "\n");
     }
     // Write .quilt_series
-    Str qs_path = path_join(pc, ".quilt_series");
+    std::string qs_path = path_join(pc, ".quilt_series");
     if (!file_exists(qs_path)) {
         write_file(qs_path, "series\n");
     }
@@ -244,27 +244,27 @@ QuiltState load_state() {
     q.series_file = path_join(q.patches_dir, "series");
 
     // Check if .pc/ exists and read overrides
-    Str pc_abs = path_join(q.work_dir, q.pc_dir);
+    std::string pc_abs = path_join(q.work_dir, q.pc_dir);
     if (is_directory(pc_abs)) {
         // Read .quilt_patches override
-        Str qp = trim(read_file(path_join(pc_abs, ".quilt_patches")));
+        std::string qp = trim(read_file(path_join(pc_abs, ".quilt_patches")));
         if (!qp.empty()) {
             q.patches_dir = qp;
             q.series_file = path_join(q.patches_dir, "series");
         }
         // Read .quilt_series override
-        Str qs = trim(read_file(path_join(pc_abs, ".quilt_series")));
+        std::string qs = trim(read_file(path_join(pc_abs, ".quilt_series")));
         if (!qs.empty()) {
             q.series_file = path_join(q.patches_dir, qs);
         }
     }
 
     // Read series file
-    Str series_abs = path_join(q.work_dir, q.series_file);
+    std::string series_abs = path_join(q.work_dir, q.series_file);
     q.series = read_series(series_abs);
 
     // Read applied-patches file
-    Str applied_abs = path_join(q.work_dir, q.pc_dir, "applied-patches");
+    std::string applied_abs = path_join(q.work_dir, q.pc_dir, "applied-patches");
     q.applied = read_applied(applied_abs);
 
     return q;
@@ -274,22 +274,22 @@ QuiltState load_state() {
 // Patch file helpers
 // ---------------------------------------------------------------------------
 
-Str pc_patch_dir(const QuiltState &q, StrView patch) {
+std::string pc_patch_dir(const QuiltState &q, std::string_view patch) {
     return path_join(q.work_dir, q.pc_dir, patch);
 }
 
-std::vector<Str> files_in_patch(const QuiltState &q, StrView patch) {
-    Str dir = pc_patch_dir(q, patch);
+std::vector<std::string> files_in_patch(const QuiltState &q, std::string_view patch) {
+    std::string dir = pc_patch_dir(q, patch);
     if (!is_directory(dir)) return {};
     return find_files_recursive(dir);
 }
 
-bool backup_file(QuiltState &q, StrView patch, StrView file) {
-    Str src = path_join(q.work_dir, file);
-    Str dst = path_join(pc_patch_dir(q, patch), file);
+bool backup_file(QuiltState &q, std::string_view patch, std::string_view file) {
+    std::string src = path_join(q.work_dir, file);
+    std::string dst = path_join(pc_patch_dir(q, patch), file);
 
     // Ensure destination directory exists
-    Str dst_dir = dirname(dst);
+    std::string dst_dir = dirname(dst);
     if (!is_directory(dst_dir)) {
         if (!make_dirs(dst_dir)) {
             err_line("Failed to create directory: " + dst_dir);
@@ -305,16 +305,16 @@ bool backup_file(QuiltState &q, StrView patch, StrView file) {
     }
 }
 
-bool restore_file(QuiltState &q, StrView patch, StrView file) {
-    Str backup = path_join(pc_patch_dir(q, patch), file);
-    Str target = path_join(q.work_dir, file);
+bool restore_file(QuiltState &q, std::string_view patch, std::string_view file) {
+    std::string backup = path_join(pc_patch_dir(q, patch), file);
+    std::string target = path_join(q.work_dir, file);
 
     if (!file_exists(backup)) {
-        err_line("No backup for " + Str(file));
+        err_line("No backup for " + std::string(file));
         return false;
     }
 
-    Str content = read_file(backup);
+    std::string content = read_file(backup);
     if (content.empty() && !file_exists(backup)) {
         // Backup was a placeholder for a file that didn't exist — remove the target
         delete_file(target);
@@ -330,7 +330,7 @@ bool restore_file(QuiltState &q, StrView patch, StrView file) {
     }
 
     // Ensure target directory exists
-    Str target_dir = dirname(target);
+    std::string target_dir = dirname(target);
     if (!is_directory(target_dir)) {
         make_dirs(target_dir);
     }
@@ -338,7 +338,7 @@ bool restore_file(QuiltState &q, StrView patch, StrView file) {
     return write_file(target, content);
 }
 
-std::string to_cstr(StrView s) {
+std::string to_cstr(std::string_view s) {
     return std::string(s);
 }
 
@@ -393,7 +393,7 @@ int quilt_main(int argc, char **argv) {
         return 1;
     }
 
-    StrView arg1 = argv[1];
+    std::string_view arg1 = argv[1];
 
     // Handle --version
     if (arg1 == "--version" || arg1 == "-v") {
@@ -407,7 +407,7 @@ int quilt_main(int argc, char **argv) {
         out_line("");
         out_line("Commands:");
         for (int i = 0; i < num_commands; ++i) {
-            Str line = "  ";
+            std::string line = "  ";
             line += commands[i].name;
             out_line(line);
         }
@@ -415,7 +415,7 @@ int quilt_main(int argc, char **argv) {
     }
 
     // Strip patches/ prefix from command if user accidentally typed it
-    Str cmd_name(arg1);
+    std::string cmd_name(arg1);
 
     // Find command
     Command *found = nullptr;

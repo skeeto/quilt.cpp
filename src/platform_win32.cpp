@@ -265,6 +265,34 @@ ProcessResult run_cmd_input(const std::vector<std::string> &argv,
     return run_cmd_impl(argv, stdin_data.data(), stdin_data.size());
 }
 
+int run_cmd_tty(const std::vector<std::string> &argv)
+{
+    if (argv.empty()) return -1;
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    // No STARTF_USESTDHANDLES — child inherits console
+
+    PROCESS_INFORMATION pi{};
+    std::wstring cmdline = build_cmdline(argv);
+
+    BOOL ok = CreateProcessW(
+        nullptr, cmdline.data(),
+        nullptr, nullptr,
+        FALSE, 0,
+        nullptr, nullptr,
+        &si, &pi
+    );
+    if (!ok) return -1;
+
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD exit_code = 0;
+    GetExitCodeProcess(pi.hProcess, &exit_code);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return static_cast<int>(exit_code);
+}
+
 // ---------------------------------------------------------------------------
 // File system operations
 // ---------------------------------------------------------------------------

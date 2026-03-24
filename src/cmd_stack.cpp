@@ -4,39 +4,39 @@
 
 // Forward declarations for core.cpp helpers not in headers
 extern bool ensure_pc_dir(QuiltState &q);
-extern bool write_applied(StrView path, const std::vector<Str> &patches);
-extern Str pc_patch_dir(const QuiltState &q, StrView patch);
-extern std::vector<Str> files_in_patch(const QuiltState &q, StrView patch);
-extern bool backup_file(QuiltState &q, StrView patch, StrView file);
-extern bool restore_file(QuiltState &q, StrView patch, StrView file);
+extern bool write_applied(std::string_view path, const std::vector<std::string> &patches);
+extern std::string pc_patch_dir(const QuiltState &q, std::string_view patch);
+extern std::vector<std::string> files_in_patch(const QuiltState &q, std::string_view patch);
+extern bool backup_file(QuiltState &q, std::string_view patch, std::string_view file);
+extern bool restore_file(QuiltState &q, std::string_view patch, std::string_view file);
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-static Str strip_patches_prefix(const QuiltState &q, StrView name) {
-    Str prefix = q.patches_dir + "/";
-    if (starts_with(name, prefix)) return Str(name.substr(prefix.size()));
-    return Str(name);
+static std::string strip_patches_prefix(const QuiltState &q, std::string_view name) {
+    std::string prefix = q.patches_dir + "/";
+    if (starts_with(name, prefix)) return std::string(name.substr(prefix.size()));
+    return std::string(name);
 }
 
-static Str format_patch(const QuiltState &q, StrView name) {
-    return q.patches_dir + "/" + Str(name);
+static std::string format_patch(const QuiltState &q, std::string_view name) {
+    return q.patches_dir + "/" + std::string(name);
 }
 
 static void write_applied_patches(QuiltState &q) {
-    Str path = path_join(q.work_dir, q.pc_dir, "applied-patches");
+    std::string path = path_join(q.work_dir, q.pc_dir, "applied-patches");
     write_applied(path, q.applied);
 }
 
 // Parse affected files from a unified diff.
 // Looks for "+++ b/file" lines (or "+++ file" without b/ prefix).
-static std::vector<Str> parse_patch_files(StrView content) {
-    std::vector<Str> files;
+static std::vector<std::string> parse_patch_files(std::string_view content) {
+    std::vector<std::string> files;
     auto lines = split_lines(content);
     for (const auto &line : lines) {
         if (!starts_with(line, "+++ ")) continue;
-        StrView rest = StrView(line).substr(4);
+        std::string_view rest = std::string_view(line).substr(4);
         // Skip /dev/null
         if (starts_with(rest, "/dev/null")) continue;
         // Strip "b/" prefix if present
@@ -45,10 +45,10 @@ static std::vector<Str> parse_patch_files(StrView content) {
         }
         // Strip trailing tab and timestamp (e.g., "\t2024-01-01 ...")
         auto tab = rest.find('\t');
-        if (tab != StrView::npos) {
+        if (tab != std::string_view::npos) {
             rest = rest.substr(0, tab);
         }
-        Str f = trim(rest);
+        std::string f = trim(rest);
         if (!f.empty()) {
             files.push_back(std::move(f));
         }
@@ -63,7 +63,7 @@ static std::vector<Str> parse_patch_files(StrView content) {
 int cmd_series(QuiltState &q, int argc, char **argv) {
     bool verbose = false;
     for (int i = 1; i < argc; ++i) {
-        StrView arg = argv[i];
+        std::string_view arg = argv[i];
         if (arg == "-v") verbose = true;
     }
 
@@ -85,9 +85,9 @@ int cmd_series(QuiltState &q, int argc, char **argv) {
 // ---------------------------------------------------------------------------
 
 int cmd_applied(QuiltState &q, int argc, char **argv) {
-    Str target;
+    std::string target;
     for (int i = 1; i < argc; ++i) {
-        StrView arg = argv[i];
+        std::string_view arg = argv[i];
         if (arg[0] != '-') {
             target = strip_patches_prefix(q, arg);
         }
@@ -123,9 +123,9 @@ int cmd_applied(QuiltState &q, int argc, char **argv) {
 // ---------------------------------------------------------------------------
 
 int cmd_unapplied(QuiltState &q, int argc, char **argv) {
-    Str target;
+    std::string target;
     for (int i = 1; i < argc; ++i) {
-        StrView arg = argv[i];
+        std::string_view arg = argv[i];
         if (arg[0] != '-') {
             target = strip_patches_prefix(q, arg);
         }
@@ -145,7 +145,7 @@ int cmd_unapplied(QuiltState &q, int argc, char **argv) {
     }
 
     if (start_idx >= (int)q.series.size()) {
-        Str top_name = q.applied.empty() ? Str("??") : q.applied.back();
+        std::string top_name = q.applied.empty() ? std::string("??") : q.applied.back();
         err_line("File series fully applied, ends at patch " + format_patch(q, top_name));
         return 1;
     }
@@ -175,9 +175,9 @@ int cmd_top(QuiltState &q, int argc, char **argv) {
 // ---------------------------------------------------------------------------
 
 int cmd_next(QuiltState &q, int argc, char **argv) {
-    Str target;
+    std::string target;
     for (int i = 1; i < argc; ++i) {
-        StrView arg = argv[i];
+        std::string_view arg = argv[i];
         if (arg[0] != '-') {
             target = strip_patches_prefix(q, arg);
         }
@@ -197,7 +197,7 @@ int cmd_next(QuiltState &q, int argc, char **argv) {
     }
 
     if (after_idx >= (int)q.series.size()) {
-        Str top_name = q.applied.empty() ? Str("??") : q.applied.back();
+        std::string top_name = q.applied.empty() ? std::string("??") : q.applied.back();
         err_line("File series fully applied, ends at patch " + format_patch(q, top_name));
         return 2;
     }
@@ -211,9 +211,9 @@ int cmd_next(QuiltState &q, int argc, char **argv) {
 // ---------------------------------------------------------------------------
 
 int cmd_previous(QuiltState &q, int argc, char **argv) {
-    Str target;
+    std::string target;
     for (int i = 1; i < argc; ++i) {
-        StrView arg = argv[i];
+        std::string_view arg = argv[i];
         if (arg[0] != '-') {
             target = strip_patches_prefix(q, arg);
         }
@@ -255,10 +255,10 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
     bool push_all = false;
     bool force = false;
     bool quiet = false;
-    Str target;
+    std::string target;
 
     for (int i = 1; i < argc; ++i) {
-        StrView arg = argv[i];
+        std::string_view arg = argv[i];
         if (arg == "-a") { push_all = true; }
         else if (arg == "-f") { force = true; }
         else if (arg == "-q") { quiet = true; }
@@ -296,18 +296,18 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
 
     if (!ensure_pc_dir(q)) return 1;
 
-    Str last_applied;
+    std::string last_applied;
     for (int i = start_idx; i <= end_idx; ++i) {
-        const Str &name = q.series[i];
-        Str display = format_patch(q, name);
+        const std::string &name = q.series[i];
+        std::string display = format_patch(q, name);
 
         if (!quiet) {
             out_line("Applying patch " + display);
         }
 
         // Read patch file
-        Str patch_path = path_join(q.work_dir, q.patches_dir, name);
-        Str patch_content = read_file(patch_path);
+        std::string patch_path = path_join(q.work_dir, q.patches_dir, name);
+        std::string patch_content = read_file(patch_path);
         if (patch_content.empty() && !file_exists(patch_path)) {
             err_line("Patch " + display + " does not exist");
             return 1;
@@ -315,7 +315,7 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
 
         // Parse affected files and back them up
         auto affected = parse_patch_files(patch_content);
-        Str pc_dir = pc_patch_dir(q, name);
+        std::string pc_dir = pc_patch_dir(q, name);
         if (!is_directory(pc_dir)) {
             make_dirs(pc_dir);
         }
@@ -325,7 +325,7 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
         }
 
         // Apply the patch using external patch command
-        std::vector<Str> patch_args = {"patch", "-p1", "-E", "--no-backup-if-mismatch"};
+        std::vector<std::string> patch_args = {"patch", "-p1", "-E", "--no-backup-if-mismatch"};
         if (force) {
             patch_args.push_back("--force");
         }
@@ -375,10 +375,10 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
     bool pop_all = false;
     bool force = false;
     bool quiet = false;
-    Str target;
+    std::string target;
 
     for (int i = 1; i < argc; ++i) {
-        StrView arg = argv[i];
+        std::string_view arg = argv[i];
         if (arg == "-a") { pop_all = true; }
         else if (arg == "-f") { force = true; }
         else if (arg == "-q") { quiet = true; }
@@ -424,8 +424,8 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
 
     // Pop from the top down to stop_idx
     while ((int)q.applied.size() > stop_idx) {
-        const Str &name = q.applied.back();
-        Str display = format_patch(q, name);
+        const std::string &name = q.applied.back();
+        std::string display = format_patch(q, name);
 
         if (!quiet) {
             out_line("Removing patch " + display);
@@ -441,7 +441,7 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
         }
 
         // Remove the backup directory
-        Str pc_dir = pc_patch_dir(q, name);
+        std::string pc_dir = pc_patch_dir(q, name);
         delete_dir_recursive(pc_dir);
 
         // Remove from applied list
