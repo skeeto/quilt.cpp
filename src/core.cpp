@@ -29,6 +29,12 @@ std::optional<int> QuiltState::find_in_series(std::string_view patch) const {
     return std::nullopt;
 }
 
+int QuiltState::get_strip_level(std::string_view patch) const {
+    auto it = patch_strip_level.find(std::string(patch));
+    if (it != patch_strip_level.end()) return it->second;
+    return 1;
+}
+
 // ---------------------------------------------------------------------------
 // I/O helpers
 // ---------------------------------------------------------------------------
@@ -131,11 +137,27 @@ bool ends_with(std::string_view s, std::string_view suffix) {
     return s.substr(s.size() - suffix.size()) == suffix;
 }
 
+std::vector<std::string> split_on_whitespace(std::string_view s) {
+    std::vector<std::string> tokens;
+    size_t i = 0;
+    while (i < s.size()) {
+        while (i < s.size() && (s[i] == ' ' || s[i] == '\t'))
+            ++i;
+        if (i >= s.size()) break;
+        size_t start = i;
+        while (i < s.size() && s[i] != ' ' && s[i] != '\t')
+            ++i;
+        tokens.emplace_back(s.substr(start, i - start));
+    }
+    return tokens;
+}
+
 // ---------------------------------------------------------------------------
 // Series file I/O
 // ---------------------------------------------------------------------------
 
-std::vector<std::string> read_series(std::string_view path) {
+std::vector<std::string> read_series(std::string_view path,
+                                     std::map<std::string, int> *strip_levels) {
     std::vector<std::string> patches;
     std::string content = read_file(path);
     if (content.empty()) return patches;
@@ -149,27 +171,38 @@ std::vector<std::string> read_series(std::string_view path) {
         if (hash != std::string::npos) {
             trimmed = trim(std::string_view(trimmed).substr(0, hash));
         }
-        // Strip options after the patch name (e.g., "-p1")
-        // The patch name is the first whitespace-delimited token
-        auto sp = trimmed.find(' ');
-        if (sp != std::string::npos) {
-            trimmed = std::string(trimmed.substr(0, sp));
+        // Split into tokens
+        auto tokens = split_on_whitespace(trimmed);
+        if (tokens.empty()) continue;
+        std::string name = tokens[0];
+        // Parse options (e.g., "-p0", "-p 0")
+        int strip = 1;
+        for (size_t i = 1; i < tokens.size(); ++i) {
+            if (tokens[i] == "-p" && i + 1 < tokens.size()) {
+                strip = std::stoi(tokens[i + 1]);
+                ++i;
+            } else if (starts_with(tokens[i], "-p") && tokens[i].size() > 2) {
+                strip = std::stoi(tokens[i].substr(2));
+            }
         }
-        auto tab = trimmed.find('\t');
-        if (tab != std::string::npos) {
-            trimmed = std::string(trimmed.substr(0, tab));
+        if (strip_levels && strip != 1) {
+            (*strip_levels)[name] = strip;
         }
-        if (!trimmed.empty()) {
-            patches.push_back(std::move(trimmed));
-        }
+        patches.push_back(std::move(name));
     }
     return patches;
 }
 
-bool write_series(std::string_view path, const std::vector<std::string> &patches) {
+bool write_series(std::string_view path, const std::vector<std::string> &patches,
+                  const std::map<std::string, int> &strip_levels) {
     std::string content;
     for (const auto &p : patches) {
         content += p;
+        auto it = strip_levels.find(p);
+        if (it != strip_levels.end() && it->second != 1) {
+            content += " -p";
+            content += std::to_string(it->second);
+        }
         content += '\n';
     }
     return write_file(path, content);
@@ -238,10 +271,35 @@ bool ensure_pc_dir(QuiltState &q) {
 
 QuiltState load_state() {
     QuiltState q;
-    q.work_dir = get_cwd();
     q.patches_dir = "patches";
     q.pc_dir = ".pc";
-    q.series_file = path_join(q.patches_dir, "series");
+
+    // Read environment variable overrides
+    std::string env_pc = get_env("QUILT_PC");
+    if (!env_pc.empty()) q.pc_dir = env_pc;
+    std::string env_patches = get_env("QUILT_PATCHES");
+    if (!env_patches.empty()) q.patches_dir = env_patches;
+
+    // Upward directory scan: find project root containing .pc/ or patches/
+    std::string cwd = get_cwd();
+    std::string scan = cwd;
+    while (true) {
+        if (is_directory(path_join(scan, q.pc_dir)) ||
+            is_directory(path_join(scan, q.patches_dir))) {
+            break;
+        }
+        std::string parent = dirname(scan);
+        if (parent == scan) {
+            // Reached filesystem root without finding anything; use cwd
+            scan = cwd;
+            break;
+        }
+        scan = parent;
+    }
+    q.work_dir = scan;
+    if (q.work_dir != cwd) {
+        set_cwd(q.work_dir);
+    }
 
     // Check if .pc/ exists and read overrides
     std::string pc_abs = path_join(q.work_dir, q.pc_dir);
@@ -250,7 +308,6 @@ QuiltState load_state() {
         std::string qp = trim(read_file(path_join(pc_abs, ".quilt_patches")));
         if (!qp.empty()) {
             q.patches_dir = qp;
-            q.series_file = path_join(q.patches_dir, "series");
         }
         // Read .quilt_series override
         std::string qs = trim(read_file(path_join(pc_abs, ".quilt_series")));
@@ -259,9 +316,25 @@ QuiltState load_state() {
         }
     }
 
+    // Series file search order (when not overridden by .quilt_series)
+    if (q.series_file.empty()) {
+        std::string s1 = path_join(q.work_dir, "series");
+        std::string s2 = path_join(q.work_dir, q.patches_dir, "series");
+        std::string s3 = path_join(q.work_dir, q.pc_dir, "series");
+        if (file_exists(s1)) {
+            q.series_file = "series";
+        } else if (file_exists(s2)) {
+            q.series_file = path_join(q.patches_dir, "series");
+        } else if (file_exists(s3)) {
+            q.series_file = path_join(q.pc_dir, "series");
+        } else {
+            q.series_file = path_join(q.patches_dir, "series");
+        }
+    }
+
     // Read series file
     std::string series_abs = path_join(q.work_dir, q.series_file);
-    q.series = read_series(series_abs);
+    q.series = read_series(series_abs, &q.patch_strip_level);
 
     // Read applied-patches file
     std::string applied_abs = path_join(q.work_dir, q.pc_dir, "applied-patches");
@@ -417,19 +490,39 @@ int quilt_main(int argc, char **argv) {
     // Strip patches/ prefix from command if user accidentally typed it
     std::string cmd_name(arg1);
 
-    // Find command
+    // Find command (supports unique prefix abbreviation)
     Command *found = nullptr;
+    int match_count = 0;
     for (int i = 0; i < num_commands; ++i) {
         if (cmd_name == commands[i].name) {
             found = &commands[i];
+            match_count = 1;
             break;
         }
+        if (starts_with(std::string_view(commands[i].name), cmd_name)) {
+            found = &commands[i];
+            match_count++;
+        }
+    }
+
+    if (match_count > 1) {
+        err_line("quilt: command '" + cmd_name + "' is ambiguous");
+        return 1;
     }
 
     if (!found) {
         err_line("quilt: unknown command '" + cmd_name + "'");
         err_line("Use \"quilt --help\" for a list of commands.");
         return 1;
+    }
+
+    // Handle per-command -h/--help before dispatching
+    for (int i = 2; i < argc; ++i) {
+        std::string_view a = argv[i];
+        if (a == "-h" || a == "--help") {
+            out_line(found->usage);
+            return 0;
+        }
     }
 
     // Load state

@@ -9,6 +9,7 @@
 #include <optional>
 #include <functional>
 #include <algorithm>
+#include <map>
 
 // Quilt .pc/ directory state
 struct QuiltState {
@@ -19,11 +20,13 @@ struct QuiltState {
 
     std::vector<std::string> series;   // ordered patch names from series file
     std::vector<std::string> applied;  // applied patch names from .pc/applied-patches
+    std::map<std::string, int> patch_strip_level;  // per-patch strip level from series
 
     // Computed helpers
     int top_index() const;     // index of topmost applied in series (-1 if none)
     bool is_applied(std::string_view patch) const;
     std::optional<int> find_in_series(std::string_view patch) const;
+    int get_strip_level(std::string_view patch) const;  // returns 1 if not set
 };
 
 // I/O helpers
@@ -44,6 +47,7 @@ std::string trim(std::string_view s);
 std::vector<std::string> split_lines(std::string_view s);
 bool starts_with(std::string_view s, std::string_view prefix);
 bool ends_with(std::string_view s, std::string_view suffix);
+std::vector<std::string> split_on_whitespace(std::string_view s);
 
 // Command function type
 using CmdFn = int (*)(QuiltState &q, int argc, char **argv);

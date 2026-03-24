@@ -1,6 +1,7 @@
 // This is free and unencumbered software released into the public domain.
 #include "quilt.hpp"
 #include "platform.hpp"
+#include <cstdlib>
 
 // Forward declarations for core.cpp helpers not in headers
 extern bool ensure_pc_dir(QuiltState &q);
@@ -255,6 +256,7 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
     bool push_all = false;
     bool force = false;
     bool quiet = false;
+    int push_count = -1;
     std::string target;
 
     for (int i = 1; i < argc; ++i) {
@@ -263,7 +265,24 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
         else if (arg == "-f") { force = true; }
         else if (arg == "-q") { quiet = true; }
         else if (arg[0] != '-') {
-            target = strip_patches_prefix(q, arg);
+            // Try as number first
+            char *endptr;
+            long val = strtol(std::string(arg).c_str(), &endptr, 10);
+            if (*endptr == '\0' && val > 0) {
+                push_count = (int)val;
+            } else {
+                target = strip_patches_prefix(q, arg);
+            }
+        }
+    }
+
+    // Refuse to push if top patch needs refresh (was force-applied)
+    if (!q.applied.empty()) {
+        std::string nr = path_join(pc_patch_dir(q, q.applied.back()), ".needs_refresh");
+        if (file_exists(nr)) {
+            err_line("Patch " + format_patch(q, q.applied.back()) +
+                     " needs to be refreshed first.");
+            return 1;
         }
     }
 
@@ -290,11 +309,19 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
             err_line("Patch " + format_patch(q, target) + " is already applied");
             return 1;
         }
+    } else if (push_count > 0) {
+        end_idx = start_idx + push_count - 1;
+        if (end_idx >= (int)q.series.size()) {
+            end_idx = (int)q.series.size() - 1;
+        }
     } else {
         end_idx = start_idx;
     }
 
     if (!ensure_pc_dir(q)) return 1;
+
+    // Read QUILT_PATCH_OPTS
+    auto extra_patch_opts = split_on_whitespace(get_env("QUILT_PATCH_OPTS"));
 
     std::string last_applied;
     for (int i = start_idx; i <= end_idx; ++i) {
@@ -325,9 +352,15 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
         }
 
         // Apply the patch using external patch command
-        std::vector<std::string> patch_args = {"patch", "-p1", "-E", "--no-backup-if-mismatch"};
+        int strip = q.get_strip_level(name);
+        std::vector<std::string> patch_args = {
+            "patch", "-p" + std::to_string(strip), "-E", "--no-backup-if-mismatch"
+        };
         if (force) {
             patch_args.push_back("--force");
+        }
+        for (const auto &opt : extra_patch_opts) {
+            patch_args.push_back(opt);
         }
 
         ProcessResult result = run_cmd_input(patch_args, patch_content);
@@ -340,13 +373,20 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
             if (!result.err.empty()) {
                 err(result.err);
             }
-            err_line("Patch " + display + " does not apply (enforce with -f)");
-            if (!force) {
-                // Still record the patch as applied so the user can fix it
+            if (force) {
+                // Force-applied: record as applied but mark as needing refresh
                 q.applied.push_back(name);
                 write_applied_patches(q);
-                // Create .timestamp
                 write_file(path_join(pc_dir, ".timestamp"), "");
+                write_file(path_join(pc_dir, ".needs_refresh"), "");
+                if (!quiet) {
+                    out_line("Applied " + display + " (forced; needs refresh)");
+                }
+                return 1;
+            } else {
+                // Not forced: do not record, clean up backups
+                err_line("Patch " + display + " does not apply (enforce with -f)");
+                delete_dir_recursive(pc_dir);
                 return 1;
             }
         }
@@ -375,6 +415,7 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
     bool pop_all = false;
     bool force = false;
     bool quiet = false;
+    int pop_count = -1;
     std::string target;
 
     for (int i = 1; i < argc; ++i) {
@@ -384,11 +425,16 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
         else if (arg == "-q") { quiet = true; }
         else if (arg == "-R") { /* no-op, default behavior */ }
         else if (arg[0] != '-') {
-            target = strip_patches_prefix(q, arg);
+            // Try as number first
+            char *endptr;
+            long val = strtol(std::string(arg).c_str(), &endptr, 10);
+            if (*endptr == '\0' && val > 0) {
+                pop_count = (int)val;
+            } else {
+                target = strip_patches_prefix(q, arg);
+            }
         }
     }
-
-    (void)force;
 
     if (q.applied.empty()) {
         err_line("No patches applied");
@@ -400,23 +446,26 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
         stop_idx = 0;
     } else if (!target.empty()) {
         // Find target in applied list
-        int found = -1;
+        int found_idx = -1;
         for (int i = 0; i < (int)q.applied.size(); ++i) {
             if (q.applied[i] == target) {
-                found = i;
+                found_idx = i;
                 break;
             }
         }
-        if (found < 0) {
+        if (found_idx < 0) {
             err_line("Patch " + format_patch(q, target) + " is not applied");
             return 1;
         }
         // Pop down to (but not including) the target patch
-        stop_idx = found + 1;
+        stop_idx = found_idx + 1;
         if (stop_idx >= (int)q.applied.size()) {
             err_line("Patch " + format_patch(q, target) + " is currently on top");
             return 2;
         }
+    } else if (pop_count > 0) {
+        stop_idx = (int)q.applied.size() - pop_count;
+        if (stop_idx < 0) stop_idx = 0;
     } else {
         // Pop just the top patch
         stop_idx = (int)q.applied.size() - 1;
@@ -426,6 +475,15 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
     while ((int)q.applied.size() > stop_idx) {
         const std::string &name = q.applied.back();
         std::string display = format_patch(q, name);
+
+        // Check if patch needs refresh (force-applied) and -f not given
+        std::string pc_dir = pc_patch_dir(q, name);
+        std::string nr = path_join(pc_dir, ".needs_refresh");
+        if (file_exists(nr) && !force) {
+            err_line("Patch " + display +
+                     " needs to be refreshed first (use -f to force).");
+            return 1;
+        }
 
         if (!quiet) {
             out_line("Removing patch " + display);
@@ -441,7 +499,6 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
         }
 
         // Remove the backup directory
-        std::string pc_dir = pc_patch_dir(q, name);
         delete_dir_recursive(pc_dir);
 
         // Remove from applied list

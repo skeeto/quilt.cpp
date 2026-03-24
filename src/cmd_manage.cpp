@@ -3,8 +3,10 @@
 #include "platform.hpp"
 
 // Forward declarations for helpers defined in core.cpp
-extern std::vector<std::string> read_series(std::string_view path);
-extern bool write_series(std::string_view path, const std::vector<std::string> &patches);
+extern std::vector<std::string> read_series(std::string_view path,
+                                            std::map<std::string, int> *strip_levels);
+extern bool write_series(std::string_view path, const std::vector<std::string> &patches,
+                         const std::map<std::string, int> &strip_levels);
 extern std::vector<std::string> read_applied(std::string_view path);
 extern bool write_applied(std::string_view path, const std::vector<std::string> &patches);
 extern bool ensure_pc_dir(QuiltState &q);
@@ -202,7 +204,7 @@ int cmd_delete(QuiltState &q, int argc, char **argv) {
     // Remove from series
     q.series.erase(q.series.begin() + *idx);
     std::string series_abs = path_join(q.work_dir, q.series_file);
-    write_series(series_abs, q.series);
+    write_series(series_abs, q.series, q.patch_strip_level);
 
     // Optionally remove the patch file
     if (opt_remove) {
@@ -267,7 +269,7 @@ int cmd_rename(QuiltState &q, int argc, char **argv) {
     // Rename in series
     q.series[*idx] = new_name;
     std::string series_abs = path_join(q.work_dir, q.series_file);
-    write_series(series_abs, q.series);
+    write_series(series_abs, q.series, q.patch_strip_level);
 
     // Rename patch file
     std::string old_file = path_join(q.work_dir, q.patches_dir, old_patch);
@@ -380,7 +382,7 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
             } else {
                 q.series.push_back(name);
             }
-            write_series(series_abs, q.series);
+            write_series(series_abs, q.series, q.patch_strip_level);
         }
 
         out_line("Importing patch " + patchfile +
@@ -685,6 +687,10 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
     if (opt_reverse) cmd.push_back("-R");
     if (opt_force) cmd.push_back("-f");
     if (opt_quiet) cmd.push_back("-s");
+    auto extra_patch_opts = split_on_whitespace(get_env("QUILT_PATCH_OPTS"));
+    for (const auto &opt : extra_patch_opts) {
+        cmd.push_back(opt);
+    }
 
     ProcessResult r = run_cmd_input(cmd, stdin_data);
     if (r.exit_code != 0) {
@@ -753,7 +759,7 @@ int cmd_fork(QuiltState &q, int argc, char **argv) {
     if (idx) {
         q.series[*idx] = new_name;
         std::string series_abs = path_join(q.work_dir, q.series_file);
-        write_series(series_abs, q.series);
+        write_series(series_abs, q.series, q.patch_strip_level);
     }
 
     // Replace in applied-patches

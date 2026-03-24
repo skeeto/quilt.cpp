@@ -685,6 +685,315 @@ test_filenames_with_spaces() {
 }
 
 # -----------------------------------------------------------------------
+# 12. New spec-compliance tests
+# -----------------------------------------------------------------------
+
+test_upward_scanning() {
+    begin_test "upward_scanning"
+    echo "x" > f.txt
+    $QUILT new up.patch >/dev/null 2>&1
+    $QUILT add f.txt >/dev/null 2>&1
+    echo "y" > f.txt
+    $QUILT refresh >/dev/null 2>&1
+
+    # Run quilt from a subdirectory
+    mkdir -p sub/deep
+    local top
+    top=$(cd sub/deep && $QUILT top 2>/dev/null)
+    echo "$top" | grep -q "up.patch" || { fail "top from subdirectory failed (got: $top)"; return; }
+
+    pass
+}
+
+test_command_abbreviation() {
+    begin_test "command_abbreviation"
+    echo "x" > f.txt
+    $QUILT new abbrev.patch >/dev/null 2>&1
+    $QUILT add f.txt >/dev/null 2>&1
+    echo "y" > f.txt
+    $QUILT refresh >/dev/null 2>&1
+
+    # "ser" should match "series" uniquely
+    local series
+    series=$($QUILT ser 2>/dev/null)
+    echo "$series" | grep -q "abbrev.patch" || { fail "abbreviation 'ser' failed"; return; }
+
+    # "to" should match "top" uniquely
+    local top
+    top=$($QUILT to 2>/dev/null)
+    echo "$top" | grep -q "abbrev.patch" || { fail "abbreviation 'to' failed"; return; }
+
+    pass
+}
+
+test_help_flag() {
+    begin_test "help_flag"
+    local help_out
+    help_out=$($QUILT push -h 2>&1)
+    local rc=$?
+    [ $rc -eq 0 ] || { fail "push -h should exit 0 (got $rc)"; return; }
+    echo "$help_out" | grep -qi "usage" || { fail "push -h should show usage"; return; }
+    pass
+}
+
+test_quilt_patches_env() {
+    begin_test "quilt_patches_env"
+    mkdir -p mypatches
+    echo "x" > f.txt
+
+    QUILT_PATCHES=mypatches $QUILT new envp.patch >/dev/null 2>&1 || { fail "new with QUILT_PATCHES failed"; return; }
+    QUILT_PATCHES=mypatches $QUILT add f.txt >/dev/null 2>&1
+    echo "y" > f.txt
+    QUILT_PATCHES=mypatches $QUILT refresh >/dev/null 2>&1
+
+    [ -f mypatches/envp.patch ] || { fail "patch should be in mypatches/"; return; }
+    pass
+}
+
+test_quilt_pc_env() {
+    begin_test "quilt_pc_env"
+    echo "x" > f.txt
+
+    QUILT_PC=.mypc $QUILT new pce.patch >/dev/null 2>&1 || { fail "new with QUILT_PC failed"; return; }
+    QUILT_PC=.mypc $QUILT add f.txt >/dev/null 2>&1
+    echo "y" > f.txt
+    QUILT_PC=.mypc $QUILT refresh >/dev/null 2>&1
+
+    [ -d .mypc ] || { fail ".mypc directory should exist"; return; }
+    [ -f .mypc/applied-patches ] || { fail "applied-patches should be in .mypc/"; return; }
+    pass
+}
+
+test_series_search_order() {
+    begin_test "series_search_order"
+    # Put series file in project root instead of patches/
+    echo "x" > f.txt
+    mkdir -p patches
+    cat > patches/root.patch << 'PATCH'
+--- a/f.txt
++++ b/f.txt
+@@ -1 +1 @@
+-x
++root_series
+PATCH
+    # Series file at project root
+    echo "root.patch" > series
+
+    $QUILT push >/dev/null 2>&1 || { fail "push with root series failed"; return; }
+    [ "$(cat f.txt)" = "root_series" ] || { fail "wrong content after push"; return; }
+
+    pass
+}
+
+test_strip_level() {
+    begin_test "strip_level"
+    echo "x" > f.txt
+    mkdir -p patches
+    # Create a -p0 patch (no directory prefix in paths)
+    cat > patches/p0.patch << 'PATCH'
+--- f.txt
++++ f.txt
+@@ -1 +1 @@
+-x
++stripped
+PATCH
+    echo "p0.patch -p0" > patches/series
+
+    $QUILT push >/dev/null 2>&1 || { fail "push -p0 patch failed"; return; }
+    [ "$(cat f.txt)" = "stripped" ] || { fail "wrong content (got: $(cat f.txt))"; return; }
+
+    pass
+}
+
+test_push_numeric() {
+    begin_test "push_numeric"
+    echo "x" > f.txt
+
+    $QUILT new n1.patch >/dev/null 2>&1
+    $QUILT add f.txt >/dev/null 2>&1
+    echo "1" > f.txt
+    $QUILT refresh >/dev/null 2>&1
+
+    $QUILT new n2.patch >/dev/null 2>&1
+    $QUILT add f.txt >/dev/null 2>&1
+    echo "2" > f.txt
+    $QUILT refresh >/dev/null 2>&1
+
+    $QUILT new n3.patch >/dev/null 2>&1
+    $QUILT add f.txt >/dev/null 2>&1
+    echo "3" > f.txt
+    $QUILT refresh >/dev/null 2>&1
+
+    $QUILT pop -a >/dev/null 2>&1
+
+    # Push exactly 2
+    $QUILT push 2 >/dev/null 2>&1 || { fail "push 2 failed"; return; }
+    local count
+    count=$($QUILT applied 2>/dev/null | wc -l)
+    [ "$count" -eq 2 ] || { fail "expected 2 applied, got $count"; return; }
+    [ "$(cat f.txt)" = "2" ] || { fail "wrong content after push 2"; return; }
+
+    pass
+}
+
+test_pop_numeric() {
+    begin_test "pop_numeric"
+    echo "x" > f.txt
+
+    $QUILT new p1.patch >/dev/null 2>&1
+    $QUILT add f.txt >/dev/null 2>&1
+    echo "1" > f.txt
+    $QUILT refresh >/dev/null 2>&1
+
+    $QUILT new p2.patch >/dev/null 2>&1
+    $QUILT add f.txt >/dev/null 2>&1
+    echo "2" > f.txt
+    $QUILT refresh >/dev/null 2>&1
+
+    $QUILT new p3.patch >/dev/null 2>&1
+    $QUILT add f.txt >/dev/null 2>&1
+    echo "3" > f.txt
+    $QUILT refresh >/dev/null 2>&1
+
+    # Pop exactly 2
+    $QUILT pop 2 >/dev/null 2>&1 || { fail "pop 2 failed"; return; }
+    local count
+    count=$($QUILT applied 2>/dev/null | wc -l)
+    [ "$count" -eq 1 ] || { fail "expected 1 applied, got $count"; return; }
+    [ "$(cat f.txt)" = "1" ] || { fail "wrong content after pop 2"; return; }
+
+    pass
+}
+
+test_force_push_tracking() {
+    begin_test "force_push_tracking"
+    echo "original line" > f.txt
+    mkdir -p patches
+
+    # Create a patch that will conflict
+    cat > patches/conflict.patch << 'PATCH'
+--- a/f.txt
++++ b/f.txt
+@@ -1 +1 @@
+-wrong original
++patched
+PATCH
+    cat > patches/second.patch << 'PATCH'
+--- a/f.txt
++++ b/f.txt
+@@ -1 +1 @@
+-patched
++second
+PATCH
+    echo "conflict.patch" > patches/series
+    echo "second.patch" >> patches/series
+
+    # Force push the conflicting patch
+    $QUILT push -f >/dev/null 2>&1
+    # Should return 1 but record the patch
+    local top
+    top=$($QUILT top 2>/dev/null)
+    echo "$top" | grep -q "conflict.patch" || { fail "force-applied patch should be top"; return; }
+
+    # Pushing another patch should fail (needs refresh)
+    $QUILT push >/dev/null 2>&1
+    local rc=$?
+    [ $rc -ne 0 ] || { fail "push on top of force-applied should fail"; return; }
+
+    # After refresh, pushing should work
+    $QUILT add f.txt >/dev/null 2>&1
+    echo "patched" > f.txt
+    $QUILT refresh >/dev/null 2>&1
+
+    # Now update second.patch to match
+    cat > patches/second.patch << 'PATCH'
+--- a/f.txt
++++ b/f.txt
+@@ -1 +1 @@
+-patched
++second
+PATCH
+
+    $QUILT push >/dev/null 2>&1 || { fail "push after refresh should succeed"; return; }
+
+    pass
+}
+
+test_force_pop() {
+    begin_test "force_pop"
+    echo "original line" > f.txt
+    mkdir -p patches
+
+    cat > patches/bad.patch << 'PATCH'
+--- a/f.txt
++++ b/f.txt
+@@ -1 +1 @@
+-wrong original
++patched
+PATCH
+    echo "bad.patch" > patches/series
+
+    # Force push
+    $QUILT push -f >/dev/null 2>&1
+
+    # Pop without -f should fail (needs refresh)
+    $QUILT pop >/dev/null 2>&1
+    local rc=$?
+    [ $rc -ne 0 ] || { fail "pop without -f should fail for force-applied"; return; }
+
+    # Pop with -f should succeed
+    $QUILT pop -f >/dev/null 2>&1 || { fail "pop -f should succeed"; return; }
+
+    local count
+    count=$($QUILT applied 2>/dev/null | wc -l)
+    [ "$count" -eq 0 ] || { fail "should have no patches applied after pop -f"; return; }
+
+    pass
+}
+
+test_refresh_shadowing() {
+    begin_test "refresh_shadowing"
+    echo "base" > f.txt
+
+    $QUILT new bottom.patch >/dev/null 2>&1
+    $QUILT add f.txt >/dev/null 2>&1
+    echo "bottom" > f.txt
+    $QUILT refresh >/dev/null 2>&1
+
+    $QUILT new top.patch >/dev/null 2>&1
+    $QUILT add f.txt >/dev/null 2>&1
+    echo "top" > f.txt
+    $QUILT refresh >/dev/null 2>&1
+
+    # Refresh the bottom patch — should NOT include top patch's changes
+    $QUILT refresh bottom.patch >/dev/null 2>&1
+
+    local content
+    content=$(cat patches/bottom.patch)
+    # The bottom patch should still show base->bottom, NOT base->top
+    echo "$content" | grep -q "+bottom" || { fail "bottom patch should have +bottom"; return; }
+    echo "$content" | grep -q "+top" && { fail "bottom patch should NOT have +top"; return; }
+
+    pass
+}
+
+test_diff_reverse() {
+    begin_test "diff_reverse"
+    echo "old" > f.txt
+    $QUILT new rev.patch >/dev/null 2>&1
+    $QUILT add f.txt >/dev/null 2>&1
+    echo "new" > f.txt
+
+    local diff_out
+    diff_out=$($QUILT diff -R 2>/dev/null)
+    # Reverse diff: +old, -new (opposite of normal)
+    echo "$diff_out" | grep -q "+old" || { fail "reverse diff should show +old"; return; }
+    echo "$diff_out" | grep -q -- "-new" || { fail "reverse diff should show -new"; return; }
+
+    pass
+}
+
+# -----------------------------------------------------------------------
 # Run all tests
 # -----------------------------------------------------------------------
 
@@ -724,6 +1033,19 @@ test_empty_patch
 test_multiple_patches_same_file
 test_many_patches
 test_filenames_with_spaces
+test_upward_scanning
+test_command_abbreviation
+test_help_flag
+test_quilt_patches_env
+test_quilt_pc_env
+test_series_search_order
+test_strip_level
+test_push_numeric
+test_pop_numeric
+test_force_push_tracking
+test_force_pop
+test_refresh_shadowing
+test_diff_reverse
 
 echo ""
 echo "================================"
