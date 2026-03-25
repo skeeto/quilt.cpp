@@ -14,7 +14,7 @@ The reference document for quilt behavior is `quilt.html` (or `quilt.txt`). When
 Install the original quilt for behavioral comparison and test validation:
 
 ```bash
-sudo apt-get install quilt
+sudo apt-get install -y quilt
 ```
 
 The test suite can be run against real quilt (`bash test/test.sh quilt`) to verify test correctness.
@@ -22,8 +22,10 @@ The test suite can be run against real quilt (`bash test/test.sh quilt`) to veri
 For Windows cross-compilation and testing, install mingw-w64 and wine:
 
 ```bash
-sudo apt-get install mingw-w64 wine
+sudo apt-get install -y mingw-w64 wine
 ```
+
+**apt install tips**: Always use `-y` to skip interactive confirmation prompts. If package lists are stale, run `sudo apt-get update` first. These installs (especially `wine`) can be slow — run them as background tasks when possible.
 
 ## Build
 
