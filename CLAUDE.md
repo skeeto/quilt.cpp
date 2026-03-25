@@ -39,6 +39,22 @@ cmake -B build-win32 -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64.cmake
 cmake --build build-win32
 ```
 
+## Amalgamation
+
+The build also produces `quilt.cpp` (project root) — a self-contained single-file
+amalgamation of all sources using `platform_win32.cpp`. Compile it standalone with:
+
+```bash
+# Cross-compile to Windows (mingw-w64)
+x86_64-w64-mingw32-g++ -std=c++17 -o quilt.exe quilt.cpp -static -lshell32 -municode
+
+# Native Windows g++
+g++ -std=c++17 -o quilt.exe quilt.cpp -lshell32 -municode
+```
+
+Regenerate: `cmake --build build --target amalgam` (not built by default).
+Do not edit `quilt.cpp` directly.
+
 ## Test
 
 ```bash
