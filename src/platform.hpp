@@ -39,6 +39,9 @@ std::vector<DirEntry> list_dir(std::string_view path);
 // Find all regular files recursively under a directory (relative paths)
 std::vector<std::string> find_files_recursive(std::string_view dir);
 
+// Create a new unique temporary directory; returns its path, or empty on failure
+std::string make_temp_dir();
+
 // Environment
 std::string get_env(std::string_view name);
 void set_env(std::string_view name, std::string_view value);

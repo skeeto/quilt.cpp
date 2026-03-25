@@ -399,6 +399,21 @@ std::vector<std::string> find_files_recursive(std::string_view dir)
 }
 
 // ---------------------------------------------------------------------------
+// Temporary directory
+// ---------------------------------------------------------------------------
+
+std::string make_temp_dir()
+{
+    const char *tmpdir = std::getenv("TMPDIR");
+    std::string base = tmpdir ? tmpdir : "/tmp";
+    std::string tmpl = base + "/quilt-XXXXXX";
+    std::vector<char> buf(tmpl.begin(), tmpl.end());
+    buf.push_back('\0');
+    char *result = ::mkdtemp(buf.data());
+    return result ? std::string(result) : std::string();
+}
+
+// ---------------------------------------------------------------------------
 // Environment
 // ---------------------------------------------------------------------------
 
