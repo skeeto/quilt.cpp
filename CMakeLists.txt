@@ -38,7 +38,7 @@ if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_link_libraries(quilt PRIVATE shell32)
 endif()
 
-# Amalgamation: single-file Windows build (quilt.cpp in project root)
+# Amalgamation: single-file Windows build
 # Build explicitly with: cmake --build <dir> --target amalgam
 set(AMALGAM_SOURCES
     src/quilt.hpp src/platform.hpp
@@ -46,15 +46,15 @@ set(AMALGAM_SOURCES
     src/cmd_manage.cpp src/cmd_stubs.cpp src/platform_win32.cpp
 )
 add_custom_command(
-    OUTPUT ${CMAKE_SOURCE_DIR}/quilt.cpp
+    OUTPUT ${CMAKE_BINARY_DIR}/quilt.cpp
     COMMAND sh ${CMAKE_SOURCE_DIR}/cmake/make_amalgam.sh
             ${CMAKE_SOURCE_DIR}
-            ${CMAKE_SOURCE_DIR}/quilt.cpp
+            ${CMAKE_BINARY_DIR}/quilt.cpp
     DEPENDS ${AMALGAM_SOURCES} cmake/make_amalgam.sh
     COMMENT "Generating quilt.cpp amalgamation"
     VERBATIM
 )
-add_custom_target(amalgam DEPENDS ${CMAKE_SOURCE_DIR}/quilt.cpp)
+add_custom_target(amalgam DEPENDS ${CMAKE_BINARY_DIR}/quilt.cpp)
 
 # Testing
 enable_testing()
