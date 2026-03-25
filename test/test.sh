@@ -11,8 +11,15 @@ if [ -f "$QUILT" ]; then
 fi
 PASS=0
 FAIL=0
+START_DIR=$(pwd)
 TEST_BASE=$(mktemp -d)
-trap 'rm -rf "$TEST_BASE"' EXIT
+cleanup_trap() {
+    cd "$START_DIR" 2>/dev/null || cd /
+    rm -rf "$TEST_BASE"
+    return $?
+}
+
+trap cleanup_trap EXIT
 
 pass() {
     PASS=$((PASS + 1))
