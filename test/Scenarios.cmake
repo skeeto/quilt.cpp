@@ -22,16 +22,20 @@ set(QUILT_TEST_SCENARIOS
     diff_after_refresh
     delete_unapplied
     rename
+    rename_duplicate
     import
+    import_duplicate
     files
     patches_cmd
     header
     edit
     revert
+    revert_not_tracked
     remove
     fork
     fold
     add_no_patch
+    add_prefixed_patch_arg
     add_already_tracked
     remove_not_tracked
     subdirectory_files
@@ -389,6 +393,26 @@ function(qt_scenario_rename)
     qt_assert_not_exists("${QT_WORK_DIR}/patches/old.patch" "old patch file still exists")
 endfunction()
 
+function(qt_scenario_rename_duplicate)
+    qt_begin_test("rename_duplicate")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new old.patch MESSAGE "new old failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add old failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh old failed")
+    qt_quilt_ok(ARGS new new.patch MESSAGE "new new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add new failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "z\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh new failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS rename -P old.patch new.patch)
+    qt_assert_failure("${rc}" "rename to an existing patch should fail")
+    qt_assert_equal("${out}" "" "rename duplicate failure should not write to stdout")
+    qt_assert_contains("${err}" "Patch patches/new.patch exists already, please choose a different name" "rename duplicate should report the GNU-style failure")
+    qt_quilt_ok(OUTPUT series_out ERROR series_err ARGS series MESSAGE "series failed after rename duplicate")
+    qt_assert_contains("${series_out}" "old.patch" "old.patch should remain in series after duplicate rename")
+    qt_assert_contains("${series_out}" "new.patch" "new.patch should remain in series after duplicate rename")
+endfunction()
+
 function(qt_scenario_import)
     qt_begin_test("import")
     qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
@@ -407,6 +431,25 @@ function(qt_scenario_import)
     qt_assert_equal("${series_err}" "" "series should not write diagnostics to stderr after import")
     qt_quilt_ok(ARGS push MESSAGE "push imported patch failed")
     qt_assert_file_text("${QT_WORK_DIR}/f.txt" "imported" "imported patch not applied correctly")
+endfunction()
+
+function(qt_scenario_import_duplicate)
+    qt_begin_test("import_duplicate")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_write_file("${QT_TEST_BASE}/ext_test.patch" [=[--- a/f.txt
++++ b/f.txt
+@@ -1 +1 @@
+-x
++imported
+]=])
+    qt_quilt_ok(ARGS import "${QT_TEST_BASE}/ext_test.patch" MESSAGE "first import failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS import "${QT_TEST_BASE}/ext_test.patch")
+    qt_assert_failure("${rc}" "duplicate import should fail without -f")
+    qt_assert_equal("${out}" "" "duplicate import should not write to stdout")
+    qt_assert_contains("${err}" "Patch patches/ext_test.patch exists. Replace with -f." "duplicate import should report the GNU-style failure")
+    qt_quilt_ok(OUTPUT series_out ERROR series_err ARGS series MESSAGE "series failed after duplicate import")
+    qt_assert_contains("${series_out}" "ext_test.patch" "duplicate import should leave ext_test.patch in series")
+    qt_assert_line_count("${series_out}" "1" "duplicate import should not add a second series entry")
 endfunction()
 
 function(qt_scenario_files)
@@ -478,6 +521,16 @@ function(qt_scenario_revert)
     qt_assert_file_text("${QT_WORK_DIR}/f.txt" "original" "revert did not restore")
 endfunction()
 
+function(qt_scenario_revert_not_tracked)
+    qt_begin_test("revert_not_tracked")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new r.patch MESSAGE "new failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS revert f.txt)
+    qt_assert_failure("${rc}" "revert of an untracked file should fail")
+    qt_assert_equal("${out}" "" "revert failure should not write to stdout")
+    qt_assert_contains("${err}" "File f.txt is not in patch patches/r.patch" "revert failure should mention the GNU-style patch path")
+endfunction()
+
 function(qt_scenario_remove)
     qt_begin_test("remove")
     qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
@@ -531,6 +584,19 @@ function(qt_scenario_add_no_patch)
     qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS add f.txt)
     qt_assert_failure("${rc}" "add with no patch should fail")
+    qt_assert_equal("${out}" "" "add with no patch should not write to stdout")
+    qt_assert_contains("${err}" "No series file found" "add with no patch should explain the missing series file")
+endfunction()
+
+function(qt_scenario_add_prefixed_patch_arg)
+    qt_begin_test("add_prefixed_patch_arg")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(OUTPUT add_out ERROR add_err ARGS add -P patches/p.patch f.txt MESSAGE "add with prefixed patch failed")
+    qt_assert_contains("${add_out}" "File f.txt added to patch patches/p.patch" "add -P patches/... should use the GNU-style patch path once")
+    qt_assert_equal("${add_err}" "" "add -P patches/... should not write diagnostics to stderr")
+    qt_assert_exists("${QT_WORK_DIR}/.pc/p.patch/f.txt" "add -P patches/... should track the file under .pc/p.patch")
+    qt_assert_not_exists("${QT_WORK_DIR}/.pc/patches/p.patch/f.txt" "add -P patches/... should not treat the prefix as part of the patch name")
 endfunction()
 
 function(qt_scenario_add_already_tracked)
@@ -1087,8 +1153,12 @@ function(qt_run_named_scenario scenario)
         qt_scenario_delete_unapplied()
     elseif(scenario STREQUAL "rename")
         qt_scenario_rename()
+    elseif(scenario STREQUAL "rename_duplicate")
+        qt_scenario_rename_duplicate()
     elseif(scenario STREQUAL "import")
         qt_scenario_import()
+    elseif(scenario STREQUAL "import_duplicate")
+        qt_scenario_import_duplicate()
     elseif(scenario STREQUAL "files")
         qt_scenario_files()
     elseif(scenario STREQUAL "patches_cmd")
@@ -1099,6 +1169,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_edit()
     elseif(scenario STREQUAL "revert")
         qt_scenario_revert()
+    elseif(scenario STREQUAL "revert_not_tracked")
+        qt_scenario_revert_not_tracked()
     elseif(scenario STREQUAL "remove")
         qt_scenario_remove()
     elseif(scenario STREQUAL "fork")
@@ -1107,6 +1179,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_fold()
     elseif(scenario STREQUAL "add_no_patch")
         qt_scenario_add_no_patch()
+    elseif(scenario STREQUAL "add_prefixed_patch_arg")
+        qt_scenario_add_prefixed_patch_arg()
     elseif(scenario STREQUAL "add_already_tracked")
         qt_scenario_add_already_tracked()
     elseif(scenario STREQUAL "remove_not_tracked")

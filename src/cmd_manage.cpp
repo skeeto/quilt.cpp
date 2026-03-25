@@ -241,7 +241,8 @@ int cmd_rename(QuiltState &q, int argc, char **argv) {
     // Verify new name doesn't exist in series
     auto new_idx = q.find_in_series(new_name);
     if (new_idx) {
-        err_line("Patch " + new_name + " already exists in series");
+        err_line("Patch " + patch_path_display(q, new_name) +
+                 " exists already, please choose a different name");
         return 1;
     }
 
@@ -337,8 +338,8 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
         // Check if target exists in series
         auto existing = q.find_in_series(name);
         if (existing && !force) {
-            err_line("Patch " + name +
-                     " already exists in series, use -f to override");
+            err_line("Patch " + patch_path_display(q, name) +
+                     " exists. Replace with -f.");
             return 1;
         }
 

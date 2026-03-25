@@ -38,6 +38,14 @@ static std::string patch_path_display(const QuiltState &q, std::string_view patc
     return q.patches_dir + "/" + std::string(patch);
 }
 
+static std::string strip_patches_prefix(const QuiltState &q, std::string_view name) {
+    std::string prefix = q.patches_dir + "/";
+    if (starts_with(name, prefix)) {
+        return std::string(name.substr(prefix.size()));
+    }
+    return std::string(name);
+}
+
 int cmd_new(QuiltState &q, int argc, char **argv) {
     // Parse options
     std::string patch_name;
@@ -126,6 +134,10 @@ int cmd_new(QuiltState &q, int argc, char **argv) {
 
 int cmd_add(QuiltState &q, int argc, char **argv) {
     if (q.applied.empty()) {
+        if (!q.series_file_exists) {
+            err_line("No series file found");
+            return 1;
+        }
         err_line("No patches applied");
         return 1;
     }
@@ -137,7 +149,7 @@ int cmd_add(QuiltState &q, int argc, char **argv) {
     while (i < argc) {
         std::string_view arg = argv[i];
         if (arg == "-P" && i + 1 < argc) {
-            patch = std::string(argv[i + 1]);
+            patch = strip_patches_prefix(q, argv[i + 1]);
             i += 2;
             continue;
         }
@@ -186,7 +198,7 @@ int cmd_remove(QuiltState &q, int argc, char **argv) {
     while (i < argc) {
         std::string_view arg = argv[i];
         if (arg == "-P" && i + 1 < argc) {
-            patch = std::string(argv[i + 1]);
+            patch = strip_patches_prefix(q, argv[i + 1]);
             i += 2;
             continue;
         }
@@ -578,7 +590,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
     while (i < argc) {
         std::string_view arg = argv[i];
         if (arg == "-P" && i + 1 < argc) {
-            patch = std::string(argv[i + 1]);
+            patch = strip_patches_prefix(q, argv[i + 1]);
             i += 2;
             continue;
         }
@@ -797,7 +809,7 @@ int cmd_revert(QuiltState &q, int argc, char **argv) {
     while (i < argc) {
         std::string_view arg = argv[i];
         if (arg == "-P" && i + 1 < argc) {
-            patch = std::string(argv[i + 1]);
+            patch = strip_patches_prefix(q, argv[i + 1]);
             i += 2;
             continue;
         }
