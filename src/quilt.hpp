@@ -1,5 +1,6 @@
 // This is free and unencumbered software released into the public domain.
 #pragma once
+#define _POSIX_THREAD_SAFE_FUNCTIONS
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
