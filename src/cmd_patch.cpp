@@ -59,9 +59,12 @@ int cmd_new(QuiltState &q, int argc, char **argv) {
             continue;
         }
         // First non-option argument is the patch name
-        patch_name = std::string(arg);
+        if (arg[0] != '-') {
+            patch_name = std::string(arg);
+            i += 1;
+            break;
+        }
         i += 1;
-        break;
     }
 
     if (patch_name.empty()) {
@@ -146,7 +149,9 @@ int cmd_add(QuiltState &q, int argc, char **argv) {
             i += 2;
             continue;
         }
-        files.emplace_back(arg);
+        if (arg[0] != '-') {
+            files.emplace_back(arg);
+        }
         i += 1;
     }
 
@@ -196,7 +201,9 @@ int cmd_remove(QuiltState &q, int argc, char **argv) {
             i += 2;
             continue;
         }
-        files.emplace_back(arg);
+        if (arg[0] != '-') {
+            files.emplace_back(arg);
+        }
         i += 1;
     }
 
@@ -459,7 +466,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
             i += 1;
             continue;
         }
-        if (arg == "--no-timestamps") {
+        if (arg == "--no-timestamps" || arg == "--no-timestamp") {
             no_timestamps = true;
             i += 1;
             continue;
@@ -475,7 +482,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
             continue;
         }
         // Non-option: patch name
-        if (patch.empty()) {
+        if (arg[0] != '-' && patch.empty()) {
             patch = std::string(arg);
         }
         i += 1;
@@ -631,7 +638,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
             }
             continue;
         }
-        if (arg == "--no-timestamps") {
+        if (arg == "--no-timestamps" || arg == "--no-timestamp") {
             no_timestamps = true;
             i += 1;
             continue;
@@ -642,7 +649,9 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
             continue;
         }
         // Non-option: file name or patch name
-        file_filter.emplace_back(arg);
+        if (arg[0] != '-') {
+            file_filter.emplace_back(arg);
+        }
         i += 1;
     }
 
@@ -820,7 +829,9 @@ int cmd_revert(QuiltState &q, int argc, char **argv) {
             i += 2;
             continue;
         }
-        files.emplace_back(arg);
+        if (arg[0] != '-') {
+            files.emplace_back(arg);
+        }
         i += 1;
     }
 
