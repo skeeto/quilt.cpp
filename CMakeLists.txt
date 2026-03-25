@@ -38,9 +38,8 @@ if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_link_libraries(quilt PRIVATE shell32)
 endif()
 
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
-
 # Amalgamation: single-file Windows build (quilt.cpp in project root)
+# Build explicitly with: cmake --build <dir> --target amalgam
 set(AMALGAM_SOURCES
     src/quilt.hpp src/platform.hpp
     src/core.cpp src/cmd_stack.cpp src/cmd_patch.cpp
@@ -48,15 +47,14 @@ set(AMALGAM_SOURCES
 )
 add_custom_command(
     OUTPUT ${CMAKE_SOURCE_DIR}/quilt.cpp
-    COMMAND ${Python3_EXECUTABLE}
-            ${CMAKE_SOURCE_DIR}/cmake/make_amalgam.py
+    COMMAND sh ${CMAKE_SOURCE_DIR}/cmake/make_amalgam.sh
             ${CMAKE_SOURCE_DIR}
             ${CMAKE_SOURCE_DIR}/quilt.cpp
-    DEPENDS ${AMALGAM_SOURCES} cmake/make_amalgam.py
+    DEPENDS ${AMALGAM_SOURCES} cmake/make_amalgam.sh
     COMMENT "Generating quilt.cpp amalgamation"
     VERBATIM
 )
-add_custom_target(amalgam ALL DEPENDS ${CMAKE_SOURCE_DIR}/quilt.cpp)
+add_custom_target(amalgam DEPENDS ${CMAKE_SOURCE_DIR}/quilt.cpp)
 
 # Testing
 enable_testing()

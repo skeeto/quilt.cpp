@@ -52,7 +52,8 @@ x86_64-w64-mingw32-g++ -std=c++17 -o quilt.exe quilt.cpp -static -lshell32 -muni
 g++ -std=c++17 -o quilt.exe quilt.cpp -lshell32 -municode
 ```
 
-Regenerate: `cmake --build build --target amalgam`. Do not edit `quilt.cpp` directly.
+Regenerate: `cmake --build build --target amalgam` (not built by default).
+Do not edit `quilt.cpp` directly.
 
 ## Test
 
