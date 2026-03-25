@@ -2,10 +2,6 @@
 #include "quilt.hpp"
 #include "platform.hpp"
 
-// ---------------------------------------------------------------------------
-// QuiltState method implementations
-// ---------------------------------------------------------------------------
-
 int QuiltState::top_index() const {
     if (applied.empty()) return -1;
     const std::string &top = applied.back();
@@ -35,10 +31,6 @@ int QuiltState::get_strip_level(std::string_view patch) const {
     return 1;
 }
 
-// ---------------------------------------------------------------------------
-// I/O helpers
-// ---------------------------------------------------------------------------
-
 void out(std::string_view s) {
     fd_write_stdout(s);
 }
@@ -56,10 +48,6 @@ void err_line(std::string_view s) {
     fd_write_stderr(s);
     fd_write_stderr("\n");
 }
-
-// ---------------------------------------------------------------------------
-// Path utilities
-// ---------------------------------------------------------------------------
 
 std::string path_join(std::string_view a, std::string_view b) {
     if (a.empty()) return std::string(b);
@@ -98,10 +86,6 @@ std::string strip_trailing_slash(std::string_view s) {
         s.remove_suffix(1);
     return s.empty() ? std::string("/") : std::string(s);
 }
-
-// ---------------------------------------------------------------------------
-// String utilities
-// ---------------------------------------------------------------------------
 
 std::string trim(std::string_view s) {
     while (!s.empty() && (s.front() == ' ' || s.front() == '\t' ||
@@ -151,10 +135,6 @@ std::vector<std::string> split_on_whitespace(std::string_view s) {
     }
     return tokens;
 }
-
-// ---------------------------------------------------------------------------
-// Series file I/O
-// ---------------------------------------------------------------------------
 
 std::vector<std::string> read_series(std::string_view path,
                                      std::map<std::string, int> *strip_levels) {
@@ -208,10 +188,6 @@ bool write_series(std::string_view path, const std::vector<std::string> &patches
     return write_file(path, content);
 }
 
-// ---------------------------------------------------------------------------
-// Applied patches DB (.pc/applied-patches)
-// ---------------------------------------------------------------------------
-
 std::vector<std::string> read_applied(std::string_view path) {
     std::vector<std::string> patches;
     std::string content = read_file(path);
@@ -234,10 +210,6 @@ bool write_applied(std::string_view path, const std::vector<std::string> &patche
     }
     return write_file(path, content);
 }
-
-// ---------------------------------------------------------------------------
-// DB initialization
-// ---------------------------------------------------------------------------
 
 bool ensure_pc_dir(QuiltState &q) {
     std::string pc = path_join(q.work_dir, q.pc_dir);
@@ -266,10 +238,6 @@ bool ensure_pc_dir(QuiltState &q) {
     }
     return true;
 }
-
-// ---------------------------------------------------------------------------
-// quiltrc parser
-// ---------------------------------------------------------------------------
 
 // Parse a simplified subset of bash KEY=VALUE assignments from a quiltrc file.
 // Supports: KEY=value, KEY="value", KEY='value', export KEY=value
@@ -368,10 +336,6 @@ static std::map<std::string, std::string> load_quiltrc(const std::string &quiltr
     return {};
 }
 
-// ---------------------------------------------------------------------------
-// State loading
-// ---------------------------------------------------------------------------
-
 QuiltState load_state() {
     QuiltState q;
     q.patches_dir = "patches";
@@ -449,10 +413,6 @@ QuiltState load_state() {
 
     return q;
 }
-
-// ---------------------------------------------------------------------------
-// Patch file helpers
-// ---------------------------------------------------------------------------
 
 std::string pc_patch_dir(const QuiltState &q, std::string_view patch) {
     return path_join(q.work_dir, q.pc_dir, patch);
@@ -532,10 +492,6 @@ bool restore_file(QuiltState &q, std::string_view patch, std::string_view file) 
 std::string to_cstr(std::string_view s) {
     return std::string(s);
 }
-
-// ---------------------------------------------------------------------------
-// quilt_main — entry point
-// ---------------------------------------------------------------------------
 
 static Command commands[] = {
     {"new",        cmd_new,        "Usage: quilt new [-p n] patchname"},

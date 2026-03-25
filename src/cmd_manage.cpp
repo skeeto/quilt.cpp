@@ -15,10 +15,6 @@ extern std::vector<std::string> files_in_patch(const QuiltState &q, std::string_
 extern bool backup_file(QuiltState &q, std::string_view patch, std::string_view file);
 extern bool restore_file(QuiltState &q, std::string_view patch, std::string_view file);
 
-// ---------------------------------------------------------------------------
-// Helper: strip "patches/" prefix from user-provided patch name
-// ---------------------------------------------------------------------------
-
 static std::string strip_patches_prefix(const QuiltState &q, std::string_view name) {
     std::string prefix = q.patches_dir + "/";
     if (starts_with(name, prefix)) {
@@ -26,10 +22,6 @@ static std::string strip_patches_prefix(const QuiltState &q, std::string_view na
     }
     return std::string(name);
 }
-
-// ---------------------------------------------------------------------------
-// Helper: parse a patch file to extract filenames from +++ lines
-// ---------------------------------------------------------------------------
 
 static std::vector<std::string> parse_patch_files(std::string_view content, int strip = 1) {
     std::vector<std::string> files;
@@ -66,11 +58,6 @@ static std::vector<std::string> parse_patch_files(std::string_view content, int 
     return files;
 }
 
-// ---------------------------------------------------------------------------
-// Helper: extract header from a patch file
-// Header is everything before the first diff/Index/---/=== line.
-// ---------------------------------------------------------------------------
-
 static std::string extract_header(std::string_view content) {
     std::string header;
     auto lines = split_lines(content);
@@ -86,10 +73,6 @@ static std::string extract_header(std::string_view content) {
     }
     return header;
 }
-
-// ---------------------------------------------------------------------------
-// Helper: replace header in a patch file (everything before first diff line)
-// ---------------------------------------------------------------------------
 
 static std::string replace_header(std::string_view content, std::string_view new_header) {
     std::string result;
@@ -123,11 +106,6 @@ static std::string replace_header(std::string_view content, std::string_view new
     return result;
 }
 
-// ---------------------------------------------------------------------------
-// Helper: pop patches down to (and including) a target patch
-// Returns 0 on success, 1 on error.
-// ---------------------------------------------------------------------------
-
 static int pop_to_patch(QuiltState &q, std::string_view patch) {
     // Pop all applied patches from top until patch is removed
     std::string applied_path = path_join(q.work_dir, q.pc_dir, "applied-patches");
@@ -148,10 +126,6 @@ static int pop_to_patch(QuiltState &q, std::string_view patch) {
     }
     return 0;
 }
-
-// ---------------------------------------------------------------------------
-// cmd_delete
-// ---------------------------------------------------------------------------
 
 int cmd_delete(QuiltState &q, int argc, char **argv) {
     bool opt_remove = false;
@@ -225,10 +199,6 @@ int cmd_delete(QuiltState &q, int argc, char **argv) {
     out_line("Removed patch " + patch);
     return 0;
 }
-
-// ---------------------------------------------------------------------------
-// cmd_rename
-// ---------------------------------------------------------------------------
 
 int cmd_rename(QuiltState &q, int argc, char **argv) {
     std::string old_patch;
@@ -309,10 +279,6 @@ int cmd_rename(QuiltState &q, int argc, char **argv) {
     out_line("Patch " + old_patch + " renamed to " + new_name);
     return 0;
 }
-
-// ---------------------------------------------------------------------------
-// cmd_import
-// ---------------------------------------------------------------------------
 
 int cmd_import(QuiltState &q, int argc, char **argv) {
     int strip_level = -1;
@@ -395,10 +361,6 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
 
     return 0;
 }
-
-// ---------------------------------------------------------------------------
-// cmd_header
-// ---------------------------------------------------------------------------
 
 int cmd_header(QuiltState &q, int argc, char **argv) {
     enum Mode { PRINT, APPEND, REPLACE, EDIT };
@@ -497,10 +459,6 @@ int cmd_header(QuiltState &q, int argc, char **argv) {
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// cmd_files
-// ---------------------------------------------------------------------------
-
 int cmd_files(QuiltState &q, int argc, char **argv) {
     bool opt_verbose = false;
     bool opt_all = false;
@@ -563,10 +521,6 @@ int cmd_files(QuiltState &q, int argc, char **argv) {
 
     return 0;
 }
-
-// ---------------------------------------------------------------------------
-// cmd_patches
-// ---------------------------------------------------------------------------
 
 int cmd_patches(QuiltState &q, int argc, char **argv) {
     bool opt_verbose = false;
@@ -634,10 +588,6 @@ int cmd_patches(QuiltState &q, int argc, char **argv) {
 
     return 0;
 }
-
-// ---------------------------------------------------------------------------
-// cmd_fold
-// ---------------------------------------------------------------------------
 
 int cmd_fold(QuiltState &q, int argc, char **argv) {
     bool opt_reverse = false;
@@ -709,10 +659,6 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
 
     return 0;
 }
-
-// ---------------------------------------------------------------------------
-// cmd_fork
-// ---------------------------------------------------------------------------
 
 int cmd_fork(QuiltState &q, int argc, char **argv) {
     if (q.applied.empty()) {

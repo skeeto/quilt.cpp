@@ -11,10 +11,6 @@ extern std::vector<std::string> files_in_patch(const QuiltState &q, std::string_
 extern bool backup_file(QuiltState &q, std::string_view patch, std::string_view file);
 extern bool restore_file(QuiltState &q, std::string_view patch, std::string_view file);
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 static std::string strip_patches_prefix(const QuiltState &q, std::string_view name) {
     std::string prefix = q.patches_dir + "/";
     if (starts_with(name, prefix)) return std::string(name.substr(prefix.size()));
@@ -63,10 +59,6 @@ static std::vector<std::string> parse_patch_files(std::string_view content, int 
     return files;
 }
 
-// ---------------------------------------------------------------------------
-// cmd_series
-// ---------------------------------------------------------------------------
-
 int cmd_series(QuiltState &q, int argc, char **argv) {
     bool verbose = false;
     for (int i = 1; i < argc; ++i) {
@@ -86,10 +78,6 @@ int cmd_series(QuiltState &q, int argc, char **argv) {
     }
     return 0;
 }
-
-// ---------------------------------------------------------------------------
-// cmd_applied
-// ---------------------------------------------------------------------------
 
 int cmd_applied(QuiltState &q, int argc, char **argv) {
     std::string target;
@@ -125,10 +113,6 @@ int cmd_applied(QuiltState &q, int argc, char **argv) {
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// cmd_unapplied
-// ---------------------------------------------------------------------------
-
 int cmd_unapplied(QuiltState &q, int argc, char **argv) {
     std::string target;
     for (int i = 1; i < argc; ++i) {
@@ -163,10 +147,6 @@ int cmd_unapplied(QuiltState &q, int argc, char **argv) {
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// cmd_top
-// ---------------------------------------------------------------------------
-
 int cmd_top(QuiltState &q, int argc, char **argv) {
     (void)argc; (void)argv;
     if (q.applied.empty()) {
@@ -176,10 +156,6 @@ int cmd_top(QuiltState &q, int argc, char **argv) {
     out_line(format_patch(q, q.applied.back()));
     return 0;
 }
-
-// ---------------------------------------------------------------------------
-// cmd_next
-// ---------------------------------------------------------------------------
 
 int cmd_next(QuiltState &q, int argc, char **argv) {
     std::string target;
@@ -212,10 +188,6 @@ int cmd_next(QuiltState &q, int argc, char **argv) {
     out_line(format_patch(q, q.series[after_idx]));
     return 0;
 }
-
-// ---------------------------------------------------------------------------
-// cmd_previous
-// ---------------------------------------------------------------------------
 
 int cmd_previous(QuiltState &q, int argc, char **argv) {
     std::string target;
@@ -253,10 +225,6 @@ int cmd_previous(QuiltState &q, int argc, char **argv) {
     out_line(format_patch(q, q.applied[q.applied.size() - 2]));
     return 0;
 }
-
-// ---------------------------------------------------------------------------
-// cmd_push
-// ---------------------------------------------------------------------------
 
 int cmd_push(QuiltState &q, int argc, char **argv) {
     bool push_all = false;
@@ -412,10 +380,6 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
     }
     return 0;
 }
-
-// ---------------------------------------------------------------------------
-// cmd_pop
-// ---------------------------------------------------------------------------
 
 int cmd_pop(QuiltState &q, int argc, char **argv) {
     bool pop_all = false;

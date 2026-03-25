@@ -23,10 +23,6 @@
 #include <cstdlib>
 #include <cstring>
 
-// ---------------------------------------------------------------------------
-// UTF-8 <-> UTF-16 helpers
-// ---------------------------------------------------------------------------
-
 static std::wstring utf8_to_wide(std::string_view s)
 {
     if (s.empty()) return {};
@@ -52,10 +48,6 @@ static std::string wide_to_utf8(const wchar_t *w, int wlen = -1)
                         out.data(), len, nullptr, nullptr);
     return out;
 }
-
-// ---------------------------------------------------------------------------
-// Pipe helpers
-// ---------------------------------------------------------------------------
 
 static std::string read_handle(HANDLE h)
 {
@@ -100,10 +92,6 @@ static bool create_pipe(HANDLE &read_end, HANDLE &write_end,
     SetHandleInformation(non_inherit, HANDLE_FLAG_INHERIT, 0);
     return true;
 }
-
-// ---------------------------------------------------------------------------
-// Build a command line string from argv (proper quoting)
-// ---------------------------------------------------------------------------
 
 static std::wstring build_cmdline(const std::vector<std::string> &argv)
 {
@@ -153,10 +141,6 @@ static std::wstring build_cmdline(const std::vector<std::string> &argv)
     }
     return cmdline;
 }
-
-// ---------------------------------------------------------------------------
-// Process execution
-// ---------------------------------------------------------------------------
 
 static ProcessResult run_cmd_impl(const std::vector<std::string> &argv,
                                   const char *stdin_data, size_t stdin_len)
@@ -292,10 +276,6 @@ int run_cmd_tty(const std::vector<std::string> &argv)
     CloseHandle(pi.hThread);
     return static_cast<int>(exit_code);
 }
-
-// ---------------------------------------------------------------------------
-// File system operations
-// ---------------------------------------------------------------------------
 
 std::string read_file(std::string_view path)
 {
@@ -499,10 +479,6 @@ std::vector<std::string> find_files_recursive(std::string_view dir)
     return result;
 }
 
-// ---------------------------------------------------------------------------
-// Temporary directory
-// ---------------------------------------------------------------------------
-
 std::string make_temp_dir()
 {
     wchar_t tmp_path[MAX_PATH + 1];
@@ -519,10 +495,6 @@ std::string make_temp_dir()
     }
     return {};
 }
-
-// ---------------------------------------------------------------------------
-// Environment
-// ---------------------------------------------------------------------------
 
 std::string get_env(std::string_view name)
 {
@@ -576,10 +548,6 @@ bool set_cwd(std::string_view path)
     return SetCurrentDirectoryW(wpath.c_str()) != 0;
 }
 
-// ---------------------------------------------------------------------------
-// I/O
-// ---------------------------------------------------------------------------
-
 void fd_write_stdout(std::string_view s)
 {
     HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -600,10 +568,6 @@ std::string read_stdin()
     if (h == INVALID_HANDLE_VALUE) return {};
     return read_handle(h);
 }
-
-// ---------------------------------------------------------------------------
-// Entry point -- wmain for proper UTF-16 argument handling
-// ---------------------------------------------------------------------------
 
 int wmain(int, wchar_t **)
 {

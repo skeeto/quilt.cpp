@@ -16,10 +16,6 @@ extern bool write_series(std::string_view path, const std::vector<std::string> &
                          const std::map<std::string, int> &strip_levels);
 extern bool write_applied(std::string_view path, const std::vector<std::string> &patches);
 
-// ---------------------------------------------------------------------------
-// Helper: read the existing patch header (text before first diff content)
-// ---------------------------------------------------------------------------
-
 static std::string read_patch_header(std::string_view patch_path) {
     std::string content = read_file(patch_path);
     if (content.empty()) return "";
@@ -37,10 +33,6 @@ static std::string read_patch_header(std::string_view patch_path) {
     }
     return header;
 }
-
-// ---------------------------------------------------------------------------
-// cmd_new — create a new patch
-// ---------------------------------------------------------------------------
 
 int cmd_new(QuiltState &q, int argc, char **argv) {
     // Parse options
@@ -128,10 +120,6 @@ int cmd_new(QuiltState &q, int argc, char **argv) {
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// cmd_add — add files to the topmost patch
-// ---------------------------------------------------------------------------
-
 int cmd_add(QuiltState &q, int argc, char **argv) {
     if (q.applied.empty()) {
         err_line("No patches applied");
@@ -179,10 +167,6 @@ int cmd_add(QuiltState &q, int argc, char **argv) {
 
     return 0;
 }
-
-// ---------------------------------------------------------------------------
-// cmd_remove — remove files from a patch
-// ---------------------------------------------------------------------------
 
 int cmd_remove(QuiltState &q, int argc, char **argv) {
     if (q.applied.empty()) {
@@ -235,10 +219,6 @@ int cmd_remove(QuiltState &q, int argc, char **argv) {
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// cmd_edit — add files to top patch and open editor
-// ---------------------------------------------------------------------------
-
 int cmd_edit(QuiltState &q, int argc, char **argv) {
     if (q.applied.empty()) {
         err_line("No patches applied");
@@ -284,10 +264,6 @@ int cmd_edit(QuiltState &q, int argc, char **argv) {
 
     return run_cmd_tty(cmd_argv);
 }
-
-// ---------------------------------------------------------------------------
-// Helper: generate diff for a single file
-// ---------------------------------------------------------------------------
 
 // p_format: "ab" for a/b labels, "0" for bare filenames, "1" (default) for dir.orig/dir
 static std::string generate_file_diff(const QuiltState &q, std::string_view patch,
@@ -375,11 +351,6 @@ static std::string generate_file_diff(const QuiltState &q, std::string_view patc
     return result.out;
 }
 
-// ---------------------------------------------------------------------------
-// Helper: split a patch file into per-file sections
-// Returns map of filename -> full diff section (Index + --- +++ + hunks)
-// ---------------------------------------------------------------------------
-
 static std::map<std::string, std::string> split_patch_by_file(std::string_view content) {
     std::map<std::string, std::string> sections;
     auto lines = split_lines(content);
@@ -428,10 +399,6 @@ static std::map<std::string, std::string> split_patch_by_file(std::string_view c
     flush();
     return sections;
 }
-
-// ---------------------------------------------------------------------------
-// cmd_refresh — regenerate the patch file from working tree changes
-// ---------------------------------------------------------------------------
 
 int cmd_refresh(QuiltState &q, int argc, char **argv) {
     if (q.applied.empty()) {
@@ -577,10 +544,6 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     out_line("Refreshed patch " + patch);
     return 0;
 }
-
-// ---------------------------------------------------------------------------
-// cmd_diff — show diff for a patch
-// ---------------------------------------------------------------------------
 
 int cmd_diff(QuiltState &q, int argc, char **argv) {
     if (q.applied.empty()) {
@@ -801,10 +764,6 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
 
     return 0;
 }
-
-// ---------------------------------------------------------------------------
-// cmd_revert — revert working file changes but keep backup
-// ---------------------------------------------------------------------------
 
 int cmd_revert(QuiltState &q, int argc, char **argv) {
     if (q.applied.empty()) {

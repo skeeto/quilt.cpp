@@ -12,10 +12,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 static std::string null_terminated(std::string_view sv)
 {
     return std::string(sv);
@@ -50,10 +46,6 @@ static std::string read_all_fd(int fd)
     }
     return result;
 }
-
-// ---------------------------------------------------------------------------
-// Process execution
-// ---------------------------------------------------------------------------
 
 static ProcessResult run_cmd_impl(const std::vector<std::string> &argv,
                                   const char *stdin_data, size_t stdin_len)
@@ -180,10 +172,6 @@ int run_cmd_tty(const std::vector<std::string> &argv)
     }
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
-
-// ---------------------------------------------------------------------------
-// File system operations
-// ---------------------------------------------------------------------------
 
 std::string read_file(std::string_view path)
 {
@@ -398,10 +386,6 @@ std::vector<std::string> find_files_recursive(std::string_view dir)
     return result;
 }
 
-// ---------------------------------------------------------------------------
-// Temporary directory
-// ---------------------------------------------------------------------------
-
 std::string make_temp_dir()
 {
     const char *tmpdir = std::getenv("TMPDIR");
@@ -412,10 +396,6 @@ std::string make_temp_dir()
     char *result = ::mkdtemp(buf.data());
     return result ? std::string(result) : std::string();
 }
-
-// ---------------------------------------------------------------------------
-// Environment
-// ---------------------------------------------------------------------------
 
 std::string get_env(std::string_view name)
 {
@@ -454,10 +434,6 @@ bool set_cwd(std::string_view path)
     return ::chdir(p.c_str()) == 0;
 }
 
-// ---------------------------------------------------------------------------
-// I/O
-// ---------------------------------------------------------------------------
-
 void fd_write_stdout(std::string_view s)
 {
     write_all(STDOUT_FILENO, s.data(), s.size());
@@ -472,10 +448,6 @@ std::string read_stdin()
 {
     return read_all_fd(STDIN_FILENO);
 }
-
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
 
 int main(int argc, char **argv)
 {
