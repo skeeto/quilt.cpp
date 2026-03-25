@@ -34,7 +34,7 @@ target_compile_options(quilt PRIVATE
 
 # Static link on Windows (mingw-w64) so the .exe is self-contained
 if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    target_link_options(quilt PRIVATE -static)
+    target_link_options(quilt PRIVATE -static -municode)
     target_link_libraries(quilt PRIVATE shell32)
 endif()
 

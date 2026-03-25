@@ -691,17 +691,11 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
         }
 
         // Create temp directory for reconstructing refreshed state
-        std::string tmpdir = get_env("TMPDIR");
-        if (tmpdir.empty()) tmpdir = "/tmp";
-        std::string tmp_base = tmpdir + "/quilt-diff-z-XXXXXX";
-        std::vector<char> tmp_buf(tmp_base.begin(), tmp_base.end());
-        tmp_buf.push_back('\0');
-        char *tmp_result = mkdtemp(tmp_buf.data());
-        if (!tmp_result) {
+        std::string tmp_dir = make_temp_dir();
+        if (tmp_dir.empty()) {
             err_line("Failed to create temp directory");
             return 1;
         }
-        std::string tmp_dir(tmp_result);
 
         for (const auto &file : tracked) {
             std::string backup_path = path_join(pc_patch_dir(q, patch), file);

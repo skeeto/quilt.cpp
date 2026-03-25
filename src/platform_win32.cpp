@@ -500,6 +500,27 @@ std::vector<std::string> find_files_recursive(std::string_view dir)
 }
 
 // ---------------------------------------------------------------------------
+// Temporary directory
+// ---------------------------------------------------------------------------
+
+std::string make_temp_dir()
+{
+    wchar_t tmp_path[MAX_PATH + 1];
+    if (!GetTempPathW(MAX_PATH + 1, tmp_path)) return {};
+
+    DWORD pid = GetCurrentProcessId();
+    static unsigned counter = 0;
+    wchar_t tmp_dir[MAX_PATH + 1];
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        unsigned n = counter++;
+        swprintf(tmp_dir, MAX_PATH, L"%sqlt%lu_%u", tmp_path, (unsigned long)pid, n);
+        if (CreateDirectoryW(tmp_dir, nullptr))
+            return wide_to_utf8(tmp_dir);
+    }
+    return {};
+}
+
+// ---------------------------------------------------------------------------
 // Environment
 // ---------------------------------------------------------------------------
 
@@ -607,10 +628,3 @@ int wmain(int, wchar_t **)
     return quilt_main(argc, argv_ptrs.data());
 }
 
-// Fallback for non-MSVC toolchains that don't support wmain
-#if !defined(_MSC_VER)
-int main(int argc, char **argv)
-{
-    return quilt_main(argc, argv);
-}
-#endif
