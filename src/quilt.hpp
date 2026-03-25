@@ -21,6 +21,7 @@ struct QuiltState {
     std::vector<std::string> series;   // ordered patch names from series file
     std::vector<std::string> applied;  // applied patch names from .pc/applied-patches
     std::map<std::string, int> patch_strip_level;  // per-patch strip level from series
+    std::map<std::string, std::string> config;     // merged quiltrc + env settings
 
     // Computed helpers
     int top_index() const;     // index of topmost applied in series (-1 if none)

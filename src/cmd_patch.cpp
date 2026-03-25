@@ -443,8 +443,8 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     std::string patch;
     std::string p_format = "1";  // default: dir.orig/dir labels
     int i = 1;
-    bool no_timestamps = false;
-    bool no_index = false;
+    bool no_timestamps = !get_env("QUILT_NO_DIFF_TIMESTAMPS").empty();
+    bool no_index = !get_env("QUILT_NO_DIFF_INDEX").empty();
     bool sort_files = false;
     bool force = false;
     (void)no_timestamps; (void)force;
@@ -592,8 +592,8 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
     std::string patch;
     std::string p_format = "1";
     std::vector<std::string> file_filter;
-    bool no_timestamps = false;
-    bool no_index = false;
+    bool no_timestamps = !get_env("QUILT_NO_DIFF_TIMESTAMPS").empty();
+    bool no_index = !get_env("QUILT_NO_DIFF_INDEX").empty();
     bool since_refresh = false;
     bool reverse = false;
     (void)no_timestamps;

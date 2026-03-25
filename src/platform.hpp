@@ -41,6 +41,8 @@ std::vector<std::string> find_files_recursive(std::string_view dir);
 
 // Environment
 std::string get_env(std::string_view name);
+void set_env(std::string_view name, std::string_view value);
+std::string get_home_dir();
 std::string get_cwd();
 bool set_cwd(std::string_view path);
 
