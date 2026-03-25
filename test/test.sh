@@ -372,7 +372,7 @@ test_import() {
     echo "x" > f.txt
 
     # Create an external patch
-    cat > /tmp/ext_test.patch << 'PATCH'
+    cat > "$TEST_BASE/ext_test.patch" << 'PATCH'
 --- a/f.txt
 +++ b/f.txt
 @@ -1 +1 @@
@@ -380,7 +380,7 @@ test_import() {
 +imported
 PATCH
 
-    $QUILT import /tmp/ext_test.patch >/dev/null 2>&1 || { fail "import failed"; return; }
+    $QUILT import "$TEST_BASE/ext_test.patch" >/dev/null 2>&1 || { fail "import failed"; return; }
 
     [ -f patches/ext_test.patch ] || { fail "imported patch missing"; return; }
     local series
