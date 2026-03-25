@@ -23,6 +23,10 @@ static std::string strip_patches_prefix(const QuiltState &q, std::string_view na
     return std::string(name);
 }
 
+static std::string patch_path_display(const QuiltState &q, std::string_view patch) {
+    return q.patches_dir + "/" + std::string(patch);
+}
+
 static std::vector<std::string> parse_patch_files(std::string_view content, int strip = 1) {
     std::vector<std::string> files;
     auto lines = split_lines(content);
@@ -196,7 +200,7 @@ int cmd_delete(QuiltState &q, int argc, char **argv) {
         }
     }
 
-    out_line("Removed patch " + patch);
+    out_line("Removed patch " + patch_path_display(q, patch));
     return 0;
 }
 
@@ -276,7 +280,8 @@ int cmd_rename(QuiltState &q, int argc, char **argv) {
         }
     }
 
-    out_line("Patch " + old_patch + " renamed to " + new_name);
+    out_line("Patch " + patch_path_display(q, old_patch) +
+             " renamed to " + patch_path_display(q, new_name));
     return 0;
 }
 
@@ -356,7 +361,7 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
         }
 
         out_line("Importing patch " + patchfile +
-                 " (stored as " + name + ")");
+                 " (stored as " + patch_path_display(q, name) + ")");
     }
 
     return 0;

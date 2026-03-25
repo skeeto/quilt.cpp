@@ -156,7 +156,8 @@ int cmd_add(QuiltState &q, int argc, char **argv) {
         // Check if file is already tracked by this patch
         std::string backup_path = path_join(pc_patch_dir(q, patch), file);
         if (file_exists(backup_path)) {
-            err_line("File " + file + " is already in patch " + patch);
+            err_line("File " + file + " is already in patch " +
+                     patch_path_display(q, patch));
             return 2;
         }
 
@@ -204,7 +205,8 @@ int cmd_remove(QuiltState &q, int argc, char **argv) {
         // Check if file is tracked by this patch
         std::string backup_path = path_join(pc_patch_dir(q, patch), file);
         if (!file_exists(backup_path)) {
-            err_line("File " + file + " is not in patch " + patch);
+            err_line("File " + file + " is not in patch " +
+                     patch_path_display(q, patch));
             return 1;
         }
 
@@ -217,7 +219,8 @@ int cmd_remove(QuiltState &q, int argc, char **argv) {
         // Remove backup file
         delete_file(backup_path);
 
-        out_line("File " + file + " removed from patch " + patch);
+        out_line("File " + file + " removed from patch " +
+                 patch_path_display(q, patch));
     }
 
     return 0;
@@ -813,7 +816,8 @@ int cmd_revert(QuiltState &q, int argc, char **argv) {
         // Check if file is tracked by the patch
         std::string backup_path = path_join(pc_patch_dir(q, patch), file);
         if (!file_exists(backup_path)) {
-            err_line("File " + file + " is not in patch " + patch);
+            err_line("File " + file + " is not in patch " +
+                     patch_path_display(q, patch));
             return 1;
         }
 
@@ -835,7 +839,8 @@ int cmd_revert(QuiltState &q, int argc, char **argv) {
             }
         }
 
-        out_line("File " + file + " reverted");
+        out_line("Changes to " + file + " in patch " +
+                 patch_path_display(q, patch) + " reverted");
     }
 
     return 0;

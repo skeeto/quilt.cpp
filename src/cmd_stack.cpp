@@ -213,11 +213,15 @@ int cmd_previous(QuiltState &q, int argc, char **argv) {
             return 2;
         }
         if (idx.value() == 0) {
-            err_line("This is the first patch");
             return 2;
         }
         out_line(format_patch(q, q.series[idx.value() - 1]));
         return 0;
+    }
+
+    if (!q.series_file_exists) {
+        err_line("No series file found");
+        return 1;
     }
 
     if (q.applied.empty()) {
@@ -226,7 +230,6 @@ int cmd_previous(QuiltState &q, int argc, char **argv) {
     }
 
     if (q.applied.size() == 1) {
-        err_line("This is the first patch");
         return 2;
     }
 
