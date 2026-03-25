@@ -59,10 +59,19 @@ Do not edit `quilt.cpp` directly.
 
 ```bash
 cmake --build build
-ctest --test-dir build          # or: bash test/test.sh build/quilt
+ctest --test-dir build -j8
 ```
 
-Tests are a single bash script (`test/test.sh`) that exercises every implemented command. It takes the quilt binary path as its argument and runs in a temp directory. The test suite can also be run against real quilt (`bash test/test.sh quilt`) to validate test correctness.
+CTest now registers one test per scenario, so failures are isolated and the suite can run in parallel. The CTest path is shell-free and uses CMake scripting under `test/`.
+
+To run the suite against an arbitrary quilt binary, configure with `QUILT_TEST_EXECUTABLE`:
+
+```bash
+cmake -B build-external -DQUILT_TEST_EXECUTABLE=/path/to/quilt
+ctest --test-dir build-external -j8
+```
+
+The legacy shell harness remains in `test/test.sh` for ad hoc comparison, including against real quilt (`bash test/test.sh quilt`).
 
 ## Architecture
 

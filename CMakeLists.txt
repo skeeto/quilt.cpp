@@ -58,16 +58,38 @@ add_custom_target(amalgam DEPENDS ${CMAKE_BINARY_DIR}/quilt.cpp)
 
 # Testing
 enable_testing()
-add_test(
-    NAME quilt_build
-    COMMAND ${CMAKE_COMMAND} --build . --target quilt
-    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+set(QUILT_TEST_EXECUTABLE "" CACHE STRING
+    "Path or command name for the quilt executable used by CTest. Leave empty to test the built target."
 )
-set_tests_properties(quilt_build PROPERTIES FIXTURES_SETUP quilt_binary)
 
-add_test(
-    NAME quilt_tests
-    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/test/test.sh $<TARGET_FILE:quilt>
-    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-)
-set_tests_properties(quilt_tests PROPERTIES FIXTURES_REQUIRED quilt_binary)
+include(${CMAKE_CURRENT_SOURCE_DIR}/test/Scenarios.cmake)
+
+if(QUILT_TEST_EXECUTABLE STREQUAL "")
+    set(quilt_test_command "$<TARGET_FILE:quilt>")
+    set(quilt_test_requires_fixture TRUE)
+    add_test(
+        NAME quilt_build
+        COMMAND ${CMAKE_COMMAND} --build . --target quilt
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    )
+    set_tests_properties(quilt_build PROPERTIES FIXTURES_SETUP quilt_binary)
+else()
+    set(quilt_test_command "${QUILT_TEST_EXECUTABLE}")
+    set(quilt_test_requires_fixture FALSE)
+endif()
+
+foreach(scenario IN LISTS QUILT_TEST_SCENARIOS)
+    add_test(
+        NAME quilt_${scenario}
+        COMMAND ${CMAKE_COMMAND}
+            -DSCENARIO=${scenario}
+            -DQUILT_TEST_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DQUILT_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -DQUILT_TEST_EXECUTABLE=${quilt_test_command}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/test/RunScenario.cmake
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    )
+    if(quilt_test_requires_fixture)
+        set_tests_properties(quilt_${scenario} PROPERTIES FIXTURES_REQUIRED quilt_binary)
+    endif()
+endforeach()

@@ -20,6 +20,7 @@
 #include <windows.h>
 #include <shellapi.h>
 
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 
@@ -384,8 +385,27 @@ bool make_dirs(std::string_view path)
         if (c == '/') c = '\\';
     }
 
-    // Walk through path components, creating each
-    for (size_t i = 1; i < p.size(); ++i) {
+    size_t start = 1;
+    if (p.size() >= 3 && std::isalpha(static_cast<unsigned char>(p[0])) &&
+        p[1] == ':' && p[2] == '\\') {
+        start = 3;
+    } else if (p.size() >= 2 && p[0] == '\\' && p[1] == '\\') {
+        // Leave UNC handling to the normal loop after the \\server\share prefix.
+        size_t slash_count = 0;
+        start = 2;
+        for (size_t i = 2; i < p.size(); ++i) {
+            if (p[i] == '\\') {
+                ++slash_count;
+                if (slash_count == 2) {
+                    start = i + 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Walk through path components, creating each.
+    for (size_t i = start; i < p.size(); ++i) {
         if (p[i] == '\\') {
             p[i] = '\0';
             std::wstring wp = utf8_to_wide(p.c_str());
