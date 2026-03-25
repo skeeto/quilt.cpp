@@ -59,7 +59,15 @@ add_custom_target(amalgam DEPENDS ${CMAKE_BINARY_DIR}/quilt.cpp)
 # Testing
 enable_testing()
 add_test(
+    NAME quilt_build
+    COMMAND ${CMAKE_COMMAND} --build . --target quilt
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+set_tests_properties(quilt_build PROPERTIES FIXTURES_SETUP quilt_binary)
+
+add_test(
     NAME quilt_tests
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test/test.sh $<TARGET_FILE:quilt>
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
+set_tests_properties(quilt_tests PROPERTIES FIXTURES_REQUIRED quilt_binary)
