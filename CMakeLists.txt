@@ -5,7 +5,6 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Core sources (platform-agnostic)
 set(CORE_SOURCES
     src/core.cpp
     src/cmd_stack.cpp
@@ -14,7 +13,6 @@ set(CORE_SOURCES
     src/cmd_stubs.cpp
 )
 
-# Platform selection — link exactly one platform source
 if(WIN32)
     list(APPEND CORE_SOURCES src/platform_win32.cpp)
 else()
@@ -24,22 +22,19 @@ endif()
 add_executable(quilt ${CORE_SOURCES})
 target_include_directories(quilt PRIVATE src)
 
-# Precompiled header
 target_precompile_headers(quilt PRIVATE src/quilt.hpp)
 
-# Warnings
 target_compile_options(quilt PRIVATE
-    $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra>
+    $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wconversion>
 )
 
-# Static link on Windows (mingw-w64) so the .exe is self-contained
 if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    target_link_options(quilt PRIVATE -static -municode)
+    target_link_options(quilt PRIVATE -municode)
     target_link_libraries(quilt PRIVATE shell32)
 endif()
 
 # Amalgamation: single-file Windows build
-# Build explicitly with: cmake --build <dir> --target amalgam
+# $ cmake --build <dir> --target amalgam
 set(AMALGAM_SOURCES
     src/quilt.hpp src/platform.hpp
     src/core.cpp src/cmd_stack.cpp src/cmd_patch.cpp
@@ -56,10 +51,9 @@ add_custom_command(
 )
 add_custom_target(amalgam DEPENDS ${CMAKE_BINARY_DIR}/quilt.cpp)
 
-# Testing
 enable_testing()
 set(QUILT_TEST_EXECUTABLE "" CACHE STRING
-    "Path or command name for the quilt executable used by CTest. Leave empty to test the built target."
+    "Path or command name for the quilt executable used by CTest."
 )
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/test/Scenarios.cmake)
@@ -90,6 +84,8 @@ foreach(scenario IN LISTS QUILT_TEST_SCENARIOS)
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     )
     if(quilt_test_requires_fixture)
-        set_tests_properties(quilt_${scenario} PROPERTIES FIXTURES_REQUIRED quilt_binary)
+        set_tests_properties(
+            quilt_${scenario} PROPERTIES FIXTURES_REQUIRED quilt_binary
+        )
     endif()
 endforeach()
