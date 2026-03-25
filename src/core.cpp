@@ -523,7 +523,6 @@ static Command commands[] = {
     {"annotate",   cmd_annotate,   "Usage: quilt annotate [-P patch] file"},
     {"grep",       cmd_grep,       "Usage: quilt grep [-h|options] pattern"},
     {"graph",      cmd_graph,      "Usage: quilt graph [--lines file]"},
-    {"guard",      cmd_guard,      "Usage: quilt guard [-l] [patch] [-- guards]"},
     {"mail",       cmd_mail,       "Usage: quilt mail {--mbox file} [--prefix prefix] [--sender ...] [--from ...] [--to ...] [--cc ...] [--bcc ...] [first_patch [last_patch]]"},
     {"setup",      cmd_setup,      "Usage: quilt setup [-d path] series"},
     {"shell",      cmd_shell,      "Usage: quilt shell [command]"},
