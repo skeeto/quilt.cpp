@@ -153,6 +153,10 @@ int cmd_unapplied(QuiltState &q, int argc, char **argv) {
 
 int cmd_top(QuiltState &q, int argc, char **argv) {
     (void)argc; (void)argv;
+    if (!q.series_file_exists) {
+        err_line("No series file found");
+        return 1;
+    }
     if (q.applied.empty()) {
         err_line("No patches applied");
         return 2;
@@ -258,7 +262,7 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
     if (!q.applied.empty()) {
         std::string nr = path_join(pc_patch_dir(q, q.applied.back()), ".needs_refresh");
         if (file_exists(nr)) {
-            err_line("Patch " + format_patch(q, q.applied.back()) +
+            err_line("The topmost patch " + patch_path_display(q, q.applied.back()) +
                      " needs to be refreshed first.");
             return 1;
         }
@@ -269,7 +273,7 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
 
     if (start_idx >= (int)q.series.size()) {
         err_line("File series fully applied, ends at patch " +
-                 format_patch(q, q.applied.back()));
+                 patch_path_display(q, q.applied.back()));
         return 2;
     }
 
@@ -358,7 +362,7 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
                 write_file(path_join(pc_dir, ".timestamp"), "");
                 write_file(path_join(pc_dir, ".needs_refresh"), "");
                 if (!quiet) {
-                    out_line("Applied " + display + " (forced; needs refresh)");
+                    out_line("Applied patch " + display + " (forced; needs refresh)");
                 }
                 return 1;
             } else {
@@ -411,7 +415,11 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
     }
 
     if (q.applied.empty()) {
-        err_line("No patches applied");
+        if (!q.series_file_exists) {
+            err_line("No series file found");
+            return 1;
+        }
+        err_line("No patch removed");
         return 2;
     }
 
@@ -454,8 +462,7 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
         std::string pc_dir = pc_patch_dir(q, name);
         std::string nr = path_join(pc_dir, ".needs_refresh");
         if (file_exists(nr) && !force) {
-            err_line("Patch " + display +
-                     " needs to be refreshed first (use -f to force).");
+            err_line("Patch " + display + " needs to be refreshed first.");
             return 1;
         }
 

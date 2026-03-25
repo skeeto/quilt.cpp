@@ -17,6 +17,7 @@ struct QuiltState {
     std::string patches_dir;     // typically "patches"
     std::string pc_dir;          // typically ".pc"
     std::string series_file;     // "patches/series"
+    bool series_file_exists = false;
 
     std::vector<std::string> series;   // ordered patch names from series file
     std::vector<std::string> applied;  // applied patch names from .pc/applied-patches

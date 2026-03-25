@@ -406,6 +406,7 @@ QuiltState load_state() {
 
     // Read series file
     std::string series_abs = path_join(q.work_dir, q.series_file);
+    q.series_file_exists = file_exists(series_abs);
     q.series = read_series(series_abs, &q.patch_strip_level);
 
     // Read applied-patches file
