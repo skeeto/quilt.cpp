@@ -9,6 +9,22 @@ Builds a single `quilt` binary that manages a stack of patches against a source 
 
 The reference document for quilt behavior is `quilt.html` (or `quilt.txt`). When in doubt about how a command should behave, run real `quilt` (system-installed) through the same scenario and match its output.
 
+## Dependencies
+
+Install the original quilt for behavioral comparison and test validation:
+
+```bash
+sudo apt-get install quilt
+```
+
+The test suite can be run against real quilt (`bash test/test.sh quilt`) to verify test correctness.
+
+For Windows cross-compilation and testing, install mingw-w64 and wine:
+
+```bash
+sudo apt-get install mingw-w64 wine
+```
+
 ## Build
 
 ```bash
