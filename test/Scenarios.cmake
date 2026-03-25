@@ -67,6 +67,17 @@ set(QUILT_TEST_SCENARIOS
     quilt_no_diff_index
     quilt_patches_prefix
     quiltrc_quoted_values
+    mail_basic
+    mail_single_patch
+    mail_patch_range
+    mail_dash_range
+    mail_prefix
+    mail_from_sender
+    mail_to_cc
+    mail_send_error
+    mail_no_mbox_error
+    mail_no_patches
+    mail_header_multiline
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -1110,6 +1121,239 @@ function(qt_scenario_quiltrc_quoted_values)
     qt_assert_exists("${QT_WORK_DIR}/my patches/quoted.patch" "patch should be in 'my patches/'")
 endfunction()
 
+# --- mail command scenarios ---
+
+# Helper: set up two patches with headers for mail tests
+function(qt_mail_setup_two_patches)
+    qt_write_file("${QT_WORK_DIR}/file.txt" "hello\n")
+    qt_quilt_ok(ARGS new first.patch MESSAGE "new first failed")
+    qt_quilt_ok(ARGS add file.txt MESSAGE "add first failed")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "world\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh first failed")
+    qt_quilt_ok(ARGS header -r INPUT "Add greeting\n\nThis patch adds a greeting to the file.\n" MESSAGE "header first failed")
+    qt_quilt_ok(ARGS new second.patch MESSAGE "new second failed")
+    qt_quilt_ok(ARGS add file.txt MESSAGE "add second failed")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "world!\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh second failed")
+    qt_quilt_ok(ARGS header -r INPUT "Fix punctuation\n\nAdd exclamation mark.\n" MESSAGE "header second failed")
+endfunction()
+
+function(qt_scenario_mail_basic)
+    qt_begin_test("mail_basic")
+    qt_mail_setup_two_patches()
+    qt_quilt_ok(
+        ARGS mail --mbox "${QT_TEST_BASE}/test.mbox" --from "Test User <test@example.com>"
+        MESSAGE "mail --mbox failed"
+    )
+    qt_assert_exists("${QT_TEST_BASE}/test.mbox" "mbox file should exist")
+    qt_read_file_raw(mbox "${QT_TEST_BASE}/test.mbox")
+    # Check mbox separators
+    qt_assert_contains("${mbox}" "From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001" "missing mbox separator")
+    # Check subjects
+    qt_assert_contains("${mbox}" "[PATCH 1/2] Add greeting" "missing first patch subject")
+    qt_assert_contains("${mbox}" "[PATCH 2/2] Fix punctuation" "missing second patch subject")
+    # Check From header
+    qt_assert_contains("${mbox}" "From: Test User <test@example.com>" "missing From header")
+    # Check Date header exists
+    qt_assert_matches("${mbox}" "Date: " "missing Date header")
+    # Check Message-ID exists
+    qt_assert_contains("${mbox}" "Message-ID:" "missing Message-ID header")
+    # Check diff content is present
+    qt_assert_contains("${mbox}" "---" "missing --- separator")
+    qt_assert_contains("${mbox}" "@@" "missing diff hunks")
+    # Check trailer
+    qt_assert_contains("${mbox}" "-- \nquilt" "missing trailer")
+    # Check body text
+    qt_assert_contains("${mbox}" "This patch adds a greeting to the file." "missing first patch body")
+    qt_assert_contains("${mbox}" "Add exclamation mark." "missing second patch body")
+endfunction()
+
+function(qt_scenario_mail_single_patch)
+    qt_begin_test("mail_single_patch")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "a\n")
+    qt_quilt_ok(ARGS new only.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add file.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS header -r INPUT "Single change\n" MESSAGE "header failed")
+    qt_quilt_ok(
+        ARGS mail --mbox "${QT_TEST_BASE}/single.mbox" --from "test@example.com"
+        MESSAGE "mail single failed"
+    )
+    qt_read_file_raw(mbox "${QT_TEST_BASE}/single.mbox")
+    # Single patch should use [PATCH] without numbering
+    qt_assert_contains("${mbox}" "[PATCH] Single change" "single patch subject wrong")
+    qt_assert_not_contains("${mbox}" "[PATCH 1/" "should not have patch numbering for single patch")
+endfunction()
+
+function(qt_scenario_mail_patch_range)
+    qt_begin_test("mail_patch_range")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "a\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add file.txt MESSAGE "add p1 failed")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
+    qt_quilt_ok(ARGS header -r INPUT "Patch one\n" MESSAGE "header p1 failed")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add file.txt MESSAGE "add p2 failed")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "c\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2 failed")
+    qt_quilt_ok(ARGS header -r INPUT "Patch two\n" MESSAGE "header p2 failed")
+    qt_quilt_ok(ARGS new p3.patch MESSAGE "new p3 failed")
+    qt_quilt_ok(ARGS add file.txt MESSAGE "add p3 failed")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "d\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p3 failed")
+    qt_quilt_ok(ARGS header -r INPUT "Patch three\n" MESSAGE "header p3 failed")
+    # Select only p2..p3
+    qt_quilt_ok(
+        ARGS mail --mbox "${QT_TEST_BASE}/range.mbox" --from "t@e.com" p2.patch p3.patch
+        MESSAGE "mail range failed"
+    )
+    qt_read_file_raw(mbox "${QT_TEST_BASE}/range.mbox")
+    qt_assert_not_contains("${mbox}" "Patch one" "should not contain p1")
+    qt_assert_contains("${mbox}" "[PATCH 1/2] Patch two" "missing p2 subject")
+    qt_assert_contains("${mbox}" "[PATCH 2/2] Patch three" "missing p3 subject")
+endfunction()
+
+function(qt_scenario_mail_dash_range)
+    qt_begin_test("mail_dash_range")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "x\n")
+    qt_quilt_ok(ARGS new a.patch MESSAGE "new a failed")
+    qt_quilt_ok(ARGS add file.txt MESSAGE "add a failed")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh a failed")
+    qt_quilt_ok(ARGS header -r INPUT "Alpha\n" MESSAGE "header a failed")
+    qt_quilt_ok(ARGS new b.patch MESSAGE "new b failed")
+    qt_quilt_ok(ARGS add file.txt MESSAGE "add b failed")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "z\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh b failed")
+    qt_quilt_ok(ARGS header -r INPUT "Beta\n" MESSAGE "header b failed")
+    # Use - - to mean all patches
+    qt_quilt_ok(
+        ARGS mail --mbox "${QT_TEST_BASE}/dash.mbox" --from "t@e.com" - -
+        MESSAGE "mail dash range failed"
+    )
+    qt_read_file_raw(mbox "${QT_TEST_BASE}/dash.mbox")
+    qt_assert_contains("${mbox}" "[PATCH 1/2] Alpha" "missing alpha subject")
+    qt_assert_contains("${mbox}" "[PATCH 2/2] Beta" "missing beta subject")
+endfunction()
+
+function(qt_scenario_mail_prefix)
+    qt_begin_test("mail_prefix")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "a\n")
+    qt_quilt_ok(ARGS new fix.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add file.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS header -r INPUT "A fix\n" MESSAGE "header failed")
+    qt_quilt_ok(
+        ARGS mail --mbox "${QT_TEST_BASE}/prefix.mbox" --from "t@e.com" --prefix "RFC PATCH v2"
+        MESSAGE "mail prefix failed"
+    )
+    qt_read_file_raw(mbox "${QT_TEST_BASE}/prefix.mbox")
+    qt_assert_contains("${mbox}" "[RFC PATCH v2] A fix" "custom prefix not in subject")
+endfunction()
+
+function(qt_scenario_mail_from_sender)
+    qt_begin_test("mail_from_sender")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "a\n")
+    qt_quilt_ok(ARGS new f.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add file.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS header -r INPUT "Test\n" MESSAGE "header failed")
+    # Test --from
+    qt_quilt_ok(
+        ARGS mail --mbox "${QT_TEST_BASE}/from.mbox" --from "Jane Doe <jane@example.com>"
+        MESSAGE "mail --from failed"
+    )
+    qt_read_file_raw(mbox_from "${QT_TEST_BASE}/from.mbox")
+    qt_assert_contains("${mbox_from}" "From: Jane Doe <jane@example.com>" "wrong From header with --from")
+    # Test --sender (used as From when --from not given)
+    qt_quilt_ok(
+        ARGS mail --mbox "${QT_TEST_BASE}/sender.mbox" --sender "sender@example.com"
+        MESSAGE "mail --sender failed"
+    )
+    qt_read_file_raw(mbox_sender "${QT_TEST_BASE}/sender.mbox")
+    qt_assert_contains("${mbox_sender}" "From: sender@example.com" "wrong From header with --sender")
+endfunction()
+
+function(qt_scenario_mail_to_cc)
+    qt_begin_test("mail_to_cc")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "a\n")
+    qt_quilt_ok(ARGS new f.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add file.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS header -r INPUT "Change\n" MESSAGE "header failed")
+    qt_quilt_ok(
+        ARGS mail --mbox "${QT_TEST_BASE}/tocc.mbox"
+            --from "t@e.com"
+            --to "recv@example.com"
+            --cc "copy@example.com"
+            --bcc "hidden@example.com"
+        MESSAGE "mail --to --cc failed"
+    )
+    qt_read_file_raw(mbox "${QT_TEST_BASE}/tocc.mbox")
+    qt_assert_contains("${mbox}" "To: recv@example.com" "missing To header")
+    qt_assert_contains("${mbox}" "Cc: copy@example.com" "missing Cc header")
+    qt_assert_contains("${mbox}" "Bcc: hidden@example.com" "missing Bcc header")
+endfunction()
+
+function(qt_scenario_mail_send_error)
+    qt_begin_test("mail_send_error")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "a\n")
+    qt_quilt_ok(ARGS new f.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add file.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS mail --send --from "t@e.com")
+    qt_assert_failure("${rc}" "--send should fail")
+    qt_assert_contains("${err}" "send mode is not supported" "wrong error message for --send")
+endfunction()
+
+function(qt_scenario_mail_no_mbox_error)
+    qt_begin_test("mail_no_mbox_error")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "a\n")
+    qt_quilt_ok(ARGS new f.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add file.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS mail --from "t@e.com")
+    qt_assert_failure("${rc}" "missing --mbox should fail")
+    qt_assert_contains("${err}" "--mbox is required" "wrong error for missing --mbox")
+endfunction()
+
+function(qt_scenario_mail_no_patches)
+    qt_begin_test("mail_no_patches")
+    # Empty series — no patches at all
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS mail --mbox "${QT_TEST_BASE}/empty.mbox" --from "t@e.com")
+    qt_assert_failure("${rc}" "empty series should fail")
+    qt_assert_contains("${err}" "No patches in series" "wrong error for empty series")
+endfunction()
+
+function(qt_scenario_mail_header_multiline)
+    qt_begin_test("mail_header_multiline")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "a\n")
+    qt_quilt_ok(ARGS new multi.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add file.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS header -r INPUT "Short subject line\n\nThis is the first paragraph of the\ncommit message body.\n\nThis is the second paragraph.\n" MESSAGE "header failed")
+    qt_quilt_ok(
+        ARGS mail --mbox "${QT_TEST_BASE}/multi.mbox" --from "t@e.com"
+        MESSAGE "mail multiline failed"
+    )
+    qt_read_file_raw(mbox "${QT_TEST_BASE}/multi.mbox")
+    # Subject should be just the first line
+    qt_assert_contains("${mbox}" "Subject: [PATCH] Short subject line" "wrong subject")
+    # Body should contain the remaining paragraphs
+    qt_assert_contains("${mbox}" "This is the first paragraph of the" "missing body paragraph 1")
+    qt_assert_contains("${mbox}" "This is the second paragraph." "missing body paragraph 2")
+    # Body should NOT contain the subject line again in the body section
+    # (it's only in the Subject header)
+endfunction()
+
 function(qt_run_named_scenario scenario)
     if(scenario STREQUAL "basic_workflow")
         qt_scenario_basic_workflow()
@@ -1243,6 +1487,28 @@ function(qt_run_named_scenario scenario)
         qt_scenario_quilt_patches_prefix()
     elseif(scenario STREQUAL "quiltrc_quoted_values")
         qt_scenario_quiltrc_quoted_values()
+    elseif(scenario STREQUAL "mail_basic")
+        qt_scenario_mail_basic()
+    elseif(scenario STREQUAL "mail_single_patch")
+        qt_scenario_mail_single_patch()
+    elseif(scenario STREQUAL "mail_patch_range")
+        qt_scenario_mail_patch_range()
+    elseif(scenario STREQUAL "mail_dash_range")
+        qt_scenario_mail_dash_range()
+    elseif(scenario STREQUAL "mail_prefix")
+        qt_scenario_mail_prefix()
+    elseif(scenario STREQUAL "mail_from_sender")
+        qt_scenario_mail_from_sender()
+    elseif(scenario STREQUAL "mail_to_cc")
+        qt_scenario_mail_to_cc()
+    elseif(scenario STREQUAL "mail_send_error")
+        qt_scenario_mail_send_error()
+    elseif(scenario STREQUAL "mail_no_mbox_error")
+        qt_scenario_mail_no_mbox_error()
+    elseif(scenario STREQUAL "mail_no_patches")
+        qt_scenario_mail_no_patches()
+    elseif(scenario STREQUAL "mail_header_multiline")
+        qt_scenario_mail_header_multiline()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()

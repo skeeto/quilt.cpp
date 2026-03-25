@@ -14,7 +14,6 @@ int cmd_annotate(QuiltState &, int, char **) { return not_implemented("annotate"
 int cmd_grep(QuiltState &, int, char **)     { return not_implemented("grep"); }
 int cmd_graph(QuiltState &, int, char **)    { return not_implemented("graph"); }
 int cmd_guard(QuiltState &, int, char **)    { return not_implemented("guard"); }
-int cmd_mail(QuiltState &, int, char **)     { return not_implemented("mail"); }
 int cmd_setup(QuiltState &, int, char **)    { return not_implemented("setup"); }
 int cmd_shell(QuiltState &, int, char **)    { return not_implemented("shell"); }
 int cmd_snapshot(QuiltState &, int, char **) { return not_implemented("snapshot"); }

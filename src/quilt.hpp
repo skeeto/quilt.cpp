@@ -89,12 +89,14 @@ int cmd_patches(QuiltState &q, int argc, char **argv);
 int cmd_fold(QuiltState &q, int argc, char **argv);
 int cmd_fork(QuiltState &q, int argc, char **argv);
 
+// Command implementations — cmd_mail.cpp
+int cmd_mail(QuiltState &q, int argc, char **argv);
+
 // Command stubs — cmd_stubs.cpp
 int cmd_annotate(QuiltState &q, int argc, char **argv);
 int cmd_grep(QuiltState &q, int argc, char **argv);
 int cmd_graph(QuiltState &q, int argc, char **argv);
 int cmd_guard(QuiltState &q, int argc, char **argv);
-int cmd_mail(QuiltState &q, int argc, char **argv);
 int cmd_setup(QuiltState &q, int argc, char **argv);
 int cmd_shell(QuiltState &q, int argc, char **argv);
 int cmd_snapshot(QuiltState &q, int argc, char **argv);
