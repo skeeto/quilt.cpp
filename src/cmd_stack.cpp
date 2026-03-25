@@ -24,6 +24,10 @@ static std::string format_patch(const QuiltState &q, std::string_view name) {
     return std::string(name);
 }
 
+static std::string patch_path_display(const QuiltState &q, std::string_view name) {
+    return q.patches_dir + "/" + std::string(name);
+}
+
 static void write_applied_patches(QuiltState &q) {
     std::string path = path_join(q.work_dir, q.pc_dir, "applied-patches");
     write_applied(path, q.applied);
@@ -300,7 +304,7 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
     std::string last_applied;
     for (int i = start_idx; i <= end_idx; ++i) {
         const std::string &name = q.series[i];
-        std::string display = format_patch(q, name);
+        std::string display = patch_path_display(q, name);
 
         if (!quiet) {
             out_line("Applying patch " + display);
@@ -376,7 +380,7 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
     }
 
     if (!quiet && !last_applied.empty()) {
-        out_line("\nNow at patch " + format_patch(q, last_applied));
+        out_line("\nNow at patch " + patch_path_display(q, last_applied));
     }
     return 0;
 }
@@ -444,7 +448,7 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
     // Pop from the top down to stop_idx
     while ((int)q.applied.size() > stop_idx) {
         const std::string &name = q.applied.back();
-        std::string display = format_patch(q, name);
+        std::string display = patch_path_display(q, name);
 
         // Check if patch needs refresh (force-applied) and -f not given
         std::string pc_dir = pc_patch_dir(q, name);
@@ -480,7 +484,7 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
         if (q.applied.empty()) {
             out_line("\nNo patches applied");
         } else {
-            out_line("\nNow at patch " + format_patch(q, q.applied.back()));
+            out_line("\nNow at patch " + patch_path_display(q, q.applied.back()));
         }
     }
     return 0;

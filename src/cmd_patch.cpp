@@ -34,6 +34,10 @@ static std::string read_patch_header(std::string_view patch_path) {
     return header;
 }
 
+static std::string patch_path_display(const QuiltState &q, std::string_view patch) {
+    return q.patches_dir + "/" + std::string(patch);
+}
+
 int cmd_new(QuiltState &q, int argc, char **argv) {
     // Parse options
     std::string patch_name;
@@ -116,7 +120,7 @@ int cmd_new(QuiltState &q, int argc, char **argv) {
         }
     }
 
-    out_line("Patch " + patch_name + " is now on top");
+    out_line("Patch " + patch_path_display(q, patch_name) + " is now on top");
     return 0;
 }
 
@@ -162,7 +166,7 @@ int cmd_add(QuiltState &q, int argc, char **argv) {
             return 1;
         }
 
-        out_line("File " + file + " added to patch " + patch);
+        out_line("File " + file + " added to patch " + patch_path_display(q, patch));
     }
 
     return 0;
@@ -245,7 +249,7 @@ int cmd_edit(QuiltState &q, int argc, char **argv) {
                 err_line("Failed to back up " + file);
                 return 1;
             }
-            out_line("File " + file + " added to patch " + patch);
+            out_line("File " + file + " added to patch " + patch_path_display(q, patch));
         }
     }
 
@@ -414,7 +418,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     bool no_index = !get_env("QUILT_NO_DIFF_INDEX").empty();
     bool sort_files = false;
     bool force = false;
-    (void)no_timestamps; (void)force;
+    (void)no_timestamps;
 
     while (i < argc) {
         std::string_view arg = argv[i];
@@ -472,6 +476,12 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
             }
             if (a == patch) above = true;
         }
+    }
+
+    if (!shadowed.empty() && !force) {
+        err_line("More recent patches modify files in patch " +
+                 patch_path_display(q, patch) + ". Enforce refresh with -f.");
+        return 1;
     }
 
     // Get files tracked by this patch
@@ -541,7 +551,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         delete_file(nr);
     }
 
-    out_line("Refreshed patch " + patch);
+    out_line("Refreshed patch " + patch_path_display(q, patch));
     return 0;
 }
 

@@ -298,8 +298,9 @@ static std::map<std::string, std::string> parse_quiltrc(std::string_view content
                 rest.remove_prefix(1);
             }
         } else {
-            // Unquoted: ends at whitespace or #
+            // Unquoted: ends at whitespace, line ending, or #
             while (!rest.empty() && rest.front() != ' ' && rest.front() != '\t' &&
+                   rest.front() != '\r' && rest.front() != '\n' &&
                    rest.front() != '#') {
                 value += rest.front();
                 rest.remove_prefix(1);
@@ -593,12 +594,11 @@ int quilt_main(int argc, char **argv) {
 
     // --- Phase 2: Load quiltrc and populate environment ---
     auto rc_vars = load_quiltrc(quiltrc_set ? quiltrc_path : std::string());
-    // Apply quiltrc values to environment (env vars take precedence)
+    // Apply quiltrc values to environment. GNU quilt sources quiltrc into the
+    // command process, so assignments there override inherited environment
+    // values unless the rc itself chooses otherwise.
     for (auto &kv : rc_vars) {
-        std::string existing = get_env(kv.first);
-        if (existing.empty()) {
-            set_env(kv.first, kv.second);
-        }
+        set_env(kv.first, kv.second);
     }
 
     // --- Phase 3: Find command ---

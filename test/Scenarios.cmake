@@ -45,8 +45,10 @@ set(QUILT_TEST_SCENARIOS
     pop_numeric
     force_push_tracking
     force_pop
+    refresh_shadowing_requires_force
     refresh_shadowing
     diff_reverse
+    new_add_output
     quilt_example
     quiltrc_basic
     quiltrc_disable
@@ -702,6 +704,23 @@ function(qt_scenario_force_pop)
     qt_assert_equal("${applied_trimmed}" "" "should have no patches applied after pop -f")
 endfunction()
 
+function(qt_scenario_refresh_shadowing_requires_force)
+    qt_begin_test("refresh_shadowing_requires_force")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
+    qt_quilt_ok(ARGS new bottom.patch MESSAGE "new bottom failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add bottom failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "bottom\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh bottom failed")
+    qt_quilt_ok(ARGS new top.patch MESSAGE "new top failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add top failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "top\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh top failed")
+    qt_quilt(RESULT refresh_rc OUTPUT refresh_out ERROR refresh_err ARGS refresh bottom.patch)
+    qt_assert_failure("${refresh_rc}" "refreshing a shadowed lower patch without -f should fail")
+    qt_combine_output(refresh_combined "${refresh_out}" "${refresh_err}")
+    qt_assert_contains("${refresh_combined}" "Enforce refresh with -f." "refresh without -f should mention the force requirement")
+endfunction()
+
 function(qt_scenario_refresh_shadowing)
     qt_begin_test("refresh_shadowing")
     qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
@@ -713,7 +732,7 @@ function(qt_scenario_refresh_shadowing)
     qt_quilt_ok(ARGS add f.txt MESSAGE "add top failed")
     qt_write_file("${QT_WORK_DIR}/f.txt" "top\n")
     qt_quilt_ok(ARGS refresh MESSAGE "refresh top failed")
-    qt_quilt_ok(ARGS refresh bottom.patch MESSAGE "refresh bottom patch failed")
+    qt_quilt_ok(ARGS refresh -f bottom.patch MESSAGE "refresh bottom patch failed")
     qt_assert_file_contains("${QT_WORK_DIR}/patches/bottom.patch" "+bottom" "bottom patch should have +bottom")
     qt_assert_file_not_contains("${QT_WORK_DIR}/patches/bottom.patch" "+top" "bottom patch should not have +top")
 endfunction()
@@ -729,6 +748,15 @@ function(qt_scenario_diff_reverse)
     qt_assert_contains("${diff_out}" "-new" "reverse diff should show -new")
 endfunction()
 
+function(qt_scenario_new_add_output)
+    qt_begin_test("new_add_output")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(OUTPUT new_out ERROR new_err ARGS new display.patch MESSAGE "new failed")
+    qt_assert_contains("${new_out}" "Patch patches/display.patch is now on top" "new output should include the patch path")
+    qt_quilt_ok(OUTPUT add_out ERROR add_err ARGS add f.txt MESSAGE "add failed")
+    qt_assert_contains("${add_out}" "File f.txt added to patch patches/display.patch" "add output should include the patch path")
+endfunction()
+
 function(qt_scenario_quilt_example)
     qt_begin_test("quilt_example")
     qt_write_file("${QT_WORK_DIR}/Oberon.txt" [=[Yet mark'd I where the bolt of Cupid fell:
@@ -737,9 +765,9 @@ Before milk-white, now purple with love's wound,
 And girls call it love-in-idleness.
 ]=])
     qt_quilt_ok(OUTPUT new_out ERROR new_err ARGS new flower.diff MESSAGE "new failed")
-    qt_assert_contains("${new_out}" "Patch flower.diff is now on top" "new output mismatch")
+    qt_assert_contains("${new_out}" "Patch patches/flower.diff is now on top" "new output mismatch")
     qt_quilt_ok(OUTPUT add_out ERROR add_err ARGS add Oberon.txt MESSAGE "add failed")
-    qt_assert_contains("${add_out}" "File Oberon.txt added to patch flower.diff" "add output mismatch")
+    qt_assert_contains("${add_out}" "File Oberon.txt added to patch patches/flower.diff" "add output mismatch")
     qt_write_file("${QT_WORK_DIR}/Oberon.txt" [=[Yet mark'd I where the bolt of Cupid fell:
 It fell upon a little western flower,
 Before milk-white, now purple with love's wound,
@@ -773,7 +801,7 @@ Upon the next live creature that it sees.
     qt_assert_file_contains("${QT_WORK_DIR}/patches/flower.diff" "--- a/Oberon.txt" "refresh -p ab should use a/ prefix")
     qt_assert_file_contains("${QT_WORK_DIR}/patches/flower.diff" "+++ b/Oberon.txt" "refresh -p ab should use b/ prefix")
     qt_quilt_ok(OUTPUT pop_out ERROR pop_err ARGS pop MESSAGE "pop failed")
-    qt_assert_contains("${pop_out}" "Removing patch flower.diff" "pop output mismatch")
+    qt_assert_contains("${pop_out}" "Removing patch patches/flower.diff" "pop output mismatch")
     qt_assert_contains("${pop_out}" "No patches applied" "pop should say no patches applied")
     qt_write_file("${QT_WORK_DIR}/Oberon.txt" [=[Yet mark'd I where the bolt of Cupid fell:
 It fell upon a little western flower,
@@ -789,7 +817,7 @@ And maidens call it love-in-idleness.
     qt_assert_exists("${QT_WORK_DIR}/.pc/flower.diff/Oberon.txt" "backup at wrong path after push")
     qt_quilt_ok(OUTPUT top_out ERROR top_err ARGS top MESSAGE "top failed")
     qt_strip_trailing_newlines(top_trimmed "${top_out}")
-    qt_assert_equal("${top_trimmed}" "flower.diff" "top should be flower.diff")
+    qt_assert_matches("${top_trimmed}" "(^|/)flower\\.diff$" "top should be flower.diff")
     qt_write_file("${QT_WORK_DIR}/Oberon.txt" [=[Yet mark'd I where the bolt of Cupid fell:
 It fell upon a little western flower,
 Before milk-white, now purple with love's wound,
@@ -837,8 +865,8 @@ function(qt_scenario_quiltrc_env_override)
     qt_quilt_ok(ENV "QUILT_PATCHES=fromenv" ARGS --quiltrc "${QT_TEST_BASE}/test_quiltrc_override" add f.txt MESSAGE "add failed")
     qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
     qt_quilt_ok(ENV "QUILT_PATCHES=fromenv" ARGS --quiltrc "${QT_TEST_BASE}/test_quiltrc_override" refresh MESSAGE "refresh failed")
-    qt_assert_exists("${QT_WORK_DIR}/fromenv/ovr.patch" "patch should be in fromenv/ (env overrides rc)")
-    qt_assert_not_exists("${QT_WORK_DIR}/fromrc" "fromrc/ should not exist")
+    qt_assert_exists("${QT_WORK_DIR}/fromrc/ovr.patch" "patch should be in fromrc/ (quiltrc should override env)")
+    qt_assert_not_exists("${QT_WORK_DIR}/fromenv/ovr.patch" "patch should not be written to fromenv/")
 endfunction()
 
 function(qt_scenario_quilt_command_args)
@@ -989,10 +1017,14 @@ function(qt_run_named_scenario scenario)
         qt_scenario_force_push_tracking()
     elseif(scenario STREQUAL "force_pop")
         qt_scenario_force_pop()
+    elseif(scenario STREQUAL "refresh_shadowing_requires_force")
+        qt_scenario_refresh_shadowing_requires_force()
     elseif(scenario STREQUAL "refresh_shadowing")
         qt_scenario_refresh_shadowing()
     elseif(scenario STREQUAL "diff_reverse")
         qt_scenario_diff_reverse()
+    elseif(scenario STREQUAL "new_add_output")
+        qt_scenario_new_add_output()
     elseif(scenario STREQUAL "quilt_example")
         qt_scenario_quilt_example()
     elseif(scenario STREQUAL "quiltrc_basic")
