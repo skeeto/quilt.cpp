@@ -1,8 +1,8 @@
-#!/bin/bash
+#!/bin/sh
 # Comprehensive test suite for quilt
 # Usage: ./test.sh [path-to-quilt-binary]
 # Defaults to system quilt if no argument given.
-set -uo pipefail
+set -u
 
 QUILT="${1:-quilt}"
 # Resolve to absolute path if the binary exists as a file
