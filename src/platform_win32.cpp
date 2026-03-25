@@ -490,8 +490,12 @@ std::string make_temp_dir()
     for (int attempt = 0; attempt < 100; ++attempt) {
         unsigned n = counter++;
         swprintf(tmp_dir, MAX_PATH, L"%sqlt%lu_%u", tmp_path, (unsigned long)pid, n);
-        if (CreateDirectoryW(tmp_dir, nullptr))
-            return wide_to_utf8(tmp_dir);
+        if (CreateDirectoryW(tmp_dir, nullptr)) {
+            std::string result = wide_to_utf8(tmp_dir);
+            for (char &c : result)
+                if (c == '\\') c = '/';
+            return result;
+        }
     }
     return {};
 }
