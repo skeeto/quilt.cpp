@@ -516,6 +516,23 @@ std::string get_env(std::string_view name)
     return wide_to_utf8(buf.c_str(), (int)buf.size());
 }
 
+void set_env(std::string_view name, std::string_view value)
+{
+    std::wstring wname = utf8_to_wide(name);
+    std::wstring wvalue = utf8_to_wide(value);
+    SetEnvironmentVariableW(wname.c_str(), wvalue.c_str());
+}
+
+std::string get_home_dir()
+{
+    std::string up = get_env("USERPROFILE");
+    if (!up.empty()) return up;
+    std::string hd = get_env("HOMEDRIVE");
+    std::string hp = get_env("HOMEPATH");
+    if (!hd.empty() && !hp.empty()) return hd + hp;
+    return {};
+}
+
 std::string get_cwd()
 {
     DWORD len = GetCurrentDirectoryW(0, nullptr);

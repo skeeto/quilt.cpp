@@ -260,9 +260,112 @@ bool ensure_pc_dir(QuiltState &q) {
     // Write .quilt_series
     std::string qs_path = path_join(pc, ".quilt_series");
     if (!file_exists(qs_path)) {
-        write_file(qs_path, "series\n");
+        std::string series_name = get_env("QUILT_SERIES");
+        if (series_name.empty()) series_name = "series";
+        write_file(qs_path, series_name + "\n");
     }
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// quiltrc parser
+// ---------------------------------------------------------------------------
+
+// Parse a simplified subset of bash KEY=VALUE assignments from a quiltrc file.
+// Supports: KEY=value, KEY="value", KEY='value', export KEY=value
+// Skips comments (#), blank lines, and lines that aren't assignments.
+static std::map<std::string, std::string> parse_quiltrc(std::string_view content) {
+    std::map<std::string, std::string> result;
+    auto lines = split_lines(content);
+    for (auto &line : lines) {
+        std::string_view sv = line;
+        // Strip leading whitespace
+        while (!sv.empty() && (sv.front() == ' ' || sv.front() == '\t'))
+            sv.remove_prefix(1);
+        // Skip blank lines and comments
+        if (sv.empty() || sv.front() == '#') continue;
+        // Strip optional "export " prefix
+        if (sv.size() > 7 && sv.substr(0, 7) == "export ") {
+            sv.remove_prefix(7);
+            while (!sv.empty() && (sv.front() == ' ' || sv.front() == '\t'))
+                sv.remove_prefix(1);
+        }
+        // Find '=' for KEY=VALUE
+        auto eq = sv.find('=');
+        if (eq == std::string_view::npos || eq == 0) continue;
+        // Validate key: must be alphanumeric/underscore
+        std::string_view key = sv.substr(0, eq);
+        bool valid_key = true;
+        for (char c : key) {
+            if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                  (c >= '0' && c <= '9') || c == '_')) {
+                valid_key = false;
+                break;
+            }
+        }
+        if (!valid_key) continue;
+        // Parse value
+        std::string_view rest = sv.substr(eq + 1);
+        std::string value;
+        if (!rest.empty() && rest.front() == '"') {
+            // Double-quoted: handle \" and \\ escapes
+            rest.remove_prefix(1);
+            while (!rest.empty() && rest.front() != '"') {
+                if (rest.front() == '\\' && rest.size() > 1) {
+                    char next = rest[1];
+                    if (next == '"' || next == '\\') {
+                        value += next;
+                        rest.remove_prefix(2);
+                        continue;
+                    }
+                }
+                value += rest.front();
+                rest.remove_prefix(1);
+            }
+        } else if (!rest.empty() && rest.front() == '\'') {
+            // Single-quoted: literal, no escapes
+            rest.remove_prefix(1);
+            while (!rest.empty() && rest.front() != '\'') {
+                value += rest.front();
+                rest.remove_prefix(1);
+            }
+        } else {
+            // Unquoted: ends at whitespace or #
+            while (!rest.empty() && rest.front() != ' ' && rest.front() != '\t' &&
+                   rest.front() != '#') {
+                value += rest.front();
+                rest.remove_prefix(1);
+            }
+        }
+        result[std::string(key)] = value;
+    }
+    return result;
+}
+
+// Load and parse the quiltrc file. If quiltrc_path is empty, use default
+// search order (~/.quiltrc, /etc/quilt.quiltrc). If "-", skip loading.
+static std::map<std::string, std::string> load_quiltrc(const std::string &quiltrc_path) {
+    if (quiltrc_path == "-") return {};
+
+    if (!quiltrc_path.empty()) {
+        std::string content = read_file(quiltrc_path);
+        if (!content.empty()) return parse_quiltrc(content);
+        return {};
+    }
+
+    // Default search order
+    std::string home = get_home_dir();
+    if (!home.empty()) {
+        std::string user_rc = path_join(home, ".quiltrc");
+        std::string content = read_file(user_rc);
+        if (!content.empty()) return parse_quiltrc(content);
+    }
+
+    std::string sys_rc = "/etc/quilt.quiltrc";
+    std::string content = read_file(sys_rc);
+    if (!content.empty()) return parse_quiltrc(content);
+
+    return {};
 }
 
 // ---------------------------------------------------------------------------
@@ -279,6 +382,9 @@ QuiltState load_state() {
     if (!env_pc.empty()) q.pc_dir = env_pc;
     std::string env_patches = get_env("QUILT_PATCHES");
     if (!env_patches.empty()) q.patches_dir = env_patches;
+
+    // Read QUILT_SERIES override for series filename
+    std::string env_series = get_env("QUILT_SERIES");
 
     // Upward directory scan: find project root containing .pc/ or patches/
     std::string cwd = get_cwd();
@@ -318,17 +424,18 @@ QuiltState load_state() {
 
     // Series file search order (when not overridden by .quilt_series)
     if (q.series_file.empty()) {
-        std::string s1 = path_join(q.work_dir, "series");
-        std::string s2 = path_join(q.work_dir, q.patches_dir, "series");
-        std::string s3 = path_join(q.work_dir, q.pc_dir, "series");
+        std::string series_name = env_series.empty() ? "series" : env_series;
+        std::string s1 = path_join(q.work_dir, series_name);
+        std::string s2 = path_join(q.work_dir, q.patches_dir, series_name);
+        std::string s3 = path_join(q.work_dir, q.pc_dir, series_name);
         if (file_exists(s1)) {
-            q.series_file = "series";
+            q.series_file = series_name;
         } else if (file_exists(s2)) {
-            q.series_file = path_join(q.patches_dir, "series");
+            q.series_file = path_join(q.patches_dir, series_name);
         } else if (file_exists(s3)) {
-            q.series_file = path_join(q.pc_dir, "series");
+            q.series_file = path_join(q.pc_dir, series_name);
         } else {
-            q.series_file = path_join(q.patches_dir, "series");
+            q.series_file = path_join(q.patches_dir, series_name);
         }
     }
 
@@ -469,15 +576,45 @@ static Command commands[] = {
 
 static constexpr int num_commands = sizeof(commands) / sizeof(commands[0]);
 
+static std::string to_upper(std::string_view s) {
+    std::string result(s);
+    for (char &c : result) {
+        if (c >= 'a' && c <= 'z') c -= 32;
+    }
+    return result;
+}
+
 int quilt_main(int argc, char **argv) {
+    // --- Phase 1: Extract global options (--quiltrc) from argv ---
+    std::string quiltrc_path;   // empty = default search, "-" = disabled
+    bool quiltrc_set = false;
+    std::vector<char *> clean_argv;
+    clean_argv.push_back(argv[0]);
+    for (int i = 1; i < argc; ++i) {
+        std::string_view a = argv[i];
+        if (a == "--quiltrc" && i + 1 < argc) {
+            quiltrc_path = argv[i + 1];
+            quiltrc_set = true;
+            ++i; // skip the argument
+            continue;
+        }
+        if (starts_with(a, "--quiltrc=")) {
+            quiltrc_path = std::string(a.substr(10));
+            quiltrc_set = true;
+            continue;
+        }
+        clean_argv.push_back(argv[i]);
+    }
+    int clean_argc = (int)clean_argv.size();
+
     // Handle no arguments
-    if (argc < 2) {
-        err_line("Usage: quilt <command> [options] [args]");
+    if (clean_argc < 2) {
+        err_line("Usage: quilt [--quiltrc file] <command> [options] [args]");
         err_line("Use \"quilt --help\" for a list of commands.");
         return 1;
     }
 
-    std::string_view arg1 = argv[1];
+    std::string_view arg1 = clean_argv[1];
 
     // Handle --version
     if (arg1 == "--version" || arg1 == "-v") {
@@ -487,7 +624,7 @@ int quilt_main(int argc, char **argv) {
 
     // Handle --help
     if (arg1 == "--help" || arg1 == "-h" || arg1 == "help") {
-        out_line("Usage: quilt <command> [options] [args]");
+        out_line("Usage: quilt [--quiltrc file] <command> [options] [args]");
         out_line("");
         out_line("Commands:");
         for (int i = 0; i < num_commands; ++i) {
@@ -498,7 +635,17 @@ int quilt_main(int argc, char **argv) {
         return 0;
     }
 
-    // Strip patches/ prefix from command if user accidentally typed it
+    // --- Phase 2: Load quiltrc and populate environment ---
+    auto rc_vars = load_quiltrc(quiltrc_set ? quiltrc_path : std::string());
+    // Apply quiltrc values to environment (env vars take precedence)
+    for (auto &kv : rc_vars) {
+        std::string existing = get_env(kv.first);
+        if (existing.empty()) {
+            set_env(kv.first, kv.second);
+        }
+    }
+
+    // --- Phase 3: Find command ---
     std::string cmd_name(arg1);
 
     // Find command (supports unique prefix abbreviation)
@@ -528,18 +675,47 @@ int quilt_main(int argc, char **argv) {
     }
 
     // Handle per-command -h/--help before dispatching
-    for (int i = 2; i < argc; ++i) {
-        std::string_view a = argv[i];
+    for (int i = 2; i < clean_argc; ++i) {
+        std::string_view a = clean_argv[i];
         if (a == "-h" || a == "--help") {
             out_line(found->usage);
             return 0;
         }
     }
 
-    // Load state
+    // --- Phase 4: Load state ---
     QuiltState q = load_state();
+    q.config = rc_vars;
+    // Merge env overrides into config
+    for (auto &kv : rc_vars) {
+        std::string env_val = get_env(kv.first);
+        if (!env_val.empty()) {
+            q.config[kv.first] = env_val;
+        }
+    }
 
-    // Dispatch — argv for the command starts at argv+1
-    // so argv[0] becomes the command name
-    return found->fn(q, argc - 1, argv + 1);
+    // --- Phase 5: Inject QUILT_COMMAND_ARGS ---
+    std::string args_key = "QUILT_" + to_upper(found->name) + "_ARGS";
+    std::string cmd_args = get_env(args_key);
+    auto extra_args = split_on_whitespace(cmd_args);
+
+    // Build the final argv for the command: [cmd_name, extra_args..., user_args...]
+    // Command argv starts at clean_argv+1
+    std::vector<std::string> final_argv_storage;
+    std::vector<char *> final_argv;
+
+    final_argv_storage.push_back(std::string(found->name));
+    for (auto &ea : extra_args) {
+        final_argv_storage.push_back(ea);
+    }
+    for (int i = 2; i < clean_argc; ++i) {
+        final_argv_storage.push_back(clean_argv[i]);
+    }
+
+    for (auto &s : final_argv_storage) {
+        final_argv.push_back(const_cast<char *>(s.c_str()));
+    }
+
+    // Dispatch
+    return found->fn(q, (int)final_argv.size(), final_argv.data());
 }

@@ -21,7 +21,10 @@ static std::string strip_patches_prefix(const QuiltState &q, std::string_view na
     return std::string(name);
 }
 
-static std::string format_patch(const QuiltState &, std::string_view name) {
+static std::string format_patch(const QuiltState &q, std::string_view name) {
+    if (!get_env("QUILT_PATCHES_PREFIX").empty()) {
+        return q.patches_dir + "/" + std::string(name);
+    }
     return std::string(name);
 }
 

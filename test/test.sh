@@ -1127,6 +1127,152 @@ POEM
 }
 
 # -----------------------------------------------------------------------
+# quiltrc tests
+# -----------------------------------------------------------------------
+
+test_quiltrc_basic() {
+    begin_test "quiltrc_basic"
+    local rcfile="$TEST_BASE/test_quiltrc"
+    cat > "$rcfile" << 'RC'
+QUILT_PATCHES=mydir
+RC
+    echo "x" > f.txt
+
+    $QUILT --quiltrc "$rcfile" new rcp.patch >/dev/null 2>&1 || { fail "new with quiltrc failed"; return; }
+    $QUILT --quiltrc "$rcfile" add f.txt >/dev/null 2>&1
+    echo "y" > f.txt
+    $QUILT --quiltrc "$rcfile" refresh >/dev/null 2>&1
+
+    [ -f mydir/rcp.patch ] || { fail "patch should be in mydir/"; return; }
+    pass
+}
+
+test_quiltrc_disable() {
+    begin_test "quiltrc_disable"
+    # With --quiltrc -, no rc should be loaded; default patches/ is used
+    echo "x" > f.txt
+
+    $QUILT --quiltrc - new dis.patch >/dev/null 2>&1 || { fail "new with --quiltrc - failed"; return; }
+    $QUILT --quiltrc - add f.txt >/dev/null 2>&1
+    echo "y" > f.txt
+    $QUILT --quiltrc - refresh >/dev/null 2>&1
+
+    [ -f patches/dis.patch ] || { fail "patch should be in patches/"; return; }
+    pass
+}
+
+test_quiltrc_env_override() {
+    begin_test "quiltrc_env_override"
+    local rcfile="$TEST_BASE/test_quiltrc_override"
+    cat > "$rcfile" << 'RC'
+QUILT_PATCHES=fromrc
+RC
+    echo "x" > f.txt
+
+    # Env should override quiltrc
+    QUILT_PATCHES=fromenv $QUILT --quiltrc "$rcfile" new ovr.patch >/dev/null 2>&1 || { fail "new failed"; return; }
+    QUILT_PATCHES=fromenv $QUILT --quiltrc "$rcfile" add f.txt >/dev/null 2>&1
+    echo "y" > f.txt
+    QUILT_PATCHES=fromenv $QUILT --quiltrc "$rcfile" refresh >/dev/null 2>&1
+
+    [ -f fromenv/ovr.patch ] || { fail "patch should be in fromenv/ (env overrides rc)"; return; }
+    [ ! -d fromrc ] || { fail "fromrc/ should not exist"; return; }
+    pass
+}
+
+test_quilt_command_args() {
+    begin_test "quilt_command_args"
+    local rcfile="$TEST_BASE/test_quiltrc_cmdargs"
+    cat > "$rcfile" << 'RC'
+QUILT_REFRESH_ARGS="--no-index"
+RC
+    echo "x" > f.txt
+
+    $QUILT --quiltrc "$rcfile" new cmdargs.patch >/dev/null 2>&1 || { fail "new failed"; return; }
+    $QUILT --quiltrc "$rcfile" add f.txt >/dev/null 2>&1
+    echo "y" > f.txt
+    $QUILT --quiltrc "$rcfile" refresh >/dev/null 2>&1
+
+    # Patch should not contain Index: lines
+    if grep -q "^Index:" patches/cmdargs.patch; then
+        fail "patch should not contain Index: lines (QUILT_REFRESH_ARGS=--no-index)"
+        return
+    fi
+    pass
+}
+
+test_quilt_series_env() {
+    begin_test "quilt_series_env"
+    echo "x" > f.txt
+    mkdir -p patches
+    cat > patches/s1.patch << 'PATCH'
+--- a/f.txt
++++ b/f.txt
+@@ -1 +1 @@
+-x
++series_env
+PATCH
+    echo "s1.patch" > patches/my-series
+
+    QUILT_SERIES=my-series $QUILT push >/dev/null 2>&1 || { fail "push with QUILT_SERIES failed"; return; }
+    [ "$(cat f.txt)" = "series_env" ] || { fail "wrong content after push"; return; }
+
+    pass
+}
+
+test_quilt_no_diff_index() {
+    begin_test "quilt_no_diff_index"
+    local rcfile="$TEST_BASE/test_quiltrc_noindex"
+    cat > "$rcfile" << 'RC'
+QUILT_NO_DIFF_INDEX=1
+RC
+    echo "x" > f.txt
+
+    $QUILT --quiltrc "$rcfile" new noindex.patch >/dev/null 2>&1 || { fail "new failed"; return; }
+    $QUILT --quiltrc "$rcfile" add f.txt >/dev/null 2>&1
+    echo "y" > f.txt
+    $QUILT --quiltrc "$rcfile" refresh >/dev/null 2>&1
+
+    if grep -q "^Index:" patches/noindex.patch; then
+        fail "patch should not contain Index: lines"
+        return
+    fi
+    pass
+}
+
+test_quilt_patches_prefix() {
+    begin_test "quilt_patches_prefix"
+    echo "x" > f.txt
+
+    $QUILT --quiltrc - new pfx.patch >/dev/null 2>&1 || { fail "new failed"; return; }
+    $QUILT --quiltrc - add f.txt >/dev/null 2>&1
+    echo "y" > f.txt
+    $QUILT --quiltrc - refresh >/dev/null 2>&1
+
+    local out
+    out=$(QUILT_PATCHES_PREFIX=1 $QUILT --quiltrc - series 2>&1)
+    echo "$out" | grep -q "^patches/" || { fail "series output should be prefixed with patches/ (got: $out)"; return; }
+    pass
+}
+
+test_quiltrc_quoted_values() {
+    begin_test "quiltrc_quoted_values"
+    local rcfile="$TEST_BASE/test_quiltrc_quoted"
+    cat > "$rcfile" << 'RC'
+QUILT_PATCHES="my patches"
+RC
+    echo "x" > f.txt
+
+    $QUILT --quiltrc "$rcfile" new quoted.patch >/dev/null 2>&1 || { fail "new with quoted quiltrc failed"; return; }
+    $QUILT --quiltrc "$rcfile" add f.txt >/dev/null 2>&1
+    echo "y" > f.txt
+    $QUILT --quiltrc "$rcfile" refresh >/dev/null 2>&1
+
+    [ -f "my patches/quoted.patch" ] || { fail "patch should be in 'my patches/'"; return; }
+    pass
+}
+
+# -----------------------------------------------------------------------
 # Run all tests
 # -----------------------------------------------------------------------
 
@@ -1180,6 +1326,14 @@ test_force_pop
 test_refresh_shadowing
 test_diff_reverse
 test_quilt_example
+test_quiltrc_basic
+test_quiltrc_disable
+test_quiltrc_env_override
+test_quilt_command_args
+test_quilt_series_env
+test_quilt_no_diff_index
+test_quilt_patches_prefix
+test_quiltrc_quoted_values
 
 echo ""
 echo "================================"

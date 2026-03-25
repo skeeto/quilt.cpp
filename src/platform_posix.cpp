@@ -7,6 +7,7 @@
 
 #include <dirent.h>
 #include <fcntl.h>
+#include <pwd.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -406,6 +407,22 @@ std::string get_env(std::string_view name)
     std::string n = null_terminated(name);
     const char *val = std::getenv(n.c_str());
     return val ? std::string(val) : std::string();
+}
+
+void set_env(std::string_view name, std::string_view value)
+{
+    std::string n = null_terminated(name);
+    std::string v = null_terminated(value);
+    ::setenv(n.c_str(), v.c_str(), 1);
+}
+
+std::string get_home_dir()
+{
+    const char *home = std::getenv("HOME");
+    if (home) return std::string(home);
+    struct passwd *pw = ::getpwuid(::getuid());
+    if (pw && pw->pw_dir) return std::string(pw->pw_dir);
+    return {};
 }
 
 std::string get_cwd()
