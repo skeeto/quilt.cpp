@@ -16,5 +16,4 @@ int cmd_graph(QuiltState &, int, char **)    { return not_implemented("graph"); 
 int cmd_setup(QuiltState &, int, char **)    { return not_implemented("setup"); }
 int cmd_shell(QuiltState &, int, char **)    { return not_implemented("shell"); }
 int cmd_snapshot(QuiltState &, int, char **) { return not_implemented("snapshot"); }
-int cmd_upgrade(QuiltState &, int, char **)  { return not_implemented("upgrade"); }
 int cmd_init(QuiltState &, int, char **)     { return not_implemented("init"); }

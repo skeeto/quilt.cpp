@@ -739,3 +739,19 @@ int cmd_fork(QuiltState &q, int argc, char **argv) {
              " created as " + new_name);
     return 0;
 }
+
+int cmd_upgrade(QuiltState &, int argc, char **argv)
+{
+    for (int i = 1; i < argc; ++i) {
+        std::string_view arg = argv[i];
+        if (arg == "-h" || arg == "--help") {
+            out_line("Usage: quilt upgrade");
+            out_line("");
+            out_line("Upgrade the metadata in the .pc/ directory from version 1 to");
+            out_line("version 2. This command does nothing because quilt.cpp only");
+            out_line("supports the version 2 format.");
+            return 0;
+        }
+    }
+    return 0;
+}
