@@ -305,19 +305,28 @@ bool ensure_pc_dir(QuiltState &q) {
     // Write .version
     std::string version_path = path_join(pc, ".version");
     if (!file_exists(version_path)) {
-        write_file(version_path, "2\n");
+        if (!write_file(version_path, "2\n")) {
+            err_line("Failed to write " + version_path);
+            return false;
+        }
     }
     // Write .quilt_patches
     std::string qp_path = path_join(pc, ".quilt_patches");
     if (!file_exists(qp_path)) {
-        write_file(qp_path, q.patches_dir + "\n");
+        if (!write_file(qp_path, q.patches_dir + "\n")) {
+            err_line("Failed to write " + qp_path);
+            return false;
+        }
     }
     // Write .quilt_series
     std::string qs_path = path_join(pc, ".quilt_series");
     if (!file_exists(qs_path)) {
         std::string series_name = get_env("QUILT_SERIES");
         if (series_name.empty()) series_name = "series";
-        write_file(qs_path, series_name + "\n");
+        if (!write_file(qs_path, series_name + "\n")) {
+            err_line("Failed to write " + qs_path);
+            return false;
+        }
     }
     return true;
 }
@@ -553,7 +562,10 @@ bool restore_file(QuiltState &q, std::string_view patch, std::string_view file) 
     std::string content = read_file(backup);
     if (content.empty() && !file_exists(backup)) {
         // Backup was a placeholder for a file that didn't exist — remove the target
-        delete_file(target);
+        if (file_exists(target) && !delete_file(target)) {
+            err_line("Failed to remove " + target);
+            return false;
+        }
         return true;
     }
 
@@ -561,14 +573,20 @@ bool restore_file(QuiltState &q, std::string_view patch, std::string_view file) 
         // The backed-up file was empty or didn't exist before the patch
         // Check if the backup is a zero-length placeholder
         // If the original file didn't exist, remove the target
-        delete_file(target);
+        if (file_exists(target) && !delete_file(target)) {
+            err_line("Failed to remove " + target);
+            return false;
+        }
         return true;
     }
 
     // Ensure target directory exists
     std::string target_dir = dirname(target);
     if (!is_directory(target_dir)) {
-        make_dirs(target_dir);
+        if (!make_dirs(target_dir)) {
+            err_line("Failed to create directory: " + target_dir);
+            return false;
+        }
     }
 
     return write_file(target, content);

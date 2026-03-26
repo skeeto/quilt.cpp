@@ -27,6 +27,26 @@ static std::string patch_path_display(const QuiltState &q, std::string_view patc
     return q.patches_dir + "/" + std::string(patch);
 }
 
+static bool write_series_checked(const QuiltState &q,
+                                 const std::vector<std::string> &series) {
+    std::string series_abs = path_join(q.work_dir, q.series_file);
+    if (!write_series(series_abs, series, q.patch_strip_level)) {
+        err_line("Failed to write series file.");
+        return false;
+    }
+    return true;
+}
+
+static bool write_applied_checked(const QuiltState &q,
+                                  const std::vector<std::string> &applied) {
+    std::string applied_path = path_join(q.work_dir, q.pc_dir, "applied-patches");
+    if (!write_applied(applied_path, applied)) {
+        err_line("Failed to write applied-patches.");
+        return false;
+    }
+    return true;
+}
+
 static std::vector<std::string> parse_patch_files(std::string_view content, int strip = 1) {
     std::vector<std::string> files;
     auto lines = split_lines(content);
@@ -112,19 +132,25 @@ static std::string replace_header(std::string_view content, std::string_view new
 
 static int pop_to_patch(QuiltState &q, std::string_view patch) {
     // Pop all applied patches from top until patch is removed
-    std::string applied_path = path_join(q.work_dir, q.pc_dir, "applied-patches");
     while (!q.applied.empty()) {
         std::string top = q.applied.back();
         // Restore files
         auto tracked = files_in_patch(q, top);
         for (const auto &f : tracked) {
-            restore_file(q, top, f);
+            if (!restore_file(q, top, f)) {
+                return 1;
+            }
         }
         // Remove .pc/<patch>/ directory
         std::string pc_dir = pc_patch_dir(q, top);
-        delete_dir_recursive(pc_dir);
+        if (is_directory(pc_dir) && !delete_dir_recursive(pc_dir)) {
+            err_line("Failed to remove " + pc_dir);
+            return 1;
+        }
         q.applied.pop_back();
-        write_applied(applied_path, q.applied);
+        if (!write_applied_checked(q, q.applied)) {
+            return 1;
+        }
 
         if (top == patch) break;
     }
@@ -185,18 +211,25 @@ int cmd_delete(QuiltState &q, int argc, char **argv) {
     }
 
     // Remove from series
-    q.series.erase(q.series.begin() + *idx);
-    std::string series_abs = path_join(q.work_dir, q.series_file);
-    write_series(series_abs, q.series, q.patch_strip_level);
+    auto new_series = q.series;
+    new_series.erase(new_series.begin() + *idx);
+    if (!write_series_checked(q, new_series)) {
+        return 1;
+    }
+    q.series = std::move(new_series);
 
     // Optionally remove the patch file
     if (opt_remove) {
         std::string patch_file = path_join(q.work_dir, q.patches_dir, patch);
         if (opt_backup) {
             std::string backup = patch_file + "~";
-            rename_path(patch_file, backup);
-        } else {
-            delete_file(patch_file);
+            if (file_exists(patch_file) && !rename_path(patch_file, backup)) {
+                err_line("Failed to rename " + patch_file + " to " + backup);
+                return 1;
+            }
+        } else if (file_exists(patch_file) && !delete_file(patch_file)) {
+            err_line("Failed to delete " + patch_file);
+            return 1;
         }
     }
 
@@ -246,39 +279,76 @@ int cmd_rename(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    // Rename in series
-    q.series[*idx] = new_name;
-    std::string series_abs = path_join(q.work_dir, q.series_file);
-    write_series(series_abs, q.series, q.patch_strip_level);
-
     // Rename patch file
     std::string old_file = path_join(q.work_dir, q.patches_dir, old_patch);
     std::string new_file = path_join(q.work_dir, q.patches_dir, new_name);
+    bool renamed_patch_file = false;
     if (file_exists(old_file)) {
         // Ensure target directory exists
         std::string new_dir = dirname(new_file);
         if (!is_directory(new_dir)) {
-            make_dirs(new_dir);
+            if (!make_dirs(new_dir)) {
+                err_line("Failed to create " + new_dir);
+                return 1;
+            }
         }
-        rename_path(old_file, new_file);
+        if (!rename_path(old_file, new_file)) {
+            err_line("Failed to rename " + old_file + " to " + new_file);
+            return 1;
+        }
+        renamed_patch_file = true;
     }
 
     // If patch is applied: rename in applied-patches and .pc/ dir
+    auto new_applied = q.applied;
+    bool renamed_pc_dir = false;
     if (q.is_applied(old_patch)) {
-        for (auto &a : q.applied) {
+        for (auto &a : new_applied) {
             if (a == old_patch) {
                 a = new_name;
                 break;
             }
         }
-        std::string applied_path = path_join(q.work_dir, q.pc_dir, "applied-patches");
-        write_applied(applied_path, q.applied);
-
         std::string old_pc = pc_patch_dir(q, old_patch);
         std::string new_pc = pc_patch_dir(q, new_name);
         if (is_directory(old_pc)) {
-            rename_path(old_pc, new_pc);
+            if (!rename_path(old_pc, new_pc)) {
+                if (renamed_patch_file) {
+                    rename_path(new_file, old_file);
+                }
+                err_line("Failed to rename " + old_pc + " to " + new_pc);
+                return 1;
+            }
+            renamed_pc_dir = true;
         }
+    }
+
+    auto new_series = q.series;
+    new_series[*idx] = new_name;
+    if (!write_series_checked(q, new_series)) {
+        if (renamed_pc_dir) {
+            rename_path(pc_patch_dir(q, new_name), pc_patch_dir(q, old_patch));
+        }
+        if (renamed_patch_file) {
+            rename_path(new_file, old_file);
+        }
+        return 1;
+    }
+
+    if (q.is_applied(old_patch) && !write_applied_checked(q, new_applied)) {
+        write_series_checked(q, q.series);
+        if (renamed_pc_dir) {
+            rename_path(pc_patch_dir(q, new_name), pc_patch_dir(q, old_patch));
+        }
+        if (renamed_patch_file) {
+            rename_path(new_file, old_file);
+        }
+        return 1;
+    }
+
+    q.series = std::move(new_series);
+    if (q.is_applied(old_patch)) {
+        q.applied = std::move(new_applied);
     }
 
     out_line("Patch " + patch_path_display(q, old_patch) +
@@ -314,15 +384,18 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    ensure_pc_dir(q);
+    if (!ensure_pc_dir(q)) {
+        return 1;
+    }
 
     // Ensure patches dir exists
     std::string patches_abs = path_join(q.work_dir, q.patches_dir);
     if (!is_directory(patches_abs)) {
-        make_dirs(patches_abs);
+        if (!make_dirs(patches_abs)) {
+            err_line("Failed to create " + patches_abs);
+            return 1;
+        }
     }
-
-    std::string series_abs = path_join(q.work_dir, q.series_file);
 
     for (const auto &patchfile : patchfiles) {
         // Determine target name
@@ -353,12 +426,17 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
         if (!existing) {
             // Insert after top applied patch, or at end if none applied
             int top_idx = q.top_index();
-            if (top_idx >= 0 && top_idx + 1 < (int)q.series.size()) {
-                q.series.insert(q.series.begin() + top_idx + 1, name);
+            auto new_series = q.series;
+            if (top_idx >= 0 && top_idx + 1 < (int)new_series.size()) {
+                new_series.insert(new_series.begin() + top_idx + 1, name);
             } else {
-                q.series.push_back(name);
+                new_series.push_back(name);
             }
-            write_series(series_abs, q.series, q.patch_strip_level);
+            if (!write_series_checked(q, new_series)) {
+                delete_file(dest);
+                return 1;
+            }
+            q.series = std::move(new_series);
         }
 
         out_line("Importing patch " + patchfile +
@@ -699,41 +777,78 @@ int cmd_fork(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
+    auto idx = q.find_in_series(old_name);
+    if (!idx) {
+        err_line("Patch " + old_name + " is not in series");
+        return 1;
+    }
+
     // Copy patch file
     std::string old_file = path_join(q.work_dir, q.patches_dir, old_name);
     std::string new_file = path_join(q.work_dir, q.patches_dir, new_name);
+    bool copied_patch_file = false;
     if (file_exists(old_file)) {
         std::string new_dir = dirname(new_file);
         if (!is_directory(new_dir)) {
-            make_dirs(new_dir);
+            if (!make_dirs(new_dir)) {
+                err_line("Failed to create " + new_dir);
+                return 1;
+            }
         }
-        copy_file(old_file, new_file);
+        if (!copy_file(old_file, new_file)) {
+            err_line("Failed to copy " + old_file + " to " + new_file);
+            return 1;
+        }
+        copied_patch_file = true;
     }
 
-    // Replace old name with new name in series
-    auto idx = q.find_in_series(old_name);
-    if (idx) {
-        q.series[*idx] = new_name;
-        std::string series_abs = path_join(q.work_dir, q.series_file);
-        write_series(series_abs, q.series, q.patch_strip_level);
+    // Rename .pc/ directory
+    std::string old_pc = pc_patch_dir(q, old_name);
+    std::string new_pc = pc_patch_dir(q, new_name);
+    bool renamed_pc_dir = false;
+    if (is_directory(old_pc)) {
+        if (!rename_path(old_pc, new_pc)) {
+            if (copied_patch_file) {
+                delete_file(new_file);
+            }
+            err_line("Failed to rename " + old_pc + " to " + new_pc);
+            return 1;
+        }
+        renamed_pc_dir = true;
     }
 
-    // Replace in applied-patches
-    for (auto &a : q.applied) {
+    auto new_series = q.series;
+    new_series[*idx] = new_name;
+    if (!write_series_checked(q, new_series)) {
+        if (renamed_pc_dir) {
+            rename_path(new_pc, old_pc);
+        }
+        if (copied_patch_file) {
+            delete_file(new_file);
+        }
+        return 1;
+    }
+
+    auto new_applied = q.applied;
+    for (auto &a : new_applied) {
         if (a == old_name) {
             a = new_name;
             break;
         }
     }
-    std::string applied_path = path_join(q.work_dir, q.pc_dir, "applied-patches");
-    write_applied(applied_path, q.applied);
-
-    // Rename .pc/ directory
-    std::string old_pc = pc_patch_dir(q, old_name);
-    std::string new_pc = pc_patch_dir(q, new_name);
-    if (is_directory(old_pc)) {
-        rename_path(old_pc, new_pc);
+    if (!write_applied_checked(q, new_applied)) {
+        write_series_checked(q, q.series);
+        if (renamed_pc_dir) {
+            rename_path(new_pc, old_pc);
+        }
+        if (copied_patch_file) {
+            delete_file(new_file);
+        }
+        return 1;
     }
+
+    q.series = std::move(new_series);
+    q.applied = std::move(new_applied);
 
     out_line("Fork of patch " + old_name +
              " created as " + new_name);

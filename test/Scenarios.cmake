@@ -21,10 +21,12 @@ set(QUILT_TEST_SCENARIOS
     diff_shows_changes
     diff_after_refresh
     delete_unapplied
+    delete_unknown_patch
     rename
     rename_duplicate
     import
     import_duplicate
+    import_missing_source
     files
     patches_cmd
     header
@@ -33,6 +35,8 @@ set(QUILT_TEST_SCENARIOS
     revert_not_tracked
     remove
     fork
+    fork_no_applied_patch
+    fork_duplicate_name
     fold
     add_no_patch
     add_prefixed_patch_arg
@@ -398,6 +402,23 @@ function(qt_scenario_delete_unapplied)
     qt_assert_failure("${top_rc}" "top should fail after deleting the only patch")
 endfunction()
 
+function(qt_scenario_delete_unknown_patch)
+    qt_begin_test("delete_unknown_patch")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new keep.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS delete missing.patch)
+    qt_assert_failure("${rc}" "delete of an unknown patch should fail")
+    qt_assert_equal("${out}" "" "delete unknown patch should not write to stdout")
+    qt_assert_contains("${err}" "Patch missing.patch is not in series" "delete unknown patch should explain the missing patch")
+    qt_quilt_ok(OUTPUT series_out ERROR series_err ARGS series MESSAGE "series failed after delete unknown")
+    qt_assert_contains("${series_out}" "keep.patch" "delete unknown patch should leave the series unchanged")
+    qt_assert_exists("${QT_WORK_DIR}/patches/keep.patch" "delete unknown patch should leave the patch file untouched")
+endfunction()
+
 function(qt_scenario_rename)
     qt_begin_test("rename")
     qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
@@ -471,6 +492,25 @@ function(qt_scenario_import_duplicate)
     qt_quilt_ok(OUTPUT series_out ERROR series_err ARGS series MESSAGE "series failed after duplicate import")
     qt_assert_contains("${series_out}" "ext_test.patch" "duplicate import should leave ext_test.patch in series")
     qt_assert_line_count("${series_out}" "1" "duplicate import should not add a second series entry")
+endfunction()
+
+function(qt_scenario_import_missing_source)
+    qt_begin_test("import_missing_source")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new keep.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    set(missing_patch "${QT_TEST_BASE}/missing.patch")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS import "${missing_patch}")
+    qt_assert_failure("${rc}" "import of a missing patch should fail")
+    qt_assert_equal("${out}" "" "import missing source should not write to stdout")
+    qt_assert_not_equal("${err}" "" "import missing source should report a diagnostic on stderr")
+    qt_quilt_ok(OUTPUT series_out ERROR series_err ARGS series MESSAGE "series failed after import missing source")
+    qt_assert_contains("${series_out}" "keep.patch" "import missing source should leave the existing series entry untouched")
+    qt_assert_line_count("${series_out}" "1" "import missing source should not add a series entry")
+    qt_assert_not_exists("${QT_WORK_DIR}/patches/missing.patch" "import missing source should not leave a partial patch file")
 endfunction()
 
 function(qt_scenario_files)
@@ -580,6 +620,39 @@ function(qt_scenario_fork)
     qt_assert_exists("${QT_WORK_DIR}/patches/forked.patch" "forked patch file missing")
     qt_quilt_ok(OUTPUT top_out ERROR top_err ARGS top MESSAGE "top failed")
     qt_assert_contains("${top_out}" "forked.patch" "top should be forked.patch")
+endfunction()
+
+function(qt_scenario_fork_no_applied_patch)
+    qt_begin_test("fork_no_applied_patch")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS fork forked.patch)
+    qt_assert_failure("${rc}" "fork with no applied patch should fail")
+    qt_assert_equal("${out}" "" "fork with no applied patch should not write to stdout")
+    qt_assert_not_equal("${err}" "" "fork with no applied patch should report a diagnostic on stderr")
+endfunction()
+
+function(qt_scenario_fork_duplicate_name)
+    qt_begin_test("fork_duplicate_name")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new base.patch MESSAGE "new base failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add base failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh base failed")
+    qt_quilt_ok(ARGS new forked.patch MESSAGE "new forked failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add forked failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "z\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh forked failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS fork forked.patch)
+    qt_assert_failure("${rc}" "fork to an existing patch name should fail")
+    qt_assert_equal("${out}" "" "fork duplicate should not write to stdout")
+    qt_assert_not_equal("${err}" "" "fork duplicate should report a diagnostic on stderr")
+    qt_quilt_ok(OUTPUT top_out ERROR top_err ARGS top MESSAGE "top failed after fork duplicate")
+    qt_assert_contains("${top_out}" "base.patch" "fork duplicate should leave the current top patch unchanged")
+    qt_quilt_ok(OUTPUT series_out ERROR series_err ARGS series MESSAGE "series failed after fork duplicate")
+    qt_assert_contains("${series_out}" "base.patch" "fork duplicate should leave base.patch in the series")
+    qt_assert_contains("${series_out}" "forked.patch" "fork duplicate should leave forked.patch in the series")
+    qt_assert_exists("${QT_WORK_DIR}/patches/base.patch" "fork duplicate should leave the original patch file untouched")
+    qt_assert_exists("${QT_WORK_DIR}/patches/forked.patch" "fork duplicate should leave the conflicting patch file untouched")
 endfunction()
 
 function(qt_scenario_fold)
@@ -1515,6 +1588,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_diff_after_refresh()
     elseif(scenario STREQUAL "delete_unapplied")
         qt_scenario_delete_unapplied()
+    elseif(scenario STREQUAL "delete_unknown_patch")
+        qt_scenario_delete_unknown_patch()
     elseif(scenario STREQUAL "rename")
         qt_scenario_rename()
     elseif(scenario STREQUAL "rename_duplicate")
@@ -1523,6 +1598,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_import()
     elseif(scenario STREQUAL "import_duplicate")
         qt_scenario_import_duplicate()
+    elseif(scenario STREQUAL "import_missing_source")
+        qt_scenario_import_missing_source()
     elseif(scenario STREQUAL "files")
         qt_scenario_files()
     elseif(scenario STREQUAL "patches_cmd")
@@ -1539,6 +1616,10 @@ function(qt_run_named_scenario scenario)
         qt_scenario_remove()
     elseif(scenario STREQUAL "fork")
         qt_scenario_fork()
+    elseif(scenario STREQUAL "fork_no_applied_patch")
+        qt_scenario_fork_no_applied_patch()
+    elseif(scenario STREQUAL "fork_duplicate_name")
+        qt_scenario_fork_duplicate_name()
     elseif(scenario STREQUAL "fold")
         qt_scenario_fold()
     elseif(scenario STREQUAL "add_no_patch")
