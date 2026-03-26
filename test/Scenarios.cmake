@@ -96,13 +96,6 @@ set(QUILT_TEST_SCENARIOS
     shell_split_var_expansion
     shell_split_var_braces
     shell_split_mixed
-)
-
-# Scenarios that test quilt.cpp-specific behavior (mail command format).
-# Skipped when testing an external quilt binary.
-set(QUILT_TEST_SCENARIOS_NATIVE
-    init_creates_metadata
-    init_help_text
     annotate_basic
     annotate_stop_patch
     annotate_created_file
@@ -111,6 +104,13 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     annotate_not_applied
     annotate_usage
     annotate_help
+)
+
+# Scenarios that test quilt.cpp-specific behavior (mail command format).
+# Skipped when testing an external quilt binary.
+set(QUILT_TEST_SCENARIOS_NATIVE
+    init_creates_metadata
+    init_help_text
     mail_basic
     mail_single_patch
     mail_patch_range
@@ -692,9 +692,11 @@ function(qt_scenario_annotate_basic)
     qt_write_file("${QT_WORK_DIR}/f.txt" "base\nONE\ntwo\n")
     qt_quilt_ok(ARGS refresh MESSAGE "refresh second failed")
     qt_quilt_ok(OUTPUT annotate_out ERROR annotate_err ARGS annotate f.txt MESSAGE "annotate failed")
-    set(expected "\tbase\n2\tONE\n2\ttwo\n\n1\tfirst.patch\n2\tsecond.patch\n")
-    qt_assert_equal("${annotate_out}" "${expected}" "annotate should attribute changed lines to the latest patch and leave untouched lines blank")
-    qt_assert_equal("${annotate_err}" "" "annotate should not write diagnostics to stderr")
+    qt_assert_contains("${annotate_out}" "\tbase\n" "annotate should leave untouched base lines blank")
+    qt_assert_contains("${annotate_out}" "2\tONE\n" "annotate should attribute replaced lines to the latest patch")
+    qt_assert_contains("${annotate_out}" "2\ttwo\n" "annotate should attribute inserted lines to the latest patch")
+    qt_assert_matches("${annotate_out}" "(^|\n)1\t(patches/)?first\\.patch(\n|$)" "annotate should list the first patch in the legend")
+    qt_assert_matches("${annotate_out}" "(^|\n)2\t(patches/)?second\\.patch(\n|$)" "annotate should list the second patch in the legend")
 endfunction()
 
 function(qt_scenario_annotate_stop_patch)
@@ -709,9 +711,10 @@ function(qt_scenario_annotate_stop_patch)
     qt_write_file("${QT_WORK_DIR}/f.txt" "base\nONE\ntwo\n")
     qt_quilt_ok(ARGS refresh MESSAGE "refresh second failed")
     qt_quilt_ok(OUTPUT annotate_out ERROR annotate_err ARGS annotate -P first.patch f.txt MESSAGE "annotate -P failed")
-    set(expected "\tbase\n1\tone\n\n1\tfirst.patch\n")
-    qt_assert_equal("${annotate_out}" "${expected}" "annotate -P should stop at the selected applied patch")
-    qt_assert_equal("${annotate_err}" "" "annotate -P should not write diagnostics to stderr")
+    qt_assert_contains("${annotate_out}" "\tbase\n" "annotate -P should keep untouched lines unannotated")
+    qt_assert_contains("${annotate_out}" "1\tone\n" "annotate -P should stop at the selected applied patch state")
+    qt_assert_matches("${annotate_out}" "(^|\n)1\t(patches/)?first\\.patch(\n|$)" "annotate -P should only list the selected patch in the legend")
+    qt_assert_not_contains("${annotate_out}" "second.patch" "annotate -P should exclude later patches from the legend")
 endfunction()
 
 function(qt_scenario_annotate_created_file)
@@ -721,9 +724,9 @@ function(qt_scenario_annotate_created_file)
     qt_write_file("${QT_WORK_DIR}/created.txt" "hello\nworld\n")
     qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
     qt_quilt_ok(OUTPUT annotate_out ERROR annotate_err ARGS annotate created.txt MESSAGE "annotate created file failed")
-    set(expected "1\thello\n1\tworld\n\n1\tcreate.patch\n")
-    qt_assert_equal("${annotate_out}" "${expected}" "annotate should attribute every line of a created file to the creating patch")
-    qt_assert_equal("${annotate_err}" "" "annotate for a created file should not write diagnostics to stderr")
+    qt_assert_contains("${annotate_out}" "1\thello\n" "annotate should attribute created-file lines to the creating patch")
+    qt_assert_contains("${annotate_out}" "1\tworld\n" "annotate should attribute every created-file line to the creating patch")
+    qt_assert_matches("${annotate_out}" "(^|\n)1\t(patches/)?create\\.patch(\n|$)" "annotate should list the creating patch in the legend")
 endfunction()
 
 function(qt_scenario_annotate_unmodified_file)
@@ -737,7 +740,6 @@ function(qt_scenario_annotate_unmodified_file)
     qt_quilt_ok(OUTPUT annotate_out ERROR annotate_err ARGS annotate plain.txt MESSAGE "annotate unmodified file failed")
     set(expected "\tplain\n\ttext\n")
     qt_assert_equal("${annotate_out}" "${expected}" "annotate should emit blank annotations for files untouched by applied patches")
-    qt_assert_equal("${annotate_err}" "" "annotate for an untouched file should not write diagnostics to stderr")
 endfunction()
 
 function(qt_scenario_annotate_unknown_patch)
@@ -750,7 +752,9 @@ function(qt_scenario_annotate_unknown_patch)
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS annotate -P missing.patch f.txt)
     qt_assert_failure("${rc}" "annotate with an unknown patch should fail")
     qt_assert_equal("${out}" "" "annotate with an unknown patch should not write to stdout")
-    qt_assert_contains("${err}" "Patch missing.patch is not in series" "annotate should explain unknown patches")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "missing.patch" "annotate should mention the unknown patch name")
+    qt_assert_contains("${combined}" "not in series" "annotate should explain unknown patches")
 endfunction()
 
 function(qt_scenario_annotate_not_applied)
@@ -768,15 +772,17 @@ function(qt_scenario_annotate_not_applied)
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS annotate -P second.patch f.txt)
     qt_assert_failure("${rc}" "annotate with an unapplied patch should fail")
     qt_assert_equal("${out}" "" "annotate with an unapplied patch should not write to stdout")
-    qt_assert_contains("${err}" "Patch second.patch is not applied" "annotate should explain unapplied patch failures")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "second.patch" "annotate should mention the unapplied patch name")
+    qt_assert_contains("${combined}" "not applied" "annotate should explain unapplied patch failures")
 endfunction()
 
 function(qt_scenario_annotate_usage)
     qt_begin_test("annotate_usage")
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS annotate)
     qt_assert_failure("${rc}" "annotate without a file should fail")
-    qt_assert_equal("${out}" "" "annotate usage failures should not write to stdout")
-    qt_assert_contains("${err}" "Usage: quilt annotate [-P patch] file" "annotate should print its usage line on invalid arguments")
+    qt_combine_output(usage_out "${out}" "${err}")
+    qt_assert_matches("${usage_out}" "Usage: quilt annotate \\[-P patch\\] (\\{file\\}|file)" "annotate should print its usage line on invalid arguments")
 endfunction()
 
 function(qt_scenario_annotate_help)
@@ -784,7 +790,8 @@ function(qt_scenario_annotate_help)
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS annotate -h)
     qt_assert_success("${rc}" "annotate -h should succeed")
     qt_combine_output(help_out "${out}" "${err}")
-    qt_assert_contains("${help_out}" "Usage: quilt annotate [-P patch] file" "annotate -h should print the usage line")
+    qt_assert_matches("${help_out}" "Usage: quilt annotate \\[-P patch\\] (\\{file\\}|file)" "annotate -h should print the usage line")
+    qt_assert_contains("${help_out}" "-P patch" "annotate -h should describe the stop patch option")
 endfunction()
 
 function(qt_scenario_header)
