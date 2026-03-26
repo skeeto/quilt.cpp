@@ -46,6 +46,61 @@ static std::string strip_patches_prefix(const QuiltState &q, std::string_view na
     return std::string(name);
 }
 
+int cmd_init(QuiltState &q, int argc, char **) {
+    if (argc != 1) {
+        err_line("Usage: quilt init");
+        return 1;
+    }
+
+    q.work_dir = get_cwd();
+    q.pc_dir = ".pc";
+    q.patches_dir = "patches";
+    std::string env_pc = get_env("QUILT_PC");
+    if (!env_pc.empty()) {
+        q.pc_dir = env_pc;
+    }
+    std::string env_patches = get_env("QUILT_PATCHES");
+    if (!env_patches.empty()) {
+        q.patches_dir = env_patches;
+    }
+    std::string series_name = get_env("QUILT_SERIES");
+    if (series_name.empty()) {
+        series_name = "series";
+    }
+    q.series_file = path_join(q.patches_dir, series_name);
+
+    if (!ensure_pc_dir(q)) {
+        return 1;
+    }
+
+    std::string patches_abs = path_join(q.work_dir, q.patches_dir);
+    if (!is_directory(patches_abs)) {
+        if (!make_dirs(patches_abs)) {
+            err_line("Failed to create " + patches_abs);
+            return 1;
+        }
+    }
+
+    std::string series_abs = path_join(q.work_dir, q.series_file);
+    if (!file_exists(series_abs)) {
+        if (!write_series(series_abs, {}, {})) {
+            err_line("Failed to write series file.");
+            return 1;
+        }
+    }
+
+    std::string applied_abs = path_join(q.work_dir, q.pc_dir, "applied-patches");
+    if (!file_exists(applied_abs)) {
+        if (!write_applied(applied_abs, {})) {
+            err_line("Failed to write applied-patches.");
+            return 1;
+        }
+    }
+
+    out_line("The quilt meta-data is now initialized.");
+    return 0;
+}
+
 int cmd_new(QuiltState &q, int argc, char **argv) {
     // Parse options
     std::string patch_name;

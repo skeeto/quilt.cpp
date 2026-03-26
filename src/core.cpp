@@ -629,7 +629,14 @@ static Command commands[] = {
     {"shell",      cmd_shell,      "Usage: quilt shell [command]"},
     {"snapshot",   cmd_snapshot,   "Usage: quilt snapshot [-d]"},
     {"upgrade",    cmd_upgrade,    "Usage: quilt upgrade"},
-    {"init",       cmd_init,       "Usage: quilt init [-p patches_dir]"},
+    {"init",       cmd_init,
+                   "Usage: quilt init\n"
+                   "\n"
+                   "Initializes the quilt meta-data in the current sub-directory. "
+                   "This command is optional as any quilt command creates these "
+                   "meta-data on need, but it can still be interesting to specify "
+                   "easily the directory that should be used as root directory "
+                   "before working from a sub-directory."},
 };
 
 static constexpr int num_commands = sizeof(commands) / sizeof(commands[0]);
@@ -741,7 +748,11 @@ int quilt_main(int argc, char **argv) {
     }
 
     // --- Phase 4: Load state ---
+    std::string original_cwd = get_cwd();
     QuiltState q = load_state();
+    if (std::string_view(found->name) == "init" && get_cwd() != original_cwd) {
+        set_cwd(original_cwd);
+    }
     q.config = rc_vars;
     // Merge env overrides into config
     for (auto &kv : rc_vars) {
