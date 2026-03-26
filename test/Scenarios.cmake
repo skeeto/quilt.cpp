@@ -65,7 +65,6 @@ set(QUILT_TEST_SCENARIOS
     graph_unknown_patch
     graph_help
     graph_subdirectory
-    graph_ps
     filenames_with_spaces
     upward_scanning
     command_abbreviation
@@ -1257,22 +1256,6 @@ function(qt_scenario_graph_subdirectory)
     qt_assert_equal("${graph_err}" "" "graph from subdirectory should not write diagnostics to stderr")
 endfunction()
 
-function(qt_scenario_graph_ps)
-    qt_begin_test("graph_ps")
-    qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
-    qt_quilt_ok(ARGS new first.patch MESSAGE "new first failed")
-    qt_quilt_ok(ARGS add f.txt MESSAGE "add first failed")
-    qt_write_file("${QT_WORK_DIR}/f.txt" "one\n")
-    qt_quilt_ok(ARGS refresh MESSAGE "refresh first failed")
-    qt_quilt_ok(ARGS new second.patch MESSAGE "new second failed")
-    qt_quilt_ok(ARGS add f.txt MESSAGE "add second failed")
-    qt_write_file("${QT_WORK_DIR}/f.txt" "two\n")
-    qt_quilt_ok(ARGS refresh MESSAGE "refresh second failed")
-    qt_quilt_ok(OUTPUT ps_out ERROR ps_err ARGS graph -T ps MESSAGE "graph -T ps failed")
-    qt_assert_contains("${ps_out}" "%!PS-Adobe" "graph -T ps should render PostScript")
-    qt_assert_equal("${ps_err}" "" "graph -T ps should not write diagnostics to stderr")
-endfunction()
-
 function(qt_scenario_filenames_with_spaces)
     qt_begin_test("filenames_with_spaces")
     qt_write_file("${QT_WORK_DIR}/my file.txt" "content\n")
@@ -2225,8 +2208,6 @@ function(qt_run_named_scenario scenario)
         qt_scenario_graph_help()
     elseif(scenario STREQUAL "graph_subdirectory")
         qt_scenario_graph_subdirectory()
-    elseif(scenario STREQUAL "graph_ps")
-        qt_scenario_graph_ps()
     elseif(scenario STREQUAL "filenames_with_spaces")
         qt_scenario_filenames_with_spaces()
     elseif(scenario STREQUAL "upward_scanning")

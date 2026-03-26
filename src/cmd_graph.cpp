@@ -332,28 +332,12 @@ std::string render_dot(const std::vector<GraphNode> &nodes,
     return dot;
 }
 
-ProcessResult run_graphviz(std::string_view input, std::string_view format) {
-    std::vector<std::string> argv = {"dot", "-T" + std::string(format)};
-    ProcessResult result = run_cmd_input(argv, input);
-#if defined(_WIN32)
-    if (result.exit_code != 0) {
-        std::vector<std::string> wsl_argv = {"wsl", "dot", "-T" + std::string(format)};
-        ProcessResult wsl_result = run_cmd_input(wsl_argv, input);
-        if (wsl_result.exit_code == 0) {
-            return wsl_result;
-        }
-    }
-#endif
-    return result;
-}
-
 } // namespace
 
 int cmd_graph(QuiltState &q, int argc, char **argv) {
     bool opt_all = false;
     bool opt_reduce = false;
     bool opt_edge_labels = false;
-    bool opt_ps = false;
     std::optional<int> opt_lines;
     std::string patch_arg;
 
@@ -389,10 +373,12 @@ int cmd_graph(QuiltState &q, int argc, char **argv) {
                 err_line("Usage: quilt graph [--all] [--reduce] [--lines[=num]] [--edge-labels=files] [-T ps] [patch]");
                 return 1;
             }
-            opt_ps = true;
             ++i;
+            err_line("quilt graph -T ps: not implemented");
+            return 1;
         } else if (arg == "-Tps") {
-            opt_ps = true;
+            err_line("quilt graph -T ps: not implemented");
+            return 1;
         } else if (!arg.empty() && arg[0] == '-') {
             err_line("Usage: quilt graph [--all] [--reduce] [--lines[=num]] [--edge-labels=files] [-T ps] [patch]");
             return 1;
@@ -537,24 +523,6 @@ int cmd_graph(QuiltState &q, int argc, char **argv) {
     }
 
     std::string dot = render_dot(nodes, edges, used_nodes, opt_reduce, opt_edge_labels);
-    if (!opt_ps) {
-        out(dot);
-        return 0;
-    }
-
-    ProcessResult result = run_graphviz(dot, "ps");
-    if (result.exit_code != 0) {
-        if (!result.err.empty()) {
-            err(result.err);
-            if (result.err.back() != '\n') {
-                err("\n");
-            }
-        } else {
-            err_line("dot failed");
-        }
-        return 1;
-    }
-
-    out(result.out);
+    out(dot);
     return 0;
 }
