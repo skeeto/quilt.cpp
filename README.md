@@ -74,6 +74,22 @@ Options that work the same as the original: `--mbox`, `--prefix`,
 `--from`, `--sender`, `--to`, `--cc`, `--bcc`, and the `first`/`last`
 patch range arguments (including `-` for first/last in series).
 
+To avoid passing `--from` every time, set a default in `~/.quiltrc`:
+
+    QUILT_MAIL_ARGS='--from "First Last <user@example.com>" --mbox patches.mbox'
+
+### Shell-like splitting for `QUILT_*_ARGS`
+
+The original Quilt is a Bash script, so variables like `QUILT_MAIL_ARGS`
+are just `eval`'d — full shell syntax works. Quilt.cpp implements a
+purpose-built splitter that covers the useful subset: single quotes
+(literal, no escapes), double quotes (with `\"`, `\\`, `\$` escapes),
+`$VAR` and `${VAR}` expansion, and backslash escapes in unquoted text.
+Adjacent quoted and unquoted segments merge into a single token, just as
+in a shell.
+
+This applies to all `QUILT_*_ARGS` and `QUILT_*_OPTS` variables.
+
 
 [w64devkit]: https://github.com/skeeto/w64devkit
 [Quilt]: https://savannah.nongnu.org/projects/quilt

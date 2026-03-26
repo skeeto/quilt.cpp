@@ -647,7 +647,7 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
     if (opt_reverse) cmd.push_back("-R");
     if (opt_force) cmd.push_back("-f");
     if (opt_quiet) cmd.push_back("-s");
-    auto extra_patch_opts = split_on_whitespace(get_env("QUILT_PATCH_OPTS"));
+    auto extra_patch_opts = shell_split(get_env("QUILT_PATCH_OPTS"));
     for (const auto &opt : extra_patch_opts) {
         cmd.push_back(opt);
     }

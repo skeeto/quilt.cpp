@@ -78,6 +78,11 @@ set(QUILT_TEST_SCENARIOS
     mail_no_mbox_error
     mail_no_patches
     mail_header_multiline
+    shell_split_single_quotes
+    shell_split_double_quotes
+    shell_split_var_expansion
+    shell_split_var_braces
+    shell_split_mixed
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -1354,6 +1359,112 @@ function(qt_scenario_mail_header_multiline)
     # (it's only in the Subject header)
 endfunction()
 
+# --- shell_split scenarios (quoting and variable expansion in QUILT_*_ARGS) ---
+
+function(qt_scenario_shell_split_single_quotes)
+    qt_begin_test("shell_split_single_quotes")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "a\n")
+    qt_quilt_ok(ARGS new f.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add file.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS header -r INPUT "Test\n" MESSAGE "header failed")
+    # Single quotes preserve spaces in a value
+    qt_quilt_ok(
+        ENV "QUILT_MAIL_ARGS=--from 'First Last <test@example.com>' --mbox ${QT_TEST_BASE}/sq.mbox"
+        ARGS mail
+        MESSAGE "mail with single-quoted QUILT_MAIL_ARGS failed"
+    )
+    qt_read_file_raw(mbox "${QT_TEST_BASE}/sq.mbox")
+    qt_assert_contains("${mbox}" "From: First Last <test@example.com>" "single-quoted from not preserved")
+endfunction()
+
+function(qt_scenario_shell_split_double_quotes)
+    qt_begin_test("shell_split_double_quotes")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "a\n")
+    qt_quilt_ok(ARGS new f.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add file.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS header -r INPUT "Test\n" MESSAGE "header failed")
+    # Double quotes preserve spaces — use quiltrc to avoid cmake -E chdir
+    # mangling literal " in env values. Outer single quotes in quiltrc pass
+    # inner " through literally for shell_split to process.
+    set(dq_mbox "${QT_TEST_BASE}/dq.mbox")
+    qt_write_file("${QT_TEST_BASE}/test_quiltrc_dq" "QUILT_MAIL_ARGS='--from \"First Last <test@example.com>\" --mbox ${dq_mbox}'\n")
+    qt_quilt_ok(
+        ARGS --quiltrc "${QT_TEST_BASE}/test_quiltrc_dq" mail
+        MESSAGE "mail with double-quoted QUILT_MAIL_ARGS failed"
+    )
+    qt_read_file_raw(mbox "${QT_TEST_BASE}/dq.mbox")
+    qt_assert_contains("${mbox}" "From: First Last <test@example.com>" "double-quoted from not preserved")
+endfunction()
+
+function(qt_scenario_shell_split_var_expansion)
+    qt_begin_test("shell_split_var_expansion")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "a\n")
+    qt_quilt_ok(ARGS new f.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add file.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS header -r INPUT "Test\n" MESSAGE "header failed")
+    # $VAR expansion (bare dollar, no braces — CMake doesn't expand this)
+    qt_quilt_ok(
+        ENV "QUILT_MAIL_ARGS=--from $TESTFROM --mbox ${QT_TEST_BASE}/var.mbox" "TESTFROM=someone@example.com"
+        ARGS mail
+        MESSAGE "mail with var expansion failed"
+    )
+    qt_read_file_raw(mbox "${QT_TEST_BASE}/var.mbox")
+    qt_assert_contains("${mbox}" "From: someone@example.com" "var expansion did not work")
+endfunction()
+
+function(qt_scenario_shell_split_var_braces)
+    qt_begin_test("shell_split_var_braces")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "a\n")
+    qt_quilt_ok(ARGS new f.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add file.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS header -r INPUT "Test\n" MESSAGE "header failed")
+    # Use quiltrc to pass literal ${VAR} references (CMake would expand them).
+    # Quiltrc outer single quotes preserve content literally; shell_split then
+    # expands $TESTNAME and $TESTEMAIL from the environment.
+    set(br_mbox "${QT_TEST_BASE}/brace.mbox")
+    # Write quiltrc with single-quoted value containing ${VAR} references.
+    # CMake doesn't expand ${ inside file(WRITE) if we build the string carefully.
+    string(CONCAT braced_val
+        "QUILT_MAIL_ARGS='--from \"$"
+        "{TESTNAME} <$"
+        "{TESTEMAIL}>\" --mbox ${br_mbox}'\n")
+    qt_write_file("${QT_TEST_BASE}/test_quiltrc_br" "${braced_val}")
+    qt_quilt_ok(
+        ENV "TESTNAME=Jane Doe" "TESTEMAIL=jane@example.com"
+        ARGS --quiltrc "${QT_TEST_BASE}/test_quiltrc_br" mail
+        MESSAGE "mail with braced var expansion failed"
+    )
+    qt_read_file_raw(mbox "${QT_TEST_BASE}/brace.mbox")
+    qt_assert_contains("${mbox}" "From: Jane Doe <jane@example.com>" "braced var expansion did not work")
+endfunction()
+
+function(qt_scenario_shell_split_mixed)
+    qt_begin_test("shell_split_mixed")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "a\n")
+    qt_quilt_ok(ARGS new f.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add file.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS header -r INPUT "Test\n" MESSAGE "header failed")
+    # Adjacent quoted/unquoted segments merge into one token:
+    # --from 'Mix User <'$MIXEMAIL'>' becomes --from "Mix User <mix@example.com>"
+    qt_quilt_ok(
+        ENV "QUILT_MAIL_ARGS=--mbox ${QT_TEST_BASE}/mix.mbox --from 'Mix User <'$MIXEMAIL'>'" "MIXEMAIL=mix@example.com"
+        ARGS mail
+        MESSAGE "mail with mixed quoting failed"
+    )
+    qt_read_file_raw(mbox "${QT_TEST_BASE}/mix.mbox")
+    qt_assert_contains("${mbox}" "From: Mix User <mix@example.com>" "mixed quoting did not merge correctly")
+endfunction()
+
 function(qt_run_named_scenario scenario)
     if(scenario STREQUAL "basic_workflow")
         qt_scenario_basic_workflow()
@@ -1509,6 +1620,16 @@ function(qt_run_named_scenario scenario)
         qt_scenario_mail_no_patches()
     elseif(scenario STREQUAL "mail_header_multiline")
         qt_scenario_mail_header_multiline()
+    elseif(scenario STREQUAL "shell_split_single_quotes")
+        qt_scenario_shell_split_single_quotes()
+    elseif(scenario STREQUAL "shell_split_double_quotes")
+        qt_scenario_shell_split_double_quotes()
+    elseif(scenario STREQUAL "shell_split_var_expansion")
+        qt_scenario_shell_split_var_expansion()
+    elseif(scenario STREQUAL "shell_split_var_braces")
+        qt_scenario_shell_split_var_braces()
+    elseif(scenario STREQUAL "shell_split_mixed")
+        qt_scenario_shell_split_mixed()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()

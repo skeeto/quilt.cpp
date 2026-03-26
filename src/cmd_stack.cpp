@@ -306,7 +306,7 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
     if (!ensure_pc_dir(q)) return 1;
 
     // Read QUILT_PATCH_OPTS
-    auto extra_patch_opts = split_on_whitespace(get_env("QUILT_PATCH_OPTS"));
+    auto extra_patch_opts = shell_split(get_env("QUILT_PATCH_OPTS"));
 
     std::string last_applied;
     for (int i = start_idx; i <= end_idx; ++i) {

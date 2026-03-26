@@ -51,6 +51,7 @@ std::vector<std::string> split_lines(std::string_view s);
 bool starts_with(std::string_view s, std::string_view prefix);
 bool ends_with(std::string_view s, std::string_view suffix);
 std::vector<std::string> split_on_whitespace(std::string_view s);
+std::vector<std::string> shell_split(std::string_view s);
 
 // Command function type
 using CmdFn = int (*)(QuiltState &q, int argc, char **argv);

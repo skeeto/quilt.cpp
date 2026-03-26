@@ -136,6 +136,89 @@ std::vector<std::string> split_on_whitespace(std::string_view s) {
     return tokens;
 }
 
+static bool is_varname_start(char c) {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
+}
+
+static bool is_varname_char(char c) {
+    return is_varname_start(c) || (c >= '0' && c <= '9');
+}
+
+static std::string expand_var(std::string_view s, size_t &i) {
+    // i points just past '$'
+    std::string name;
+    if (i < s.size() && s[i] == '{') {
+        ++i; // skip '{'
+        while (i < s.size() && s[i] != '}') {
+            name += s[i++];
+        }
+        if (i < s.size()) ++i; // skip '}'
+    } else {
+        while (i < s.size() && is_varname_char(s[i])) {
+            name += s[i++];
+        }
+    }
+    if (name.empty()) return "$";
+    return get_env(name);
+}
+
+std::vector<std::string> shell_split(std::string_view s) {
+    std::vector<std::string> tokens;
+    size_t i = 0;
+    while (i < s.size()) {
+        // Skip whitespace between tokens
+        while (i < s.size() && (s[i] == ' ' || s[i] == '\t'))
+            ++i;
+        if (i >= s.size()) break;
+
+        std::string tok;
+        // Accumulate segments until unquoted whitespace
+        while (i < s.size() && s[i] != ' ' && s[i] != '\t') {
+            if (s[i] == '\'') {
+                // Single-quoted: literal, no escapes, no variable expansion
+                ++i;
+                while (i < s.size() && s[i] != '\'')
+                    tok += s[i++];
+                if (i < s.size()) ++i; // skip closing '
+            } else if (s[i] == '"') {
+                // Double-quoted: backslash escapes and variable expansion
+                ++i;
+                while (i < s.size() && s[i] != '"') {
+                    if (s[i] == '\\' && i + 1 < s.size()) {
+                        char next = s[i + 1];
+                        if (next == '"' || next == '\\' || next == '$') {
+                            tok += next;
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    if (s[i] == '$') {
+                        ++i;
+                        tok += expand_var(s, i);
+                        continue;
+                    }
+                    tok += s[i++];
+                }
+                if (i < s.size()) ++i; // skip closing "
+            } else if (s[i] == '$') {
+                // Unquoted variable expansion
+                ++i;
+                tok += expand_var(s, i);
+            } else if (s[i] == '\\' && i + 1 < s.size()) {
+                // Unquoted backslash escape
+                tok += s[i + 1];
+                i += 2;
+            } else {
+                tok += s[i++];
+            }
+        }
+        if (!tok.empty()) {
+            tokens.push_back(std::move(tok));
+        }
+    }
+    return tokens;
+}
+
 std::vector<std::string> read_series(std::string_view path,
                                      std::map<std::string, int> *strip_levels) {
     std::vector<std::string> patches;
@@ -653,7 +736,7 @@ int quilt_main(int argc, char **argv) {
     // --- Phase 5: Inject QUILT_COMMAND_ARGS ---
     std::string args_key = "QUILT_" + to_upper(found->name) + "_ARGS";
     std::string cmd_args = get_env(args_key);
-    auto extra_args = split_on_whitespace(cmd_args);
+    auto extra_args = shell_split(cmd_args);
 
     // Build the final argv for the command: [cmd_name, extra_args..., user_args...]
     // Command argv starts at clean_argv+1

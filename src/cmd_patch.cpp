@@ -348,7 +348,7 @@ static std::string generate_file_diff(const QuiltState &q, std::string_view patc
     std::vector<std::string> cmd_argv = {"diff", "-u"};
 
     // QUILT_DIFF_OPTS
-    auto extra_diff_opts = split_on_whitespace(get_env("QUILT_DIFF_OPTS"));
+    auto extra_diff_opts = shell_split(get_env("QUILT_DIFF_OPTS"));
     for (const auto &opt : extra_diff_opts) {
         cmd_argv.push_back(opt);
     }
@@ -760,7 +760,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
             }
 
             std::vector<std::string> diff_cmd = {"diff", "-u"};
-            auto extra_diff_opts = split_on_whitespace(get_env("QUILT_DIFF_OPTS"));
+            auto extra_diff_opts = shell_split(get_env("QUILT_DIFF_OPTS"));
             for (const auto &opt : extra_diff_opts) diff_cmd.push_back(opt);
             diff_cmd.push_back("--label");
             diff_cmd.push_back(old_label);
