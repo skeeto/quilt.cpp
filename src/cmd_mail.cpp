@@ -173,21 +173,13 @@ int cmd_mail(QuiltState &q, int argc, char **argv) {
         } else if (arg == "--bcc" && i + 1 < argc) {
             bcc_addrs.emplace_back(argv[++i]);
         } else if (arg == "--subject" && i + 1 < argc) {
-            ++i; // consume the argument
-            err_line("quilt mail: --subject is not supported (no cover letter)");
-            return 1;
+            ++i; // consume and ignore (cover letter not generated)
         } else if (arg == "-m" && i + 1 < argc) {
-            ++i;
-            err_line("quilt mail: -m is not supported (no cover letter)");
-            return 1;
+            ++i; // consume and ignore (cover letter not generated)
         } else if (arg == "-M" && i + 1 < argc) {
-            ++i;
-            err_line("quilt mail: -M is not supported (no cover letter)");
-            return 1;
+            ++i; // consume and ignore (cover letter not generated)
         } else if (arg == "--reply-to" && i + 1 < argc) {
-            ++i;
-            err_line("quilt mail: --reply-to is not supported (no cover letter)");
-            return 1;
+            ++i; // consume and ignore (cover letter not generated)
         } else if (arg == "--charset" && i + 1 < argc) {
             ++i; // consume and ignore
         } else if (arg == "--signature" && i + 1 < argc) {

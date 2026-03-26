@@ -73,7 +73,12 @@ else()
     set(quilt_test_requires_fixture FALSE)
 endif()
 
-foreach(scenario IN LISTS QUILT_TEST_SCENARIOS)
+set(all_scenarios ${QUILT_TEST_SCENARIOS})
+if(QUILT_TEST_EXECUTABLE STREQUAL "")
+    list(APPEND all_scenarios ${QUILT_TEST_SCENARIOS_NATIVE})
+endif()
+
+foreach(scenario IN LISTS all_scenarios)
     add_test(
         NAME quilt_${scenario}
         COMMAND ${CMAKE_COMMAND}

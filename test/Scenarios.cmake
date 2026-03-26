@@ -67,6 +67,16 @@ set(QUILT_TEST_SCENARIOS
     quilt_no_diff_index
     quilt_patches_prefix
     quiltrc_quoted_values
+    shell_split_single_quotes
+    shell_split_double_quotes
+    shell_split_var_expansion
+    shell_split_var_braces
+    shell_split_mixed
+)
+
+# Scenarios that test quilt.cpp-specific behavior (mail command format).
+# Skipped when testing an external quilt binary.
+set(QUILT_TEST_SCENARIOS_NATIVE
     mail_basic
     mail_single_patch
     mail_patch_range
@@ -78,11 +88,6 @@ set(QUILT_TEST_SCENARIOS
     mail_no_mbox_error
     mail_no_patches
     mail_header_multiline
-    shell_split_single_quotes
-    shell_split_double_quotes
-    shell_split_var_expansion
-    shell_split_var_braces
-    shell_split_mixed
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -1361,6 +1366,11 @@ endfunction()
 
 # --- shell_split scenarios (quoting and variable expansion in QUILT_*_ARGS) ---
 
+# Each shell_split test uses quilt mail as the vehicle.  To work against both
+# quilt.cpp and the original quilt we pass --sender (required by original),
+# -m intro (skips the cover-letter editor), and EDITOR=true as a safety net.
+# Assertions check only the From: header, which both implementations produce.
+
 function(qt_scenario_shell_split_single_quotes)
     qt_begin_test("shell_split_single_quotes")
     qt_write_file("${QT_WORK_DIR}/file.txt" "a\n")
@@ -1369,9 +1379,9 @@ function(qt_scenario_shell_split_single_quotes)
     qt_write_file("${QT_WORK_DIR}/file.txt" "b\n")
     qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
     qt_quilt_ok(ARGS header -r INPUT "Test\n" MESSAGE "header failed")
-    # Single quotes preserve spaces in a value
+    # Single quotes preserve spaces in --from value
     qt_quilt_ok(
-        ENV "QUILT_MAIL_ARGS=--from 'First Last <test@example.com>' --mbox ${QT_TEST_BASE}/sq.mbox"
+        ENV "QUILT_MAIL_ARGS=--sender test@example.com --from 'First Last <test@example.com>' --subject test -m intro --mbox ${QT_TEST_BASE}/sq.mbox" "EDITOR=true"
         ARGS mail
         MESSAGE "mail with single-quoted QUILT_MAIL_ARGS failed"
     )
@@ -1388,11 +1398,12 @@ function(qt_scenario_shell_split_double_quotes)
     qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
     qt_quilt_ok(ARGS header -r INPUT "Test\n" MESSAGE "header failed")
     # Double quotes preserve spaces — use quiltrc to avoid cmake -E chdir
-    # mangling literal " in env values. Outer single quotes in quiltrc pass
-    # inner " through literally for shell_split to process.
+    # mangling literal " in env values.  Original quilt eval's the value,
+    # so the inner double quotes work the same way.
     set(dq_mbox "${QT_TEST_BASE}/dq.mbox")
-    qt_write_file("${QT_TEST_BASE}/test_quiltrc_dq" "QUILT_MAIL_ARGS='--from \"First Last <test@example.com>\" --mbox ${dq_mbox}'\n")
+    qt_write_file("${QT_TEST_BASE}/test_quiltrc_dq" "QUILT_MAIL_ARGS='--sender test@example.com --from \"First Last <test@example.com>\" --subject test -m intro --mbox ${dq_mbox}'\n")
     qt_quilt_ok(
+        ENV "EDITOR=true"
         ARGS --quiltrc "${QT_TEST_BASE}/test_quiltrc_dq" mail
         MESSAGE "mail with double-quoted QUILT_MAIL_ARGS failed"
     )
@@ -1410,7 +1421,7 @@ function(qt_scenario_shell_split_var_expansion)
     qt_quilt_ok(ARGS header -r INPUT "Test\n" MESSAGE "header failed")
     # $VAR expansion (bare dollar, no braces — CMake doesn't expand this)
     qt_quilt_ok(
-        ENV "QUILT_MAIL_ARGS=--from $TESTFROM --mbox ${QT_TEST_BASE}/var.mbox" "TESTFROM=someone@example.com"
+        ENV "QUILT_MAIL_ARGS=--sender test@example.com --from $TESTFROM --subject test -m intro --mbox ${QT_TEST_BASE}/var.mbox" "TESTFROM=someone@example.com" "EDITOR=true"
         ARGS mail
         MESSAGE "mail with var expansion failed"
     )
@@ -1427,18 +1438,16 @@ function(qt_scenario_shell_split_var_braces)
     qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
     qt_quilt_ok(ARGS header -r INPUT "Test\n" MESSAGE "header failed")
     # Use quiltrc to pass literal ${VAR} references (CMake would expand them).
-    # Quiltrc outer single quotes preserve content literally; shell_split then
-    # expands $TESTNAME and $TESTEMAIL from the environment.
+    # Quiltrc outer single quotes preserve content literally; both quilt.cpp's
+    # shell_split and the original quilt's eval expand the env vars.
     set(br_mbox "${QT_TEST_BASE}/brace.mbox")
-    # Write quiltrc with single-quoted value containing ${VAR} references.
-    # CMake doesn't expand ${ inside file(WRITE) if we build the string carefully.
     string(CONCAT braced_val
-        "QUILT_MAIL_ARGS='--from \"$"
+        "QUILT_MAIL_ARGS='--sender test@example.com --from \"$"
         "{TESTNAME} <$"
-        "{TESTEMAIL}>\" --mbox ${br_mbox}'\n")
+        "{TESTEMAIL}>\" --subject test -m intro --mbox ${br_mbox}'\n")
     qt_write_file("${QT_TEST_BASE}/test_quiltrc_br" "${braced_val}")
     qt_quilt_ok(
-        ENV "TESTNAME=Jane Doe" "TESTEMAIL=jane@example.com"
+        ENV "TESTNAME=Jane Doe" "TESTEMAIL=jane@example.com" "EDITOR=true"
         ARGS --quiltrc "${QT_TEST_BASE}/test_quiltrc_br" mail
         MESSAGE "mail with braced var expansion failed"
     )
@@ -1455,9 +1464,9 @@ function(qt_scenario_shell_split_mixed)
     qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
     qt_quilt_ok(ARGS header -r INPUT "Test\n" MESSAGE "header failed")
     # Adjacent quoted/unquoted segments merge into one token:
-    # --from 'Mix User <'$MIXEMAIL'>' becomes --from "Mix User <mix@example.com>"
+    # 'Mix User <'$MIXEMAIL'>' becomes "Mix User <mix@example.com>"
     qt_quilt_ok(
-        ENV "QUILT_MAIL_ARGS=--mbox ${QT_TEST_BASE}/mix.mbox --from 'Mix User <'$MIXEMAIL'>'" "MIXEMAIL=mix@example.com"
+        ENV "QUILT_MAIL_ARGS=--sender test@example.com --mbox ${QT_TEST_BASE}/mix.mbox --subject test -m intro --from 'Mix User <'$MIXEMAIL'>'" "MIXEMAIL=mix@example.com" "EDITOR=true"
         ARGS mail
         MESSAGE "mail with mixed quoting failed"
     )

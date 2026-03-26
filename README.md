@@ -61,8 +61,8 @@ Specific differences:
   error. If you need to send, pipe the mbox through your MTA.
 * **No cover letter**: The original always prepends a message numbered
   0/N. Since `git am` treats this as a real (empty) commit, it is omitted
-  entirely. The options that existed to populate the cover letter (`-m`,
-  `-M`, `--subject`, `--reply-to`) are rejected.
+  entirely. The cover-letter options (`-m`, `-M`, `--subject`,
+  `--reply-to`) are accepted but silently ignored for compatibility.
 * **`--from` or `--sender` required**: The original falls back to the
   system's local email address. This implementation requires an explicit
   address to ensure the resulting commits have correct authorship.
