@@ -46,6 +46,7 @@ add_custom_command(
     COMMAND sh ${CMAKE_SOURCE_DIR}/cmake/make_amalgam.sh
             ${CMAKE_SOURCE_DIR}
             ${CMAKE_BINARY_DIR}/quilt.cpp
+            ${AMALGAM_SOURCES}
     DEPENDS ${AMALGAM_SOURCES} cmake/make_amalgam.sh
     COMMENT "Generating quilt.cpp amalgamation"
     VERBATIM
