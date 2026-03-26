@@ -87,8 +87,9 @@ All internal strings are UTF-8. The type aliases `Str` and `StrView` (defined in
 - `core.cpp` — `QuiltState` methods, string/path utilities, series/applied-patches file I/O, backup/restore file helpers, `quilt_main()` entry point with command dispatch table.
 - `cmd_stack.cpp` — stack navigation and push/pop: series, applied, unapplied, top, next, previous, push, pop.
 - `cmd_patch.cpp` — patch content commands: new, add, remove, edit, refresh, diff, revert.
-- `cmd_manage.cpp` — patch management: delete, rename, import, header, files, patches, fold, fork.
-- `cmd_stubs.cpp` — unimplemented commands that return "not yet implemented": annotate, grep, graph, guard, mail, setup, shell, snapshot, upgrade, init.
+- `cmd_manage.cpp` — patch management: delete, rename, import, header, files, patches, fold, fork, upgrade.
+- `cmd_mail.cpp` — mbox generation for emailing patches (`quilt mail`).
+- `cmd_stubs.cpp` — unimplemented commands that return "not yet implemented": annotate, grep, graph, setup, shell, snapshot, init.
 - `platform_posix.cpp` — POSIX implementation (fork/exec, POSIX file I/O). Contains `main()`.
 - `platform_win32.cpp` — Win32 implementation (`CreateProcess`, wide-char APIs, UTF-16 conversion). Contains `wmain()`.
 
@@ -101,3 +102,13 @@ All internal strings are UTF-8. The type aliases `Str` and `StrView` (defined in
 - **Command signature**: Every command is `int cmd_*(QuiltState &q, int argc, char **argv)` where `argv[0]` is the command name. Commands do their own option parsing with simple loops.
 - **Patch names are bare**: Display output uses bare patch names (e.g., `flower.diff`), never prefixed with the patches directory. The `patches/` path is only used internally for file I/O.
 - **Strip-level-aware path parsing**: `parse_patch_files()` strips N leading path components from `+++` lines to match what `patch -pN` does. This ensures backup paths in `.pc/` match the actual filenames.
+- **Shell-like splitting for env vars**: `shell_split()` in `core.cpp` handles `QUILT_*_ARGS` and `QUILT_*_OPTS` variables with single quotes, double quotes (with `\"`, `\\`, `\$` escapes), `$VAR`/`${VAR}` expansion, and adjacent segment merging. Used instead of `split_on_whitespace` at all env-var call sites. `split_on_whitespace` is still used for series file parsing.
+- **Amalgamation source list**: `cmake/make_amalgam.sh` receives its source file list from CMake's `AMALGAM_SOURCES` variable via arguments — no redundant list in the script. When adding a new source file, only update `CMakeLists.txt`.
+
+## Design decisions
+
+- **`quilt mail` diverges from original intentionally**: Output targets `git am`, not mailing lists. No `--send`, no cover letter, `--from`/`--sender` required. Cover-letter options (`-m`, `-M`, `--subject`, `--reply-to`) are accepted but silently ignored for compatibility with the original quilt's option set. See README.md "Differences from Quilt" for full details.
+- **`quilt upgrade` is a no-op**: Only the version 2 `.pc/` format is supported. The command succeeds silently.
+- **Commands that are implemented move out of `cmd_stubs.cpp`**: Stubs are only for truly unimplemented commands. Once a command has real behavior (even trivial like `upgrade`), it belongs in the appropriate `cmd_*.cpp` file.
+- **Tests must not depend on user environment**: The test harness (`test/TestHarness.cmake`) sets `HOME` to a per-test temp directory on every invocation, preventing `~/.quiltrc` from interfering. Tests that need a quiltrc create one explicitly.
+- **Tests should pass against both quilt.cpp and original quilt where possible**: Scenarios in `QUILT_TEST_SCENARIOS` run against both. Scenarios in `QUILT_TEST_SCENARIOS_NATIVE` (like `mail_*`) only run against quilt.cpp. When writing tests for shared scenarios, use options both implementations accept.
