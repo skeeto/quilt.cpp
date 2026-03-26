@@ -602,7 +602,7 @@ static Command commands[] = {
     {"push",       cmd_push,       "Usage: quilt push [-a] [-f] [-q] [patch]"},
     {"pop",        cmd_pop,        "Usage: quilt pop [-a] [-f] [-q] [patch]"},
     {"refresh",    cmd_refresh,    "Usage: quilt refresh [-p n] [-f] [patch]"},
-    {"diff",       cmd_diff,       "Usage: quilt diff [-p n] [-z] [patch]"},
+    {"diff",       cmd_diff,       "Usage: quilt diff [-p n] [-z] [--snapshot] [patch]"},
     {"series",     cmd_series,     "Usage: quilt series [-v]"},
     {"applied",    cmd_applied,    "Usage: quilt applied [patch]"},
     {"unapplied",  cmd_unapplied,  "Usage: quilt unapplied [patch]"},

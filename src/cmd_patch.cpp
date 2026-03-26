@@ -284,39 +284,30 @@ int cmd_edit(QuiltState &q, int argc, char **argv) {
     return run_cmd_tty(cmd_argv);
 }
 
+static constexpr std::string_view SNAPSHOT_PATCH = ".snap";
+
+static bool is_placeholder_copy(std::string_view path)
+{
+    return file_exists(path) && read_file(path).empty();
+}
+
 // p_format: "ab" for a/b labels, "0" for bare filenames, "1" (default) for dir.orig/dir
-static std::string generate_file_diff(const QuiltState &q, std::string_view patch,
+static std::string generate_path_diff(const QuiltState &q,
                                       std::string_view file,
+                                      std::string_view old_path,
+                                      bool old_placeholder,
+                                      std::string_view new_path,
+                                      bool new_placeholder,
                                       std::string_view p_format = "1",
                                       bool reverse = false) {
-    std::string backup_path = path_join(pc_patch_dir(q, patch), file);
-    std::string working_path = path_join(q.work_dir, file);
+    bool old_missing = old_path.empty() || !file_exists(old_path) ||
+        (old_placeholder && is_placeholder_copy(old_path));
+    bool new_missing = new_path.empty() || !file_exists(new_path) ||
+        (new_placeholder && is_placeholder_copy(new_path));
 
-    std::string old_path;
-    std::string new_path;
-    bool backup_empty = false;
+    std::string old_arg = old_missing ? "/dev/null" : std::string(old_path);
+    std::string new_arg = new_missing ? "/dev/null" : std::string(new_path);
 
-    // Check if backup is an empty placeholder (file was new)
-    if (file_exists(backup_path)) {
-        std::string content = read_file(backup_path);
-        if (content.empty()) {
-            backup_empty = true;
-        }
-    }
-
-    if (backup_empty) {
-        old_path = "/dev/null";
-    } else {
-        old_path = backup_path;
-    }
-
-    if (!file_exists(working_path)) {
-        new_path = "/dev/null";
-    } else {
-        new_path = working_path;
-    }
-
-    // Build label arguments based on -p format
     std::string old_label;
     std::string new_label;
     if (p_format == "ab") {
@@ -326,28 +317,24 @@ static std::string generate_file_diff(const QuiltState &q, std::string_view patc
         old_label = std::string(file);
         new_label = std::string(file);
     } else {
-        // Default -p1: dir.orig/file and dir/file
         std::string work_base = basename(q.work_dir);
         old_label = work_base + ".orig/" + std::string(file);
         new_label = work_base + "/" + std::string(file);
     }
 
-    if (backup_empty) {
+    if (old_missing) {
         old_label = "/dev/null";
     }
-    if (!file_exists(working_path)) {
+    if (new_missing) {
         new_label = "/dev/null";
     }
 
-    // Swap for reverse diff
     if (reverse) {
-        std::swap(old_path, new_path);
+        std::swap(old_arg, new_arg);
         std::swap(old_label, new_label);
     }
 
     std::vector<std::string> cmd_argv = {"diff", "-u"};
-
-    // QUILT_DIFF_OPTS
     auto extra_diff_opts = shell_split(get_env("QUILT_DIFF_OPTS"));
     for (const auto &opt : extra_diff_opts) {
         cmd_argv.push_back(opt);
@@ -357,17 +344,26 @@ static std::string generate_file_diff(const QuiltState &q, std::string_view patc
     cmd_argv.push_back(old_label);
     cmd_argv.push_back("--label");
     cmd_argv.push_back(new_label);
-    cmd_argv.push_back(old_path);
-    cmd_argv.push_back(new_path);
+    cmd_argv.push_back(old_arg);
+    cmd_argv.push_back(new_arg);
 
     ProcessResult result = run_cmd(cmd_argv);
-    // diff returns 0 (no diff), 1 (differences), 2 (trouble)
     if (result.exit_code == 2) {
         err_line("diff failed for " + std::string(file));
         return "";
     }
 
     return result.out;
+}
+
+static std::string generate_file_diff(const QuiltState &q, std::string_view patch,
+                                      std::string_view file,
+                                      std::string_view p_format = "1",
+                                      bool reverse = false) {
+    std::string backup_path = path_join(pc_patch_dir(q, patch), file);
+    std::string working_path = path_join(q.work_dir, file);
+    return generate_path_diff(q, file, backup_path, true, working_path, false,
+                              p_format, reverse);
 }
 
 static std::map<std::string, std::string> split_patch_by_file(std::string_view content) {
@@ -417,6 +413,133 @@ static std::map<std::string, std::string> split_patch_by_file(std::string_view c
     }
     flush();
     return sections;
+}
+
+static void append_unique_files(std::vector<std::string> &dst,
+                                std::set<std::string> &seen,
+                                const std::vector<std::string> &src) {
+    for (const auto &file : src) {
+        if (seen.insert(file).second) {
+            dst.push_back(file);
+        }
+    }
+}
+
+static std::vector<std::string> collect_files_for_patches(
+    const QuiltState &q, const std::vector<std::string> &patches) {
+    std::vector<std::string> files;
+    std::set<std::string> seen;
+    for (const auto &patch : patches) {
+        append_unique_files(files, seen, files_in_patch(q, patch));
+    }
+    return files;
+}
+
+static std::vector<std::string> patch_range_for_diff(const QuiltState &q,
+                                                     std::string_view last_patch) {
+    if (last_patch.empty()) {
+        return q.applied;
+    }
+
+    std::vector<std::string> patches;
+    for (const auto &patch : q.applied) {
+        patches.push_back(patch);
+        if (patch == last_patch) {
+            return patches;
+        }
+    }
+
+    return {std::string(last_patch)};
+}
+
+static std::string first_patch_for_file(const QuiltState &q,
+                                        const std::vector<std::string> &patches,
+                                        std::string_view file) {
+    for (const auto &patch : patches) {
+        auto tracked = files_in_patch(q, patch);
+        if (std::find(tracked.begin(), tracked.end(), file) != tracked.end()) {
+            return patch;
+        }
+    }
+    return "";
+}
+
+static std::string next_patch_for_file(const QuiltState &q,
+                                       std::string_view patch,
+                                       std::string_view file) {
+    bool after_target = false;
+    for (const auto &applied : q.applied) {
+        if (after_target) {
+            auto tracked = files_in_patch(q, applied);
+            if (std::find(tracked.begin(), tracked.end(), file) != tracked.end()) {
+                return applied;
+            }
+        }
+        if (applied == patch) {
+            after_target = true;
+        }
+    }
+    return "";
+}
+
+static void apply_file_filter(std::vector<std::string> &tracked,
+                              const std::vector<std::string> &file_filter) {
+    if (file_filter.empty()) {
+        return;
+    }
+
+    std::vector<std::string> filtered;
+    for (const auto &tracked_file : tracked) {
+        for (const auto &wanted_file : file_filter) {
+            if (tracked_file == wanted_file) {
+                filtered.push_back(tracked_file);
+                break;
+            }
+        }
+    }
+    tracked = std::move(filtered);
+}
+
+int cmd_snapshot(QuiltState &q, int argc, char **argv) {
+    bool remove_snapshot = false;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string_view arg = argv[i];
+        if (arg == "-d") {
+            remove_snapshot = true;
+            continue;
+        }
+        err_line("Usage: quilt snapshot [-d]");
+        return 1;
+    }
+
+    std::string snap_dir = pc_patch_dir(q, SNAPSHOT_PATCH);
+    if (is_directory(snap_dir) && !delete_dir_recursive(snap_dir)) {
+        err_line("Failed to remove " + snap_dir);
+        return 1;
+    }
+
+    if (remove_snapshot) {
+        return 0;
+    }
+
+    if (!ensure_pc_dir(q)) {
+        return 1;
+    }
+    if (!make_dirs(snap_dir)) {
+        err_line("Failed to create " + snap_dir);
+        return 1;
+    }
+
+    auto tracked = collect_files_for_patches(q, q.applied);
+    for (const auto &file : tracked) {
+        if (!backup_file(q, SNAPSHOT_PATCH, file)) {
+            err_line("Failed to snapshot " + file);
+            return 1;
+        }
+    }
+
+    return 0;
 }
 
 int cmd_refresh(QuiltState &q, int argc, char **argv) {
@@ -583,6 +706,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
     bool no_timestamps = !get_env("QUILT_NO_DIFF_TIMESTAMPS").empty();
     bool no_index = !get_env("QUILT_NO_DIFF_INDEX").empty();
     bool since_refresh = false;
+    bool against_snapshot = false;
     bool reverse = false;
     (void)no_timestamps;
     int i = 1;
@@ -610,6 +734,11 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
         }
         if (arg == "-z") {
             since_refresh = true;
+            i += 1;
+            continue;
+        }
+        if (arg == "--snapshot") {
+            against_snapshot = true;
             i += 1;
             continue;
         }
@@ -647,22 +776,28 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
         patch = q.applied.back();
     }
 
-    // Get files tracked by this patch
-    auto tracked = files_in_patch(q, patch);
-
-    // If file filter given, restrict to those files
-    if (!file_filter.empty()) {
-        std::vector<std::string> filtered;
-        for (const auto &t : tracked) {
-            for (const auto &f : file_filter) {
-                if (t == f) {
-                    filtered.push_back(t);
-                    break;
-                }
-            }
-        }
-        tracked = std::move(filtered);
+    if (since_refresh && against_snapshot) {
+        err_line("Options `--snapshot' and `-z' cannot be combined.");
+        return 1;
     }
+
+    auto patches = patch_range_for_diff(q, patch);
+    std::vector<std::string> tracked;
+    if (against_snapshot) {
+        std::string snap_dir = pc_patch_dir(q, SNAPSHOT_PATCH);
+        if (!is_directory(snap_dir)) {
+            err_line("No snapshot to diff against");
+            return 1;
+        }
+
+        std::set<std::string> seen;
+        append_unique_files(tracked, seen, files_in_patch(q, SNAPSHOT_PATCH));
+        append_unique_files(tracked, seen, collect_files_for_patches(q, patches));
+    } else {
+        tracked = files_in_patch(q, patch);
+    }
+
+    apply_file_filter(tracked, file_filter);
 
     std::string work_base = basename(q.work_dir);
 
@@ -780,6 +915,37 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
         }
 
         delete_dir_recursive(tmp_dir);
+    } else if (against_snapshot) {
+        for (const auto &file : tracked) {
+            std::string old_path = path_join(pc_patch_dir(q, SNAPSHOT_PATCH), file);
+            bool old_placeholder = true;
+            if (!file_exists(old_path)) {
+                std::string first_patch = first_patch_for_file(q, patches, file);
+                if (first_patch.empty()) {
+                    continue;
+                }
+                old_path = path_join(pc_patch_dir(q, first_patch), file);
+            }
+
+            std::string new_path = path_join(q.work_dir, file);
+            bool new_placeholder = false;
+            std::string shadowing_patch = next_patch_for_file(q, patch, file);
+            if (!shadowing_patch.empty()) {
+                new_path = path_join(pc_patch_dir(q, shadowing_patch), file);
+                new_placeholder = true;
+            }
+
+            std::string diff_out = generate_path_diff(
+                q, file, old_path, old_placeholder, new_path, new_placeholder,
+                p_format, reverse);
+            if (!diff_out.empty()) {
+                if (!no_index) {
+                    out("Index: " + work_base + "/" + file + "\n");
+                    out("===================================================================\n");
+                }
+                out(diff_out);
+            }
+        }
     } else {
         for (const auto &file : tracked) {
             std::string diff_out = generate_file_diff(q, patch, file, p_format, reverse);
