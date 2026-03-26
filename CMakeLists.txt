@@ -30,7 +30,6 @@ target_compile_options(quilt PRIVATE
 )
 
 if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    target_link_options(quilt PRIVATE -municode)
     target_link_libraries(quilt PRIVATE shell32)
 endif()
 

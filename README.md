@@ -23,7 +23,7 @@ Windows amalgamation source, `quilt.cpp`, for easy distribution:
 
 Then with `g++` or `clang++`:
 
-    $ c++ -std=c++17 -municode -o quilt.exe quilt.cpp -lshell32
+    $ c++ -std=c++17 -o quilt.exe quilt.cpp -lshell32
 
 Or with `cl` or `clang-cl`:
 

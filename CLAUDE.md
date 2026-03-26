@@ -46,10 +46,10 @@ amalgamation of all sources using `platform_win32.cpp`. Compile it standalone wi
 
 ```bash
 # Cross-compile to Windows (mingw-w64)
-x86_64-w64-mingw32-g++ -std=c++17 -o quilt.exe quilt.cpp -static -lshell32 -municode
+x86_64-w64-mingw32-g++ -std=c++17 -o quilt.exe quilt.cpp -static -lshell32
 
 # Native Windows g++
-g++ -std=c++17 -o quilt.exe quilt.cpp -lshell32 -municode
+g++ -std=c++17 -o quilt.exe quilt.cpp -lshell32
 ```
 
 Regenerate: `cmake --build build --target amalgam` (not built by default).
@@ -91,7 +91,7 @@ All internal strings are UTF-8. The type aliases `Str` and `StrView` (defined in
 - `cmd_mail.cpp` — mbox generation for emailing patches (`quilt mail`).
 - `cmd_stubs.cpp` — unimplemented commands that return "not yet implemented": annotate, grep, graph, setup, shell, snapshot, init.
 - `platform_posix.cpp` — POSIX implementation (fork/exec, POSIX file I/O). Contains `main()`.
-- `platform_win32.cpp` — Win32 implementation (`CreateProcess`, wide-char APIs, UTF-16 conversion). Contains `wmain()`.
+- `platform_win32.cpp` — Win32 implementation (`CreateProcess`, wide-char APIs, UTF-16 conversion). Contains `main()`.
 
 ### Key design patterns
 

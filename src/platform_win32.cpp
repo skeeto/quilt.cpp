@@ -1,7 +1,7 @@
 // This is free and unencumbered software released into the public domain.
 //
 // Win32 platform implementation for quilt.
-// Provides wmain entry point, UTF-16 <-> UTF-8 conversion at system
+// Provides main entry point, UTF-16 <-> UTF-8 conversion at system
 // boundaries, and Win32 implementations of the platform interface.
 //
 // This file is compiled only on Windows.  POSIX builds use
@@ -593,7 +593,7 @@ std::string read_stdin()
     return read_handle(h);
 }
 
-int wmain(int, wchar_t **)
+int main(int, char **)
 {
     // Use GetCommandLineW + CommandLineToArgvW for reliable parsing
     int argc = 0;
