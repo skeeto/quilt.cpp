@@ -12,6 +12,5 @@ static int not_implemented(const char *name)
 
 int cmd_annotate(QuiltState &, int, char **) { return not_implemented("annotate"); }
 int cmd_grep(QuiltState &, int, char **)     { return not_implemented("grep"); }
-int cmd_graph(QuiltState &, int, char **)    { return not_implemented("graph"); }
 int cmd_setup(QuiltState &, int, char **)    { return not_implemented("setup"); }
 int cmd_shell(QuiltState &, int, char **)    { return not_implemented("shell"); }

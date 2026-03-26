@@ -623,7 +623,7 @@ static Command commands[] = {
     // Stubs
     {"annotate",   cmd_annotate,   "Usage: quilt annotate [-P patch] file"},
     {"grep",       cmd_grep,       "Usage: quilt grep [-h|options] pattern"},
-    {"graph",      cmd_graph,      "Usage: quilt graph [--lines file]"},
+    {"graph",      cmd_graph,      "Usage: quilt graph [--all] [--reduce] [--lines[=num]] [--edge-labels=files] [-T ps] [patch]"},
     {"mail",       cmd_mail,       "Usage: quilt mail {--mbox file} [--prefix prefix] [--sender ...] [--from ...] [--to ...] [--cc ...] [--bcc ...] [first_patch [last_patch]]"},
     {"setup",      cmd_setup,      "Usage: quilt setup [-d path] series"},
     {"shell",      cmd_shell,      "Usage: quilt shell [command]"},

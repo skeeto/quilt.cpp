@@ -10,6 +10,7 @@ set(CORE_SOURCES
     src/cmd_stack.cpp
     src/cmd_patch.cpp
     src/cmd_manage.cpp
+    src/cmd_graph.cpp
     src/cmd_mail.cpp
     src/cmd_stubs.cpp
 )
@@ -38,7 +39,8 @@ endif()
 set(AMALGAM_SOURCES
     src/quilt.hpp src/platform.hpp
     src/core.cpp src/cmd_stack.cpp src/cmd_patch.cpp
-    src/cmd_manage.cpp src/cmd_mail.cpp src/cmd_stubs.cpp src/platform_win32.cpp
+    src/cmd_manage.cpp src/cmd_graph.cpp src/cmd_mail.cpp
+    src/cmd_stubs.cpp src/platform_win32.cpp
 )
 add_custom_command(
     OUTPUT ${CMAKE_BINARY_DIR}/quilt.cpp
