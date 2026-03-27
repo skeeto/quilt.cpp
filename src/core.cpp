@@ -621,16 +621,23 @@ static Command commands[] = {
      "Add files to the topmost patch"},
 
     {"push", cmd_push,
-     "Usage: quilt push [-a] [-f] [-q] [num|patch]\n"
+     "Usage: quilt push [-afqv] [--fuzz=N] [-m] [--merge[=merge|diff3]]\n"
+     "       [--leave-rejects] [--refresh] [num|patch]\n"
      "\n"
      "Apply the next unapplied patch from the series. Without arguments,\n"
      "applies one patch. With a patch name, applies patches up to and\n"
      "including it. With a number, applies that many patches.\n"
      "\n"
      "Options:\n"
-     "  -a          Apply all unapplied patches.\n"
-     "  -f          Force apply even when the patch has rejects.\n"
-     "  -q          Quiet; print only error messages.\n",
+     "  -a                      Apply all unapplied patches.\n"
+     "  -f                      Force apply even when the patch has rejects.\n"
+     "  -q                      Quiet; print only error messages.\n"
+     "  -v                      Verbose; pass --verbose to patch.\n"
+     "  --fuzz=N                Set the maximum fuzz factor for patch.\n"
+     "  -m, --merge[=merge|diff3]\n"
+     "                          Merge using patch's merge mode.\n"
+     "  --leave-rejects         Leave .rej files in the working tree.\n"
+     "  --refresh               Refresh each patch after applying.\n",
      "Apply patches to the source tree"},
 
     {"pop", cmd_pop,
