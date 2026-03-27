@@ -319,6 +319,14 @@ bool is_directory(std::string_view path)
     return S_ISDIR(st.st_mode);
 }
 
+time_t file_mtime(std::string_view path)
+{
+    std::string p = null_terminated(path);
+    struct stat st;
+    if (::stat(p.c_str(), &st) != 0) return static_cast<time_t>(-1);
+    return st.st_mtime;
+}
+
 std::vector<DirEntry> list_dir(std::string_view path)
 {
     std::vector<DirEntry> entries;

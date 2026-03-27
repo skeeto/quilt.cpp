@@ -273,7 +273,6 @@ int cmd_mail(QuiltState &q, int argc, char **argv) {
 
     ptrdiff_t total = last_idx - first_idx + 1;
     int width = num_width(to_int(total));
-    time_t base_time = std::time(nullptr);
 
     std::string mbox;
 
@@ -340,7 +339,10 @@ int cmd_mail(QuiltState &q, int argc, char **argv) {
             subject_header = "Subject: " + full_subject;
         }
 
-        time_t msg_time = base_time + (i - first_idx);
+        time_t msg_time = file_mtime(patch_file);
+        if (msg_time == static_cast<time_t>(-1)) {
+            msg_time = std::time(nullptr);
+        }
         int seq = to_int(i - first_idx + 1);
 
         // Build message

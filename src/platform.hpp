@@ -4,6 +4,7 @@
 #include <string_view>
 #include <vector>
 #include <cstdint>
+#include <ctime>
 
 // Process execution
 struct ProcessResult {
@@ -29,6 +30,7 @@ bool make_dir(std::string_view path);
 bool make_dirs(std::string_view path);
 bool file_exists(std::string_view path);
 bool is_directory(std::string_view path);
+time_t file_mtime(std::string_view path);  // (time_t)-1 on failure
 
 struct DirEntry {
     std::string name;

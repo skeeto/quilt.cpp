@@ -440,6 +440,18 @@ bool is_directory(std::string_view path)
     return (attr & FILE_ATTRIBUTE_DIRECTORY) != 0;
 }
 
+time_t file_mtime(std::string_view path)
+{
+    std::wstring wpath = utf8_to_wide(path);
+    WIN32_FILE_ATTRIBUTE_DATA data;
+    if (!GetFileAttributesExW(wpath.c_str(), GetFileExInfoStandard, &data))
+        return static_cast<time_t>(-1);
+    // FILETIME: 100-nanosecond intervals since 1601-01-01
+    uint64_t ft = (static_cast<uint64_t>(data.ftLastWriteTime.dwHighDateTime) << 32)
+                | data.ftLastWriteTime.dwLowDateTime;
+    return static_cast<time_t>((ft - 116444736000000000ULL) / 10000000ULL);
+}
+
 std::vector<DirEntry> list_dir(std::string_view path)
 {
     std::vector<DirEntry> entries;
