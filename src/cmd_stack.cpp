@@ -356,9 +356,6 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
         if (force) {
             patch_args.push_back("--force");
         }
-        if (verbose) {
-            patch_args.push_back("--verbose");
-        }
         if (fuzz >= 0) {
             patch_args.push_back("--fuzz=" + std::to_string(fuzz));
         }
@@ -373,9 +370,17 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
             patch_args.push_back(opt);
         }
 
+        // Print verbose file list ourselves instead of relying on
+        // patch --verbose, which is not available on busybox.
+        if (verbose && !quiet) {
+            for (const auto &file : affected) {
+                out_line("patching file " + file);
+            }
+        }
+
         ProcessResult result = run_cmd_input(patch_args, patch_content);
 
-        if (!quiet && !result.out.empty()) {
+        if (!quiet && !verbose && !result.out.empty()) {
             out(result.out);
         }
 

@@ -339,6 +339,90 @@ int cmd_edit(QuiltState &q, int argc, char **argv) {
     return run_cmd_tty(cmd_argv);
 }
 
+// Convert unified diff output to context diff format.  This allows
+// quilt to produce -c/-C output even when the external diff command
+// (e.g. busybox) only supports unified format.
+static std::string unified_to_context(std::string_view unified)
+{
+    auto lines = split_lines(unified);
+    std::string result;
+    ptrdiff_t n = std::ssize(lines);
+    ptrdiff_t i = 0;
+
+    // File headers: unified --- becomes context ***, unified +++ becomes context ---
+    while (i < n && !starts_with(lines[to_uz(i)], "--- ")) ++i;
+    if (i < n) { result += "*** " + lines[to_uz(i)].substr(4) + "\n"; ++i; }
+    if (i < n && starts_with(lines[to_uz(i)], "+++ ")) {
+        result += "--- " + lines[to_uz(i)].substr(4) + "\n"; ++i;
+    }
+
+    while (i < n) {
+        if (!starts_with(lines[to_uz(i)], "@@ ")) { ++i; continue; }
+
+        // Parse @@ -os[,oc] +ns[,nc] @@
+        int os = 0, oc = 1, ns = 0, nc = 1;
+        std::sscanf(std::string(lines[to_uz(i)]).c_str(),
+                     "@@ -%d,%d +%d,%d @@", &os, &oc, &ns, &nc);
+        ++i;
+
+        // Collect unified hunk body lines with their types
+        struct UL { char type; std::string text; };
+        std::vector<UL> body;
+        while (i < n && !starts_with(lines[to_uz(i)], "@@ ")) {
+            std::string_view ln = lines[to_uz(i)];
+            body.push_back({ln.empty() ? ' ' : ln[0],
+                            ln.empty() ? std::string{} : std::string(ln.substr(1))});
+            ++i;
+        }
+
+        // Build old-side and new-side lines with context-diff prefixes.
+        // Adjacent -/+ runs form "change" blocks and get '!' prefix.
+        std::vector<std::pair<char, std::string>> old_side, new_side;
+        for (ptrdiff_t k = 0; k < std::ssize(body); ) {
+            if (body[to_uz(k)].type == ' ') {
+                old_side.push_back({' ', body[to_uz(k)].text});
+                new_side.push_back({' ', body[to_uz(k)].text});
+                ++k;
+            } else if (body[to_uz(k)].type == '-') {
+                ptrdiff_t ds = k;
+                while (k < std::ssize(body) && body[to_uz(k)].type == '-') ++k;
+                ptrdiff_t as = k;
+                while (k < std::ssize(body) && body[to_uz(k)].type == '+') ++k;
+                bool change = (as > ds && k > as);
+                for (ptrdiff_t m = ds; m < as; ++m)
+                    old_side.push_back({change ? '!' : '-', body[to_uz(m)].text});
+                for (ptrdiff_t m = as; m < k; ++m)
+                    new_side.push_back({change ? '!' : '+', body[to_uz(m)].text});
+            } else if (body[to_uz(k)].type == '+') {
+                new_side.push_back({'+', body[to_uz(k)].text});
+                ++k;
+            } else {
+                ++k;
+            }
+        }
+
+        int oe = oc == 0 ? os : os + oc - 1;
+        int ne = nc == 0 ? ns : ns + nc - 1;
+
+        result += "***************\n";
+        result += "*** " + std::to_string(os) + "," + std::to_string(oe) + " ****\n";
+        bool has_old = false;
+        for (auto &[p, t] : old_side) if (p != ' ') { has_old = true; break; }
+        if (has_old)
+            for (auto &[p, t] : old_side)
+                result += std::string(1, p) + " " + t + "\n";
+
+        result += "--- " + std::to_string(ns) + "," + std::to_string(ne) + " ----\n";
+        bool has_new = false;
+        for (auto &[p, t] : new_side) if (p != ' ') { has_new = true; break; }
+        if (has_new)
+            for (auto &[p, t] : new_side)
+                result += std::string(1, p) + " " + t + "\n";
+    }
+
+    return result;
+}
+
 static constexpr std::string_view SNAPSHOT_PATCH = ".snap";
 
 static bool is_placeholder_copy(std::string_view path)
@@ -895,7 +979,11 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    // Build diff command base from parsed options
+    // Build diff command base from parsed options.
+    // Always request unified format from the external diff tool and
+    // convert to context format in-process afterward.  This avoids a
+    // dependency on diff -c/-C (unavailable in busybox).
+    bool convert_to_context = (diff_type == "c" || diff_type == "C");
     std::vector<std::string> diff_cmd_base;
     if (diff_utility.empty()) {
         diff_cmd_base.push_back("diff");
@@ -903,17 +991,23 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
         auto parts = split_on_whitespace(diff_utility);
         for (auto &p : parts) diff_cmd_base.push_back(std::move(p));
     }
-    if (diff_type == "c") {
-        diff_cmd_base.push_back("-c");
-    } else if (diff_type == "C") {
-        diff_cmd_base.push_back("-C");
+    if (diff_type == "U") {
+        diff_cmd_base.push_back("-U");
         diff_cmd_base.push_back(context_num);
-    } else if (diff_type == "U") {
+    } else if (diff_type == "C") {
+        // Request unified with the same context line count
         diff_cmd_base.push_back("-U");
         diff_cmd_base.push_back(context_num);
     } else {
         diff_cmd_base.push_back("-u");
     }
+
+    auto emit_diff = [&](const std::string &d) {
+        if (convert_to_context)
+            out(unified_to_context(d));
+        else
+            out(d);
+    };
 
     // Resolve --combine patch name
     std::string combine_start;
@@ -1101,7 +1195,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                     out("Index: " + work_base + "/" + file + "\n");
                     out("===================================================================\n");
                 }
-                out(diff_out);
+                emit_diff(diff_out);
             }
         }
     } else if (!combine_start.empty()) {
@@ -1142,7 +1236,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                     out("Index: " + work_base + "/" + file + "\n");
                     out("===================================================================\n");
                 }
-                out(diff_out);
+                emit_diff(diff_out);
             }
         }
     } else {
@@ -1154,7 +1248,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                     out("Index: " + work_base + "/" + file + "\n");
                     out("===================================================================\n");
                 }
-                out(diff_out);
+                emit_diff(diff_out);
             }
         }
     }
