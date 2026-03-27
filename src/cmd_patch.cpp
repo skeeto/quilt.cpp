@@ -897,7 +897,12 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
 
     // Build diff command base from parsed options
     std::vector<std::string> diff_cmd_base;
-    diff_cmd_base.push_back(diff_utility.empty() ? "diff" : diff_utility);
+    if (diff_utility.empty()) {
+        diff_cmd_base.push_back("diff");
+    } else {
+        auto parts = split_on_whitespace(diff_utility);
+        for (auto &p : parts) diff_cmd_base.push_back(std::move(p));
+    }
     if (diff_type == "c") {
         diff_cmd_base.push_back("-c");
     } else if (diff_type == "C") {

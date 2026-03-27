@@ -116,14 +116,14 @@ set(QUILT_TEST_SCENARIOS
     annotate_not_applied
     annotate_usage
     annotate_help
-    pop_verbose
-    pop_verify_reverse
-    pop_auto_refresh
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
 # Skipped when testing an external quilt binary.
 set(QUILT_TEST_SCENARIOS_NATIVE
+    pop_verbose
+    pop_verify_reverse
+    pop_auto_refresh
     init_creates_metadata
     init_help_text
     mail_basic
@@ -1816,9 +1816,9 @@ function(qt_scenario_diff_diff_utility)
     qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
     qt_write_file("${QT_WORK_DIR}/f.txt" "new\n")
     # Using --diff=diff should work the same as default
-    qt_quilt_ok(OUTPUT diff_out ERROR diff_err ARGS diff --diff=diff MESSAGE "diff --diff=diff failed")
-    qt_assert_contains("${diff_out}" "+new" "diff with --diff=diff should show +new")
-    qt_assert_contains("${diff_out}" "-old" "diff with --diff=diff should show -old")
+    qt_quilt_ok(OUTPUT diff_out ERROR diff_err ARGS "diff" "--diff=diff -u" MESSAGE "diff --diff='diff -u' failed")
+    qt_assert_contains("${diff_out}" "+new" "diff with --diff='diff -u' should show +new")
+    qt_assert_contains("${diff_out}" "-old" "diff with --diff='diff -u' should show -old")
 endfunction()
 
 function(qt_scenario_new_add_output)
