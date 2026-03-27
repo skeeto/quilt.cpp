@@ -720,17 +720,25 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
         }
     }
 
-    // Build patch command
-    std::vector<std::string> cmd = {"patch", "-p" + std::to_string(strip_level)};
-    if (opt_reverse) cmd.push_back("-R");
-    if (opt_force) cmd.push_back("-f");
-    if (opt_quiet) cmd.push_back("-s");
+    // Apply patch using built-in patch engine
+    PatchOptions patch_opts;
+    patch_opts.strip_level = strip_level;
+    patch_opts.reverse = opt_reverse;
+    patch_opts.force = opt_force;
+    patch_opts.quiet = opt_quiet;
     auto extra_patch_opts = shell_split(get_env("QUILT_PATCH_OPTS"));
     for (const auto &opt : extra_patch_opts) {
-        cmd.push_back(opt);
+        std::string_view o = opt;
+        if (o == "-R") patch_opts.reverse = true;
+        else if (o == "-f" || o == "--force") patch_opts.force = true;
+        else if (o == "-s") patch_opts.quiet = true;
+        else if (o == "-E") patch_opts.remove_empty = true;
+        else if (starts_with(o, "--fuzz=")) {
+            patch_opts.fuzz = std::atoi(std::string(o.substr(7)).c_str());
+        }
     }
 
-    ProcessResult r = run_cmd_input(cmd, stdin_data);
+    PatchResult r = builtin_patch(stdin_data, patch_opts);
     if (r.exit_code != 0) {
         if (!r.out.empty()) err(r.out);
         if (!r.err.empty()) err(r.err);
