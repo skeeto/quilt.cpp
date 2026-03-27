@@ -349,25 +349,26 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
             backup_file(q, name, file);
         }
 
-        // Apply the patch using external patch command
-        std::vector<std::string> patch_args = {
-            "patch", "-p" + std::to_string(strip_level), "-E", "--no-backup-if-mismatch"
-        };
-        if (force) {
-            patch_args.push_back("--force");
-        }
-        if (fuzz >= 0) {
-            patch_args.push_back("--fuzz=" + std::to_string(fuzz));
-        }
+        // Apply the patch using built-in patch engine
+        PatchOptions patch_opts;
+        patch_opts.strip_level = strip_level;
+        patch_opts.remove_empty = true;
+        patch_opts.force = force;
+        if (fuzz >= 0) patch_opts.fuzz = fuzz;
         if (merge) {
-            if (merge_style.empty()) {
-                patch_args.push_back("--merge");
-            } else {
-                patch_args.push_back("--merge=" + merge_style);
-            }
+            patch_opts.merge = true;
+            patch_opts.merge_style = merge_style;
         }
+        // Parse QUILT_PATCH_OPTS for additional options
         for (const auto &opt : extra_patch_opts) {
-            patch_args.push_back(opt);
+            std::string_view o = opt;
+            if (o == "-R") patch_opts.reverse = true;
+            else if (o == "-f" || o == "--force") patch_opts.force = true;
+            else if (o == "-s") patch_opts.quiet = true;
+            else if (o == "-E") patch_opts.remove_empty = true;
+            else if (starts_with(o, "--fuzz=")) {
+                patch_opts.fuzz = std::atoi(std::string(o.substr(7)).c_str());
+            }
         }
 
         // Print verbose file list ourselves instead of relying on
@@ -378,7 +379,10 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
             }
         }
 
-        ProcessResult result = run_cmd_input(patch_args, patch_content);
+        // Suppress builtin_patch's own "patching file" messages when we do verbose ourselves
+        if (verbose) patch_opts.quiet = true;
+
+        PatchResult result = builtin_patch(patch_content, patch_opts);
 
         if (!quiet && !verbose && !result.out.empty()) {
             out(result.out);
@@ -536,11 +540,13 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
             std::string patch_content = read_file(patch_path);
             if (!patch_content.empty()) {
                 int strip_level = q.get_strip_level(name);
-                std::vector<std::string> verify_args = {
-                    "patch", "-R", "-p" + std::to_string(strip_level),
-                    "--dry-run", "-f"
-                };
-                ProcessResult vr = run_cmd_input(verify_args, patch_content);
+                PatchOptions verify_opts;
+                verify_opts.strip_level = strip_level;
+                verify_opts.reverse = true;
+                verify_opts.dry_run = true;
+                verify_opts.force = true;
+                verify_opts.quiet = true;
+                PatchResult vr = builtin_patch(patch_content, verify_opts);
                 if (vr.exit_code != 0) {
                     if (!force) {
                         err_line("Patch " + display +

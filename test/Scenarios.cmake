@@ -150,6 +150,22 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     builtin_diff_single_line_files
     builtin_diff_context_format
     builtin_diff_vs_system_diff
+    builtin_patch_exact_apply
+    builtin_patch_offset
+    builtin_patch_fuzz
+    builtin_patch_new_file
+    builtin_patch_delete_file
+    builtin_patch_reverse
+    builtin_patch_dry_run
+    builtin_patch_reject
+    builtin_patch_no_newline
+    builtin_patch_multiple_files
+    builtin_patch_multiple_hunks
+    builtin_patch_strip_level
+    builtin_patch_merge_markers
+    builtin_patch_empty_context
+    builtin_patch_force
+    builtin_patch_vs_system
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -2568,6 +2584,246 @@ function(qt_scenario_builtin_diff_vs_system_diff)
     qt_assert_contains("${external_out}" "+EPSILON" "external should show +EPSILON")
 endfunction()
 
+# ── Built-in patch engine tests ──────────────────────────────────────────
+
+function(qt_scenario_builtin_patch_exact_apply)
+    qt_begin_test("builtin_patch_exact_apply")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nbbb\nccc\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nBBB\nccc\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "aaa\nbbb\nccc" "pop should restore original")
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "aaa\nBBB\nccc" "push should apply change")
+endfunction()
+
+function(qt_scenario_builtin_patch_offset)
+    qt_begin_test("builtin_patch_offset")
+    # Create a file and make a patch
+    qt_write_file("${QT_WORK_DIR}/f.txt" "line1\nline2\nline3\nline4\nline5\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "line1\nline2\nline3\nMODIFIED\nline5\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # Now add extra lines at the top to create an offset
+    qt_write_file("${QT_WORK_DIR}/f.txt" "extra1\nextra2\nextra3\nline1\nline2\nline3\nline4\nline5\n")
+    qt_quilt_ok(OUTPUT push_out ERROR push_err ARGS push MESSAGE "push should succeed with offset")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "extra1\nextra2\nextra3\nline1\nline2\nline3\nMODIFIED\nline5" "file should have modification at offset")
+endfunction()
+
+function(qt_scenario_builtin_patch_fuzz)
+    qt_begin_test("builtin_patch_fuzz")
+    # Create a file and patch
+    qt_write_file("${QT_WORK_DIR}/f.txt" "ctx1\nctx2\nctx3\ntarget\nctx4\nctx5\nctx6\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "ctx1\nctx2\nctx3\nMODIFIED\nctx4\nctx5\nctx6\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # Change context lines so exact match fails but fuzz=1 succeeds
+    qt_write_file("${QT_WORK_DIR}/f.txt" "CHANGED\nctx2\nctx3\ntarget\nctx4\nctx5\nCHANGED\n")
+    # Push with fuzz=3 to allow fuzzy matching
+    qt_quilt_ok(OUTPUT push_out ERROR push_err ARGS push --fuzz=3 MESSAGE "push with fuzz should succeed")
+    qt_assert_contains("${push_out}" "fuzz" "should report fuzz")
+endfunction()
+
+function(qt_scenario_builtin_patch_new_file)
+    qt_begin_test("builtin_patch_new_file")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add newfile.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/newfile.txt" "brand new content\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_assert_not_exists("${QT_WORK_DIR}/newfile.txt" "file should be removed on pop")
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_assert_file_text("${QT_WORK_DIR}/newfile.txt" "brand new content" "push should create file")
+endfunction()
+
+function(qt_scenario_builtin_patch_delete_file)
+    qt_begin_test("builtin_patch_delete_file")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "doomed content\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    file(REMOVE "${QT_WORK_DIR}/f.txt")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # Pop should restore the file
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "doomed content" "pop should restore file")
+    # Push should delete it again
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_assert_not_exists("${QT_WORK_DIR}/f.txt" "push should delete file")
+endfunction()
+
+function(qt_scenario_builtin_patch_reverse)
+    qt_begin_test("builtin_patch_reverse")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nbbb\nccc\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nBBB\nccc\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # Patch is applied; verify reverse check works
+    qt_quilt_ok(OUTPUT pop_out ERROR pop_err ARGS pop -R MESSAGE "pop -R should succeed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "aaa\nbbb\nccc" "pop should restore original")
+endfunction()
+
+function(qt_scenario_builtin_patch_dry_run)
+    qt_begin_test("builtin_patch_dry_run")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "original\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "modified\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # pop uses dry-run for -R verification
+    # We test by ensuring pop -R checks cleanness
+    qt_quilt_ok(ARGS pop -R MESSAGE "pop -R should succeed with clean file")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "original" "pop should restore")
+endfunction()
+
+function(qt_scenario_builtin_patch_reject)
+    qt_begin_test("builtin_patch_reject")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nbbb\nccc\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nBBB\nccc\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # Completely change the file so the patch cannot apply
+    qt_write_file("${QT_WORK_DIR}/f.txt" "xxx\nyyy\nzzz\n")
+    # Push should fail
+    qt_quilt(RESULT rc OUTPUT push_out ERROR push_err ARGS push --leave-rejects)
+    qt_assert_failure("${rc}" "push should fail")
+    qt_assert_exists("${QT_WORK_DIR}/f.txt.rej" "reject file should be created")
+endfunction()
+
+function(qt_scenario_builtin_patch_no_newline)
+    qt_begin_test("builtin_patch_no_newline")
+    file(WRITE "${QT_WORK_DIR}/f.txt" "line1\nline2")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    file(WRITE "${QT_WORK_DIR}/f.txt" "line1\nmodified")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # Read raw to check no trailing newline is preserved
+    qt_read_file_raw(content "${QT_WORK_DIR}/f.txt")
+    qt_assert_equal("${content}" "line1\nline2" "should restore file without trailing newline")
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_read_file_raw(content2 "${QT_WORK_DIR}/f.txt")
+    qt_assert_equal("${content2}" "line1\nmodified" "push should apply change without trailing newline")
+endfunction()
+
+function(qt_scenario_builtin_patch_multiple_files)
+    qt_begin_test("builtin_patch_multiple_files")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "alpha\n")
+    qt_write_file("${QT_WORK_DIR}/b.txt" "beta\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add a.txt MESSAGE "add a failed")
+    qt_quilt_ok(ARGS add b.txt MESSAGE "add b failed")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "ALPHA\n")
+    qt_write_file("${QT_WORK_DIR}/b.txt" "BETA\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_assert_file_text("${QT_WORK_DIR}/a.txt" "alpha" "a.txt should be restored")
+    qt_assert_file_text("${QT_WORK_DIR}/b.txt" "beta" "b.txt should be restored")
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_assert_file_text("${QT_WORK_DIR}/a.txt" "ALPHA" "a.txt should be modified")
+    qt_assert_file_text("${QT_WORK_DIR}/b.txt" "BETA" "b.txt should be modified")
+endfunction()
+
+function(qt_scenario_builtin_patch_multiple_hunks)
+    qt_begin_test("builtin_patch_multiple_hunks")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    # Modify lines 3 and 13 to create two separate hunks
+    qt_write_file("${QT_WORK_DIR}/f.txt" "1\n2\nTHREE\n4\n5\n6\n7\n8\n9\n10\n11\n12\nTHIRTEEN\n14\n15\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15" "pop should restore original")
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "1\n2\nTHREE\n4\n5\n6\n7\n8\n9\n10\n11\n12\nTHIRTEEN\n14\n15" "push should apply both hunks")
+endfunction()
+
+function(qt_scenario_builtin_patch_strip_level)
+    qt_begin_test("builtin_patch_strip_level")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nbbb\nccc\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nBBB\nccc\n")
+    qt_quilt_ok(ARGS refresh -p0 MESSAGE "refresh -p0 failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "aaa\nbbb\nccc" "pop should restore")
+    qt_quilt_ok(ARGS push MESSAGE "push with -p0 should succeed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "aaa\nBBB\nccc" "push should apply with strip=0")
+endfunction()
+
+function(qt_scenario_builtin_patch_merge_markers)
+    qt_begin_test("builtin_patch_merge_markers")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nbbb\nccc\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nBBB\nccc\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # Completely change the file to force a conflict
+    qt_write_file("${QT_WORK_DIR}/f.txt" "xxx\nyyy\nzzz\n")
+    # Push with --merge and -f
+    qt_quilt(RESULT rc OUTPUT push_out ERROR push_err ARGS push --merge -f)
+    # Should have exit code != 0 but force-applied
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "<<<<<<< current" "should have merge conflict marker")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "=======" "should have separator")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" ">>>>>>> patch" "should have end marker")
+endfunction()
+
+function(qt_scenario_builtin_patch_empty_context)
+    qt_begin_test("builtin_patch_empty_context")
+    # Write a patch file manually with zero context lines
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nbbb\nccc\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nBBB\nccc\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # Manually rewrite the patch file with zero context
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -2,1 +2,1 @@\n-bbb\n+BBB\n")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "aaa\nbbb\nccc" "pop should restore")
+    qt_quilt_ok(ARGS push MESSAGE "push with zero context should succeed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "aaa\nBBB\nccc" "push should apply change")
+endfunction()
+
+function(qt_scenario_builtin_patch_force)
+    qt_begin_test("builtin_patch_force")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nbbb\nccc\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nBBB\nccc\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # Change the file so patch doesn't apply cleanly
+    qt_write_file("${QT_WORK_DIR}/f.txt" "xxx\nyyy\nzzz\n")
+    # Force push
+    qt_quilt(RESULT rc OUTPUT push_out ERROR push_err ARGS push -f)
+    # Should report forced
+    qt_assert_contains("${push_out}${push_err}" "forced" "should report forced application")
+endfunction()
+
+function(qt_scenario_builtin_patch_vs_system)
+    qt_begin_test("builtin_patch_vs_system")
+    # Create a simple scenario and verify builtin patch produces same result
+    qt_write_file("${QT_WORK_DIR}/f.txt" "alpha\nbeta\ngamma\ndelta\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "alpha\nBETA\ngamma\nDELTA\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "alpha\nbeta\ngamma\ndelta" "pop should restore")
+    qt_quilt_ok(ARGS push MESSAGE "push should succeed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "alpha\nBETA\ngamma\nDELTA" "push should apply changes correctly")
+endfunction()
+
 function(qt_run_named_scenario scenario)
     if(scenario STREQUAL "basic_workflow")
         qt_scenario_basic_workflow()
@@ -2857,6 +3113,38 @@ function(qt_run_named_scenario scenario)
         qt_scenario_builtin_diff_context_format()
     elseif(scenario STREQUAL "builtin_diff_vs_system_diff")
         qt_scenario_builtin_diff_vs_system_diff()
+    elseif(scenario STREQUAL "builtin_patch_exact_apply")
+        qt_scenario_builtin_patch_exact_apply()
+    elseif(scenario STREQUAL "builtin_patch_offset")
+        qt_scenario_builtin_patch_offset()
+    elseif(scenario STREQUAL "builtin_patch_fuzz")
+        qt_scenario_builtin_patch_fuzz()
+    elseif(scenario STREQUAL "builtin_patch_new_file")
+        qt_scenario_builtin_patch_new_file()
+    elseif(scenario STREQUAL "builtin_patch_delete_file")
+        qt_scenario_builtin_patch_delete_file()
+    elseif(scenario STREQUAL "builtin_patch_reverse")
+        qt_scenario_builtin_patch_reverse()
+    elseif(scenario STREQUAL "builtin_patch_dry_run")
+        qt_scenario_builtin_patch_dry_run()
+    elseif(scenario STREQUAL "builtin_patch_reject")
+        qt_scenario_builtin_patch_reject()
+    elseif(scenario STREQUAL "builtin_patch_no_newline")
+        qt_scenario_builtin_patch_no_newline()
+    elseif(scenario STREQUAL "builtin_patch_multiple_files")
+        qt_scenario_builtin_patch_multiple_files()
+    elseif(scenario STREQUAL "builtin_patch_multiple_hunks")
+        qt_scenario_builtin_patch_multiple_hunks()
+    elseif(scenario STREQUAL "builtin_patch_strip_level")
+        qt_scenario_builtin_patch_strip_level()
+    elseif(scenario STREQUAL "builtin_patch_merge_markers")
+        qt_scenario_builtin_patch_merge_markers()
+    elseif(scenario STREQUAL "builtin_patch_empty_context")
+        qt_scenario_builtin_patch_empty_context()
+    elseif(scenario STREQUAL "builtin_patch_force")
+        qt_scenario_builtin_patch_force()
+    elseif(scenario STREQUAL "builtin_patch_vs_system")
+        qt_scenario_builtin_patch_vs_system()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()

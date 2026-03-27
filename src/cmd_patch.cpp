@@ -1143,17 +1143,15 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                     }
                 }
                 if (in_hunk) {
-                    ProcessResult patch_result{};
                     std::string saved_cwd = get_cwd();
                     if (set_cwd(tmp_dir)) {
-                        std::vector<std::string> patch_cmd = {"patch", "-p0", "-E"};
-                        patch_result = run_cmd_input(patch_cmd, mini_patch);
+                        PatchOptions po;
+                        po.strip_level = 0;
+                        po.remove_empty = true;
+                        po.quiet = true;
+                        builtin_patch(mini_patch, po);
                         set_cwd(saved_cwd);
-                    } else {
-                        patch_result.exit_code = -1;
-                        patch_result.err = "failed to enter temp directory";
                     }
-                    (void)patch_result;
                 }
             }
 

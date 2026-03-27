@@ -82,6 +82,27 @@ bool ends_with(std::string_view s, std::string_view suffix);
 std::vector<std::string> split_on_whitespace(std::string_view s);
 std::vector<std::string> shell_split(std::string_view s);
 
+// Built-in patch engine
+struct PatchOptions {
+    int strip_level = 1;       // -pN
+    int fuzz = 0;              // --fuzz=N (default 0 = strict)
+    bool reverse = false;      // -R
+    bool dry_run = false;      // --dry-run
+    bool force = false;        // -f
+    bool remove_empty = false; // -E
+    bool quiet = false;        // -s
+    bool merge = false;        // --merge
+    std::string merge_style;   // "" or "diff3"
+};
+
+struct PatchResult {
+    int exit_code;             // 0=success, 1=rejects
+    std::string out;           // stdout-equivalent messages
+    std::string err;           // stderr-equivalent messages
+};
+
+PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts);
+
 // Built-in diff engine
 enum class DiffFormat { unified, context };
 
