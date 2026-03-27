@@ -430,6 +430,22 @@ static bool is_placeholder_copy(std::string_view path)
     return file_exists(path) && read_file(path).empty();
 }
 
+// Parse QUILT_DIFF_OPTS and extract context line count if present.
+// Returns the context line count (-1 if not specified in opts).
+static int parse_diff_opts_context(const std::vector<std::string> &opts)
+{
+    for (ptrdiff_t i = 0; i < std::ssize(opts); ++i) {
+        const auto &o = opts[to_uz(i)];
+        if (starts_with(o, "-U") && o.size() > 2) {
+            return std::atoi(o.c_str() + 2);
+        }
+        if (o == "-U" && i + 1 < std::ssize(opts)) {
+            return std::atoi(opts[to_uz(i + 1)].c_str());
+        }
+    }
+    return -1;
+}
+
 // p_format: "ab" for a/b labels, "0" for bare filenames, "1" (default) for dir.orig/dir
 static std::string generate_path_diff(const QuiltState &q,
                                       std::string_view file,
@@ -439,7 +455,9 @@ static std::string generate_path_diff(const QuiltState &q,
                                       bool new_placeholder,
                                       std::string_view p_format = "1",
                                       bool reverse = false,
-                                      const std::vector<std::string> &diff_cmd_base = {}) {
+                                      const std::vector<std::string> &diff_cmd_base = {},
+                                      int context_lines = 3,
+                                      DiffFormat diff_format = DiffFormat::unified) {
     bool old_missing = old_path.empty() || !file_exists(old_path) ||
         (old_placeholder && is_placeholder_copy(old_path));
     bool new_missing = new_path.empty() || !file_exists(new_path) ||
@@ -474,12 +492,21 @@ static std::string generate_path_diff(const QuiltState &q,
         std::swap(old_label, new_label);
     }
 
-    std::vector<std::string> cmd_argv;
+    // Use built-in diff when no external diff utility is specified
     if (diff_cmd_base.empty()) {
-        cmd_argv = {"diff", "-u"};
-    } else {
-        cmd_argv = diff_cmd_base;
+        int ctx = context_lines;
+        // QUILT_DIFF_OPTS may override context lines
+        auto extra_diff_opts = shell_split(get_env("QUILT_DIFF_OPTS"));
+        int opts_ctx = parse_diff_opts_context(extra_diff_opts);
+        if (opts_ctx >= 0) ctx = opts_ctx;
+
+        DiffResult result = builtin_diff(old_arg, new_arg, ctx,
+                                          old_label, new_label, diff_format);
+        return result.output;
     }
+
+    // External diff utility path
+    std::vector<std::string> cmd_argv = diff_cmd_base;
     auto extra_diff_opts = shell_split(get_env("QUILT_DIFF_OPTS"));
     for (const auto &opt : extra_diff_opts) {
         cmd_argv.push_back(opt);
@@ -505,11 +532,14 @@ static std::string generate_file_diff(const QuiltState &q, std::string_view patc
                                       std::string_view file,
                                       std::string_view p_format = "1",
                                       bool reverse = false,
-                                      const std::vector<std::string> &diff_cmd_base = {}) {
+                                      const std::vector<std::string> &diff_cmd_base = {},
+                                      int context_lines = 3,
+                                      DiffFormat diff_format = DiffFormat::unified) {
     std::string backup_path = path_join(pc_patch_dir(q, patch), file);
     std::string working_path = path_join(q.work_dir, file);
     return generate_path_diff(q, file, backup_path, true, working_path, false,
-                              p_format, reverse, diff_cmd_base);
+                              p_format, reverse, diff_cmd_base,
+                              context_lines, diff_format);
 }
 
 static std::map<std::string, std::string> split_patch_by_file(std::string_view content) {
@@ -979,27 +1009,32 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    // Build diff command base from parsed options.
-    // Always request unified format from the external diff tool and
-    // convert to context format in-process afterward.  This avoids a
-    // dependency on diff -c/-C (unavailable in busybox).
-    bool convert_to_context = (diff_type == "c" || diff_type == "C");
+    // Determine diff format and context lines for builtin diff
+    DiffFormat diff_format = DiffFormat::unified;
+    int ctx_lines = 3;
+    if (diff_type == "c") {
+        diff_format = DiffFormat::context;
+    } else if (diff_type == "C") {
+        diff_format = DiffFormat::context;
+        ctx_lines = std::atoi(context_num.c_str());
+    } else if (diff_type == "U") {
+        ctx_lines = std::atoi(context_num.c_str());
+    }
+
+    // Build diff command base for external diff utility (empty = use builtin)
+    bool convert_to_context = false;
     std::vector<std::string> diff_cmd_base;
-    if (diff_utility.empty()) {
-        diff_cmd_base.push_back("diff");
-    } else {
+    if (!diff_utility.empty()) {
         auto parts = split_on_whitespace(diff_utility);
         for (auto &p : parts) diff_cmd_base.push_back(std::move(p));
-    }
-    if (diff_type == "U") {
-        diff_cmd_base.push_back("-U");
-        diff_cmd_base.push_back(context_num);
-    } else if (diff_type == "C") {
-        // Request unified with the same context line count
-        diff_cmd_base.push_back("-U");
-        diff_cmd_base.push_back(context_num);
-    } else {
-        diff_cmd_base.push_back("-u");
+        // External diff: always request unified, convert to context in-process
+        convert_to_context = (diff_type == "c" || diff_type == "C");
+        if (diff_type == "U" || diff_type == "C") {
+            diff_cmd_base.push_back("-U");
+            diff_cmd_base.push_back(context_num);
+        } else {
+            diff_cmd_base.push_back("-u");
+        }
     }
 
     auto emit_diff = [&](const std::string &d) {
@@ -1146,23 +1181,39 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                 std::swap(old_label, new_label);
             }
 
-            std::vector<std::string> diff_cmd = diff_cmd_base;
-            auto extra_diff_opts = shell_split(get_env("QUILT_DIFF_OPTS"));
-            for (const auto &opt : extra_diff_opts) diff_cmd.push_back(opt);
-            diff_cmd.push_back("--label");
-            diff_cmd.push_back(old_label);
-            diff_cmd.push_back("--label");
-            diff_cmd.push_back(new_label);
-            diff_cmd.push_back(old_f);
-            diff_cmd.push_back(new_f);
+            std::string diff_out;
+            if (diff_cmd_base.empty()) {
+                // Use built-in diff
+                int ctx = ctx_lines;
+                auto extra_diff_opts = shell_split(get_env("QUILT_DIFF_OPTS"));
+                int opts_ctx = parse_diff_opts_context(extra_diff_opts);
+                if (opts_ctx >= 0) ctx = opts_ctx;
 
-            ProcessResult result = run_cmd(diff_cmd);
-            if (result.exit_code == 1 && !result.out.empty()) {
+                DiffResult dr = builtin_diff(old_f, new_f, ctx,
+                                             old_label, new_label, diff_format);
+                diff_out = std::move(dr.output);
+            } else {
+                std::vector<std::string> diff_cmd = diff_cmd_base;
+                auto extra_diff_opts = shell_split(get_env("QUILT_DIFF_OPTS"));
+                for (const auto &opt : extra_diff_opts) diff_cmd.push_back(opt);
+                diff_cmd.push_back("--label");
+                diff_cmd.push_back(old_label);
+                diff_cmd.push_back("--label");
+                diff_cmd.push_back(new_label);
+                diff_cmd.push_back(old_f);
+                diff_cmd.push_back(new_f);
+
+                ProcessResult result = run_cmd(diff_cmd);
+                if (result.exit_code == 1) {
+                    diff_out = std::move(result.out);
+                }
+            }
+            if (!diff_out.empty()) {
                 if (!no_index) {
                     out("Index: " + work_base + "/" + file + "\n");
                     out("===================================================================\n");
                 }
-                out(result.out);
+                emit_diff(diff_out);
             }
         }
 
@@ -1189,7 +1240,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
 
             std::string diff_out = generate_path_diff(
                 q, file, old_path, old_placeholder, new_path, new_placeholder,
-                p_format, reverse, diff_cmd_base);
+                p_format, reverse, diff_cmd_base, ctx_lines, diff_format);
             if (!diff_out.empty()) {
                 if (!no_index) {
                     out("Index: " + work_base + "/" + file + "\n");
@@ -1230,7 +1281,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
 
             std::string diff_out = generate_path_diff(
                 q, file, old_path, true, new_path, new_placeholder,
-                p_format, reverse, diff_cmd_base);
+                p_format, reverse, diff_cmd_base, ctx_lines, diff_format);
             if (!diff_out.empty()) {
                 if (!no_index) {
                     out("Index: " + work_base + "/" + file + "\n");
@@ -1242,7 +1293,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
     } else {
         for (const auto &file : tracked) {
             std::string diff_out = generate_file_diff(q, patch, file, p_format, reverse,
-                                                      diff_cmd_base);
+                                                      diff_cmd_base, ctx_lines, diff_format);
             if (!diff_out.empty()) {
                 if (!no_index) {
                     out("Index: " + work_base + "/" + file + "\n");

@@ -1,0 +1,519 @@
+// This is free and unencumbered software released into the public domain.
+//
+// Built-in diff engine using Myers' O(ND) algorithm.
+// Produces unified or context diff output, replacing the need for an
+// external diff binary.
+
+#include "quilt.hpp"
+#include "platform.hpp"
+#include <algorithm>
+#include <cstdio>
+
+// Split content into lines, preserving the information about whether
+// the file ended with a newline.  Each element is one line WITHOUT its
+// terminating '\n'.
+struct FileLines {
+    std::vector<std::string_view> lines;
+    bool has_trailing_newline = true;
+};
+
+static FileLines split_file_lines(std::string_view content)
+{
+    FileLines fl;
+    if (content.empty()) {
+        fl.has_trailing_newline = true;  // empty file is fine
+        return fl;
+    }
+
+    fl.has_trailing_newline = (content.back() == '\n');
+
+    ptrdiff_t start = 0;
+    ptrdiff_t len = static_cast<ptrdiff_t>(content.size());
+    for (ptrdiff_t i = 0; i < len; ++i) {
+        if (content[to_uz(i)] == '\n') {
+            fl.lines.push_back(content.substr(to_uz(start),
+                                              to_uz(i - start)));
+            start = i + 1;
+        }
+    }
+    // If there's content after the last newline (no trailing newline)
+    if (start < len) {
+        fl.lines.push_back(content.substr(to_uz(start),
+                                          to_uz(len - start)));
+    }
+
+    return fl;
+}
+
+// Myers diff algorithm.
+// Returns a list of edit operations: 'E' (equal), 'D' (delete from old),
+// 'I' (insert from new).
+struct EditOp {
+    char type;       // 'E', 'D', 'I'
+    ptrdiff_t old_idx; // index in old_lines (-1 for Insert)
+    ptrdiff_t new_idx; // index in new_lines (-1 for Delete)
+};
+
+static std::vector<EditOp> myers_diff(
+    const std::vector<std::string_view> &old_lines,
+    const std::vector<std::string_view> &new_lines)
+{
+    ptrdiff_t n = std::ssize(old_lines);
+    ptrdiff_t m = std::ssize(new_lines);
+
+    // Trivial cases
+    if (n == 0 && m == 0) {
+        return {};
+    }
+    if (n == 0) {
+        std::vector<EditOp> ops;
+        ops.reserve(to_uz(m));
+        for (ptrdiff_t j = 0; j < m; ++j)
+            ops.push_back({'I', -1, j});
+        return ops;
+    }
+    if (m == 0) {
+        std::vector<EditOp> ops;
+        ops.reserve(to_uz(n));
+        for (ptrdiff_t i = 0; i < n; ++i)
+            ops.push_back({'D', i, -1});
+        return ops;
+    }
+
+    // Myers' algorithm with linear-space trace recording.
+    // We store the V array for each D step to reconstruct the path.
+    ptrdiff_t max_d = n + m;
+    // V is indexed by k + offset where k ranges from -max_d to max_d
+    ptrdiff_t offset = max_d;
+    ptrdiff_t v_size = 2 * max_d + 1;
+
+    // Store a copy of V for each d value to reconstruct the edit path
+    std::vector<std::vector<ptrdiff_t>> trace;
+    std::vector<ptrdiff_t> v(to_uz(v_size), -1);
+    v[to_uz(offset + 1)] = 0;
+
+    ptrdiff_t final_d = -1;
+    for (ptrdiff_t d = 0; d <= max_d; ++d) {
+        trace.push_back(v);  // save state before this round
+        for (ptrdiff_t k = -d; k <= d; k += 2) {
+            ptrdiff_t x;
+            if (k == -d || (k != d && v[to_uz(offset + k - 1)] < v[to_uz(offset + k + 1)])) {
+                x = v[to_uz(offset + k + 1)];  // move down (insert)
+            } else {
+                x = v[to_uz(offset + k - 1)] + 1;  // move right (delete)
+            }
+            ptrdiff_t y = x - k;
+
+            // Follow diagonal (equal lines)
+            while (x < n && y < m && old_lines[to_uz(x)] == new_lines[to_uz(y)]) {
+                ++x;
+                ++y;
+            }
+
+            v[to_uz(offset + k)] = x;
+
+            if (x >= n && y >= m) {
+                final_d = d;
+                goto found;
+            }
+        }
+    }
+found:
+
+    // Backtrack through the trace to build edit operations
+    std::vector<EditOp> ops;
+    ptrdiff_t x = n, y = m;
+
+    for (ptrdiff_t d = final_d; d > 0; --d) {
+        const auto &prev_v = trace[to_uz(d)];
+        ptrdiff_t k = x - y;
+
+        ptrdiff_t prev_k;
+        if (k == -d || (k != d && prev_v[to_uz(offset + k - 1)] < prev_v[to_uz(offset + k + 1)])) {
+            prev_k = k + 1;  // came from insert (down)
+        } else {
+            prev_k = k - 1;  // came from delete (right)
+        }
+
+        ptrdiff_t prev_x = prev_v[to_uz(offset + prev_k)];
+        ptrdiff_t prev_y = prev_x - prev_k;
+
+        // Diagonal (equal lines) — add in reverse
+        while (x > prev_x && y > prev_y) {
+            --x;
+            --y;
+            ops.push_back({'E', x, y});
+        }
+
+        // The actual edit
+        if (x > prev_x) {
+            --x;
+            ops.push_back({'D', x, -1});
+        } else if (y > prev_y) {
+            --y;
+            ops.push_back({'I', -1, y});
+        }
+    }
+
+    // Remaining diagonal at d=0
+    while (x > 0 && y > 0) {
+        --x;
+        --y;
+        ops.push_back({'E', x, y});
+    }
+
+    std::reverse(ops.begin(), ops.end());
+    return ops;
+}
+
+// A hunk groups consecutive edits with surrounding context lines.
+struct Hunk {
+    ptrdiff_t old_start;  // 1-based
+    ptrdiff_t old_count;
+    ptrdiff_t new_start;  // 1-based
+    ptrdiff_t new_count;
+    std::vector<EditOp> ops;  // the operations in this hunk (including context)
+};
+
+static std::vector<Hunk> build_hunks(const std::vector<EditOp> &ops,
+                                      ptrdiff_t context_lines)
+{
+    std::vector<Hunk> hunks;
+    if (ops.empty()) return hunks;
+
+    // Find ranges of change (non-Equal) ops
+    struct ChangeRange { ptrdiff_t first; ptrdiff_t last; }; // inclusive indices into ops
+    std::vector<ChangeRange> changes;
+    for (ptrdiff_t i = 0; i < std::ssize(ops); ++i) {
+        if (ops[to_uz(i)].type != 'E') {
+            if (changes.empty() || i > changes.back().last + 1) {
+                changes.push_back({i, i});
+            } else {
+                changes.back().last = i;
+            }
+        }
+    }
+
+    if (changes.empty()) return hunks;
+
+    // Merge change ranges that overlap when context is added
+    std::vector<ChangeRange> merged;
+    merged.push_back(changes[0]);
+    for (ptrdiff_t i = 1; i < std::ssize(changes); ++i) {
+        // If the context windows overlap or are adjacent, merge
+        if (changes[to_uz(i)].first - merged.back().last <= 2 * context_lines) {
+            merged.back().last = changes[to_uz(i)].last;
+        } else {
+            merged.push_back(changes[to_uz(i)]);
+        }
+    }
+
+    // Build hunks from merged ranges
+    ptrdiff_t total_ops = std::ssize(ops);
+    for (const auto &range : merged) {
+        ptrdiff_t hunk_start = std::max(ptrdiff_t{0}, range.first - context_lines);
+        ptrdiff_t hunk_end = std::min(total_ops - 1, range.last + context_lines);
+
+        Hunk h;
+        h.ops.assign(ops.begin() + hunk_start, ops.begin() + hunk_end + 1);
+
+        // Compute old_start, old_count, new_start, new_count
+        h.old_count = 0;
+        h.new_count = 0;
+        h.old_start = 0;
+        h.new_start = 0;
+        bool first_old = true, first_new = true;
+
+        for (const auto &op : h.ops) {
+            if (op.type == 'E') {
+                if (first_old) { h.old_start = op.old_idx + 1; first_old = false; }
+                if (first_new) { h.new_start = op.new_idx + 1; first_new = false; }
+                h.old_count++;
+                h.new_count++;
+            } else if (op.type == 'D') {
+                if (first_old) { h.old_start = op.old_idx + 1; first_old = false; }
+                h.old_count++;
+            } else { // 'I'
+                if (first_new) { h.new_start = op.new_idx + 1; first_new = false; }
+                h.new_count++;
+            }
+        }
+
+        // If no old lines at all, old_start should be the line after the previous context
+        if (first_old) h.old_start = h.ops.empty() ? 0 : 0;
+        if (first_new) h.new_start = h.ops.empty() ? 0 : 0;
+
+        // Edge case: empty side means start=0, count=0 per diff convention
+        // But standard diff uses start = line_before + 1 for empty ranges
+        if (h.old_count == 0 && !h.ops.empty()) {
+            // Find nearest old index
+            for (const auto &op : h.ops) {
+                if (op.type == 'I' && op.new_idx >= 0) {
+                    // The insert happens after old line op.new_idx (but we need the old context)
+                    // For a pure insert, old_start = line before insertion point
+                    break;
+                }
+            }
+        }
+
+        hunks.push_back(std::move(h));
+    }
+
+    return hunks;
+}
+
+// Format unified diff output
+static std::string format_unified(
+    const std::vector<std::string_view> &old_lines,
+    const std::vector<std::string_view> &new_lines,
+    bool old_has_trailing_nl,
+    bool new_has_trailing_nl,
+    const std::vector<Hunk> &hunks,
+    std::string_view old_label,
+    std::string_view new_label)
+{
+    std::string result;
+
+    // File headers
+    result += "--- ";
+    result += old_label;
+    result += '\n';
+    result += "+++ ";
+    result += new_label;
+    result += '\n';
+
+    ptrdiff_t old_total = std::ssize(old_lines);
+    ptrdiff_t new_total = std::ssize(new_lines);
+
+    for (const auto &hunk : hunks) {
+        // Hunk header: @@ -old_start[,old_count] +new_start[,new_count] @@
+        char header[128];
+        if (hunk.old_count == 1 && hunk.new_count == 1) {
+            std::snprintf(header, sizeof(header), "@@ -%d +%d @@\n",
+                         to_int(hunk.old_start), to_int(hunk.new_start));
+        } else if (hunk.old_count == 1) {
+            std::snprintf(header, sizeof(header), "@@ -%d +%d,%d @@\n",
+                         to_int(hunk.old_start),
+                         to_int(hunk.new_start), to_int(hunk.new_count));
+        } else if (hunk.new_count == 1) {
+            std::snprintf(header, sizeof(header), "@@ -%d,%d +%d @@\n",
+                         to_int(hunk.old_start), to_int(hunk.old_count),
+                         to_int(hunk.new_start));
+        } else {
+            std::snprintf(header, sizeof(header), "@@ -%d,%d +%d,%d @@\n",
+                         to_int(hunk.old_start), to_int(hunk.old_count),
+                         to_int(hunk.new_start), to_int(hunk.new_count));
+        }
+        result += header;
+
+        // Hunk body
+        for (const auto &op : hunk.ops) {
+            if (op.type == 'E') {
+                result += ' ';
+                result += old_lines[to_uz(op.old_idx)];
+                result += '\n';
+                // "No newline" on last line of both files
+                if (op.old_idx == old_total - 1 && !old_has_trailing_nl &&
+                    op.new_idx == new_total - 1 && !new_has_trailing_nl) {
+                    result += "\\ No newline at end of file\n";
+                }
+            } else if (op.type == 'D') {
+                result += '-';
+                result += old_lines[to_uz(op.old_idx)];
+                result += '\n';
+                // Check if this is the last old line with no trailing newline
+                if (op.old_idx == old_total - 1 && !old_has_trailing_nl) {
+                    result += "\\ No newline at end of file\n";
+                }
+            } else { // 'I'
+                result += '+';
+                result += new_lines[to_uz(op.new_idx)];
+                result += '\n';
+                // Check if this is the last new line with no trailing newline
+                if (op.new_idx == new_total - 1 && !new_has_trailing_nl) {
+                    result += "\\ No newline at end of file\n";
+                }
+            }
+        }
+    }
+
+    return result;
+}
+
+// Format context diff output
+static std::string format_context(
+    const std::vector<std::string_view> &old_lines,
+    const std::vector<std::string_view> &new_lines,
+    bool old_has_trailing_nl,
+    bool new_has_trailing_nl,
+    const std::vector<Hunk> &hunks,
+    std::string_view old_label,
+    std::string_view new_label)
+{
+    std::string result;
+
+    // File headers
+    result += "*** ";
+    result += old_label;
+    result += '\n';
+    result += "--- ";
+    result += new_label;
+    result += '\n';
+
+    ptrdiff_t old_total = std::ssize(old_lines);
+    ptrdiff_t new_total = std::ssize(new_lines);
+
+    for (const auto &hunk : hunks) {
+        result += "***************\n";
+
+        // Classify each edit group: adjacent D and I runs form "changes" (! prefix)
+        // We need to build old-side and new-side lines with proper prefixes.
+        struct SideLine { char prefix; std::string_view text; bool no_newline; };
+        std::vector<SideLine> old_side, new_side;
+
+        ptrdiff_t num_ops = std::ssize(hunk.ops);
+        for (ptrdiff_t k = 0; k < num_ops; ) {
+            const auto &op = hunk.ops[to_uz(k)];
+            if (op.type == 'E') {
+                bool onl = (op.old_idx == old_total - 1 && !old_has_trailing_nl &&
+                            op.new_idx == new_total - 1 && !new_has_trailing_nl);
+                old_side.push_back({' ', old_lines[to_uz(op.old_idx)], onl});
+                new_side.push_back({' ', new_lines[to_uz(op.new_idx)], onl});
+                ++k;
+            } else {
+                // Collect consecutive D then I runs
+                ptrdiff_t ds = k;
+                while (k < num_ops && hunk.ops[to_uz(k)].type == 'D') ++k;
+                ptrdiff_t de = k;  // exclusive
+                while (k < num_ops && hunk.ops[to_uz(k)].type == 'I') ++k;
+                ptrdiff_t ie = k;  // exclusive
+
+                bool is_change = (de > ds && ie > de);
+                for (ptrdiff_t j = ds; j < de; ++j) {
+                    auto &dop = hunk.ops[to_uz(j)];
+                    bool onl = (dop.old_idx == old_total - 1 && !old_has_trailing_nl);
+                    old_side.push_back({is_change ? '!' : '-',
+                                       old_lines[to_uz(dop.old_idx)], onl});
+                }
+                for (ptrdiff_t j = de; j < ie; ++j) {
+                    auto &iop = hunk.ops[to_uz(j)];
+                    bool onl = (iop.new_idx == new_total - 1 && !new_has_trailing_nl);
+                    new_side.push_back({is_change ? '!' : '+',
+                                       new_lines[to_uz(iop.new_idx)], onl});
+                }
+            }
+        }
+
+        // Old range header
+        ptrdiff_t oe = hunk.old_count == 0 ? hunk.old_start : hunk.old_start + hunk.old_count - 1;
+        char range_buf[64];
+        std::snprintf(range_buf, sizeof(range_buf), "*** %d,%d ****\n",
+                     to_int(hunk.old_start), to_int(oe));
+        result += range_buf;
+
+        // Print old-side lines only if there are changes (not just context)
+        bool has_old_changes = false;
+        for (const auto &sl : old_side) {
+            if (sl.prefix != ' ') { has_old_changes = true; break; }
+        }
+        if (has_old_changes) {
+            for (const auto &sl : old_side) {
+                result += sl.prefix;
+                result += ' ';
+                result += sl.text;
+                result += '\n';
+                if (sl.no_newline) {
+                    result += "\\ No newline at end of file\n";
+                }
+            }
+        }
+
+        // New range header
+        ptrdiff_t ne = hunk.new_count == 0 ? hunk.new_start : hunk.new_start + hunk.new_count - 1;
+        std::snprintf(range_buf, sizeof(range_buf), "--- %d,%d ----\n",
+                     to_int(hunk.new_start), to_int(ne));
+        result += range_buf;
+
+        // Print new-side lines only if there are changes
+        bool has_new_changes = false;
+        for (const auto &sl : new_side) {
+            if (sl.prefix != ' ') { has_new_changes = true; break; }
+        }
+        if (has_new_changes) {
+            for (const auto &sl : new_side) {
+                result += sl.prefix;
+                result += ' ';
+                result += sl.text;
+                result += '\n';
+                if (sl.no_newline) {
+                    result += "\\ No newline at end of file\n";
+                }
+            }
+        }
+    }
+
+    return result;
+}
+
+DiffResult builtin_diff(std::string_view old_path, std::string_view new_path,
+                         int context_lines,
+                         std::string_view old_label, std::string_view new_label,
+                         DiffFormat format)
+{
+    // Read files — treat /dev/null or non-existent as empty
+    std::string old_content, new_content;
+    bool old_is_null = (old_path == "/dev/null" || old_path.empty());
+    bool new_is_null = (new_path == "/dev/null" || new_path.empty());
+
+    if (!old_is_null && file_exists(old_path)) {
+        old_content = read_file(old_path);
+    }
+    if (!new_is_null && file_exists(new_path)) {
+        new_content = read_file(new_path);
+    }
+
+    // Split into lines
+    auto old_fl = split_file_lines(old_content);
+    auto new_fl = split_file_lines(new_content);
+
+    // Run Myers diff
+    auto ops = myers_diff(old_fl.lines, new_fl.lines);
+
+    // Check if there are any differences
+    bool has_diff = false;
+    for (const auto &op : ops) {
+        if (op.type != 'E') { has_diff = true; break; }
+    }
+
+    // Also check trailing newline difference
+    if (!has_diff && !old_fl.lines.empty() &&
+        old_fl.has_trailing_newline != new_fl.has_trailing_newline) {
+        has_diff = true;
+    }
+
+    if (!has_diff) {
+        return {0, ""};
+    }
+
+    // Use labels or default to paths
+    std::string old_lbl = old_label.empty() ? std::string(old_path) : std::string(old_label);
+    std::string new_lbl = new_label.empty() ? std::string(new_path) : std::string(new_label);
+
+    // Build hunks
+    auto hunks = build_hunks(ops, context_lines);
+
+    std::string output;
+    if (format == DiffFormat::context) {
+        output = format_context(old_fl.lines, new_fl.lines,
+                                old_fl.has_trailing_newline,
+                                new_fl.has_trailing_newline,
+                                hunks, old_lbl, new_lbl);
+    } else {
+        output = format_unified(old_fl.lines, new_fl.lines,
+                                old_fl.has_trailing_newline,
+                                new_fl.has_trailing_newline,
+                                hunks, old_lbl, new_lbl);
+    }
+
+    return {1, std::move(output)};
+}
