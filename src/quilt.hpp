@@ -89,6 +89,7 @@ struct Command {
     const char *name;
     CmdFn       fn;
     const char *usage;
+    const char *description;
 };
 
 // Command implementations — cmd_stack.cpp

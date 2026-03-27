@@ -597,46 +597,353 @@ std::string to_cstr(std::string_view s) {
 }
 
 static Command commands[] = {
-    {"new",        cmd_new,        "Usage: quilt new [-p n] patchname"},
-    {"add",        cmd_add,        "Usage: quilt add [-P patch] file ..."},
-    {"push",       cmd_push,       "Usage: quilt push [-a] [-f] [-q] [patch]"},
-    {"pop",        cmd_pop,        "Usage: quilt pop [-a] [-f] [-q] [patch]"},
-    {"refresh",    cmd_refresh,    "Usage: quilt refresh [-p n] [-f] [patch]"},
-    {"diff",       cmd_diff,       "Usage: quilt diff [-p n] [-z] [--snapshot] [patch]"},
-    {"series",     cmd_series,     "Usage: quilt series [-v]"},
-    {"applied",    cmd_applied,    "Usage: quilt applied [patch]"},
-    {"unapplied",  cmd_unapplied,  "Usage: quilt unapplied [patch]"},
-    {"top",        cmd_top,        "Usage: quilt top"},
-    {"next",       cmd_next,       "Usage: quilt next [patch]"},
-    {"previous",   cmd_previous,   "Usage: quilt previous [patch]"},
-    {"delete",     cmd_delete,     "Usage: quilt delete [-r] [patch]"},
-    {"rename",     cmd_rename,     "Usage: quilt rename [-P patch] new_name"},
-    {"import",     cmd_import,     "Usage: quilt import [-p n] [-P patch] file"},
-    {"header",     cmd_header,     "Usage: quilt header [-a|-r|-e] [patch]"},
-    {"files",      cmd_files,      "Usage: quilt files [-v] [-a] [patch]"},
-    {"patches",    cmd_patches,    "Usage: quilt patches [-v] file"},
-    {"edit",       cmd_edit,       "Usage: quilt edit file ..."},
-    {"revert",     cmd_revert,     "Usage: quilt revert [-P patch] file ..."},
-    {"remove",     cmd_remove,     "Usage: quilt remove [-P patch] file ..."},
-    {"fold",       cmd_fold,       "Usage: quilt fold [-R] [-q] [-f] [-p n]"},
-    {"fork",       cmd_fork,       "Usage: quilt fork [new_name]"},
+    {"new", cmd_new,
+     "Usage: quilt new [-p n] patchname\n"
+     "\n"
+     "Create a new empty patch and insert it after the topmost applied\n"
+     "patch in the series. The new patch becomes the top of the stack\n"
+     "immediately, but no patch file is written until quilt refresh.\n"
+     "\n"
+     "Options:\n"
+     "  -p n        Set the strip level for the patch (default: 1).\n",
+     "Create a new empty patch"},
+
+    {"add", cmd_add,
+     "Usage: quilt add [-P patch] file ...\n"
+     "\n"
+     "Register files with the topmost patch by backing up their current\n"
+     "contents. Files must be added before modification so that quilt\n"
+     "can capture the pre-change state. Use quilt edit to add and open\n"
+     "files in a single step.\n"
+     "\n"
+     "Options:\n"
+     "  -P patch    Add files to the named patch instead of the top.\n",
+     "Add files to the topmost patch"},
+
+    {"push", cmd_push,
+     "Usage: quilt push [-a] [-f] [-q] [num|patch]\n"
+     "\n"
+     "Apply the next unapplied patch from the series. Without arguments,\n"
+     "applies one patch. With a patch name, applies patches up to and\n"
+     "including it. With a number, applies that many patches.\n"
+     "\n"
+     "Options:\n"
+     "  -a          Apply all unapplied patches.\n"
+     "  -f          Force apply even when the patch has rejects.\n"
+     "  -q          Quiet; print only error messages.\n",
+     "Apply patches to the source tree"},
+
+    {"pop", cmd_pop,
+     "Usage: quilt pop [-a] [-f] [-q] [num|patch]\n"
+     "\n"
+     "Remove the topmost applied patch by restoring files from backup.\n"
+     "Without arguments, removes one patch. With a patch name, removes\n"
+     "patches until the named patch is on top. With a number, removes\n"
+     "that many patches.\n"
+     "\n"
+     "Options:\n"
+     "  -a          Remove all applied patches.\n"
+     "  -f          Force removal even if the patch needs refresh.\n"
+     "  -q          Quiet; print only error messages.\n"
+     "  -R          Accepted for compatibility (no effect).\n",
+     "Remove applied patches from the stack"},
+
+    {"refresh", cmd_refresh,
+     "Usage: quilt refresh [-p n] [-f] [--no-timestamps] [--no-index]\n"
+     "                     [--sort] [patch]\n"
+     "\n"
+     "Regenerate the topmost or named patch by diffing backup copies in\n"
+     ".pc/ against the current working tree. This is what actually writes\n"
+     "the patch file; changes are not recorded until you refresh.\n"
+     "\n"
+     "Options:\n"
+     "  -p n              Set the path label style (0, 1, or ab).\n"
+     "  -f                Refresh even when files are shadowed by patches\n"
+     "                    applied above.\n"
+     "  --no-timestamps   Omit timestamps from diff headers.\n"
+     "  --no-index        Omit Index: lines from the patch.\n"
+     "  --sort            Sort files alphabetically in the patch.\n",
+     "Regenerate a patch from working tree changes"},
+
+    {"diff", cmd_diff,
+     "Usage: quilt diff [-p n] [-P patch] [-z] [-R] [--snapshot]\n"
+     "                  [--no-timestamps] [--no-index] [file ...]\n"
+     "\n"
+     "Show the diff that quilt refresh would produce for the topmost or\n"
+     "named patch. Without -z, shows the full patch content (backup vs.\n"
+     "working tree). With -z, shows only uncommitted changes since the\n"
+     "last refresh.\n"
+     "\n"
+     "Options:\n"
+     "  -p n              Set the path label style (0, 1, or ab).\n"
+     "  -P patch          Show the diff for the named patch.\n"
+     "  -z                Show only changes since the last refresh.\n"
+     "  -R                Produce a reverse diff.\n"
+     "  --snapshot        Diff against a previously saved snapshot.\n"
+     "  --no-timestamps   Omit timestamps from diff headers.\n"
+     "  --no-index        Omit Index: lines from the output.\n",
+     "Show the diff of the topmost or a specified patch"},
+
+    {"series", cmd_series,
+     "Usage: quilt series [-v]\n"
+     "\n"
+     "List all patches in the series file, both applied and unapplied.\n"
+     "\n"
+     "Options:\n"
+     "  -v          Mark applied patches with = and the top with =.\n",
+     "List all patches in the series"},
+
+    {"applied", cmd_applied,
+     "Usage: quilt applied [patch]\n"
+     "\n"
+     "List the currently applied patches in stack order. With a patch\n"
+     "name, lists all applied patches up to and including it.\n",
+     "List applied patches"},
+
+    {"unapplied", cmd_unapplied,
+     "Usage: quilt unapplied [patch]\n"
+     "\n"
+     "List the patches that have not been applied yet. With a patch\n"
+     "name, lists all patches after the named one in the series.\n",
+     "List patches not yet applied"},
+
+    {"top", cmd_top,
+     "Usage: quilt top\n"
+     "\n"
+     "Print the name of the topmost applied patch.\n",
+     "Show the topmost applied patch"},
+
+    {"next", cmd_next,
+     "Usage: quilt next [patch]\n"
+     "\n"
+     "Print the patch after the topmost applied patch, or after the\n"
+     "named patch in the series.\n",
+     "Show the next patch after the top or a given patch"},
+
+    {"previous", cmd_previous,
+     "Usage: quilt previous [patch]\n"
+     "\n"
+     "Print the patch before the topmost applied patch, or before the\n"
+     "named patch in the series.\n",
+     "Show the patch before the top or a given patch"},
+
+    {"delete", cmd_delete,
+     "Usage: quilt delete [-r] [--backup] [-n] [patch]\n"
+     "\n"
+     "Remove the topmost applied patch or a named unapplied patch from\n"
+     "the series. The patch file is kept unless -r is given.\n"
+     "\n"
+     "Options:\n"
+     "  -r          Remove the patch file as well.\n"
+     "  --backup    Rename the patch file to name~ instead of deleting.\n"
+     "  -n          Delete the next unapplied patch instead of the top.\n",
+     "Remove a patch from the series"},
+
+    {"rename", cmd_rename,
+     "Usage: quilt rename [-P patch] new_name\n"
+     "\n"
+     "Rename the topmost or named patch. Updates the series file and\n"
+     "renames the patch file in the patches directory.\n"
+     "\n"
+     "Options:\n"
+     "  -P patch    Rename the named patch instead of the top.\n",
+     "Rename a patch"},
+
+    {"import", cmd_import,
+     "Usage: quilt import [-p n] [-P name] [-f] [-d {o|a|n}] file ...\n"
+     "\n"
+     "Copy an external patch file into the patches directory and add it\n"
+     "to the series after the topmost applied patch. The patch is not\n"
+     "applied; use quilt push afterward.\n"
+     "\n"
+     "Options:\n"
+     "  -p n        Set the strip level for the imported patch.\n"
+     "  -P name     Use this name instead of the original filename.\n"
+     "  -f          Overwrite if a patch with the same name exists.\n"
+     "  -d {o|a|n}  When overwriting: keep old, append all, or use\n"
+     "              new header.\n",
+     "Import an external patch into the series"},
+
+    {"header", cmd_header,
+     "Usage: quilt header [-a|-r|-e] [--backup] [patch]\n"
+     "\n"
+     "Print the header (description) of the topmost or named patch.\n"
+     "The header is all text in the patch file before the first diff.\n"
+     "\n"
+     "Options:\n"
+     "  -a          Append text from standard input to the header.\n"
+     "  -r          Replace the header with text from standard input.\n"
+     "  -e          Open the header in $EDITOR.\n"
+     "  --backup    Save the old patch file as name~ before modifying.\n",
+     "Print or modify a patch header"},
+
+    {"files", cmd_files,
+     "Usage: quilt files [-v] [-a] [patch]\n"
+     "\n"
+     "List the files that the topmost or named patch modifies.\n"
+     "\n"
+     "Options:\n"
+     "  -v          Show the patch name alongside each filename.\n"
+     "  -a          List files for all applied patches, not just one.\n",
+     "List files modified by a patch"},
+
+    {"patches", cmd_patches,
+     "Usage: quilt patches [-v] file ...\n"
+     "\n"
+     "List the patches that modify the given file or files. Searches\n"
+     "both applied patches (via .pc/ metadata) and unapplied patches\n"
+     "(by parsing patch files).\n"
+     "\n"
+     "Options:\n"
+     "  -v          Mark applied patches in the output.\n",
+     "List patches that modify a given file"},
+
+    {"edit", cmd_edit,
+     "Usage: quilt edit file ...\n"
+     "\n"
+     "Add files to the topmost patch and open them in $EDITOR. This is\n"
+     "a shortcut for quilt add followed by $EDITOR, and is the safest\n"
+     "way to modify tracked files.\n",
+     "Add files to the topmost patch and open an editor"},
+
+    {"revert", cmd_revert,
+     "Usage: quilt revert [-P patch] file ...\n"
+     "\n"
+     "Discard uncommitted changes to files by restoring them from the\n"
+     "backup copies in .pc/. Only reverts changes not yet captured by\n"
+     "quilt refresh.\n"
+     "\n"
+     "Options:\n"
+     "  -P patch    Revert files in the named patch instead of the top.\n",
+     "Discard working tree changes to files in a patch"},
+
+    {"remove", cmd_remove,
+     "Usage: quilt remove [-P patch] file ...\n"
+     "\n"
+     "Remove files from the topmost or named patch and restore them\n"
+     "from backup. The opposite of quilt add.\n"
+     "\n"
+     "Options:\n"
+     "  -P patch    Remove files from the named patch instead of the top.\n",
+     "Remove files from the topmost patch"},
+
+    {"fold", cmd_fold,
+     "Usage: quilt fold [-R] [-q] [-f] [-p n]\n"
+     "\n"
+     "Fold a diff read from standard input into the topmost patch.\n"
+     "Files touched by the incoming diff are automatically added to\n"
+     "the patch. Run quilt refresh afterward to update the patch file.\n"
+     "\n"
+     "Options:\n"
+     "  -R          Apply the diff in reverse.\n"
+     "  -q          Quiet; print only error messages.\n"
+     "  -f          Force apply even when the diff has rejects.\n"
+     "  -p n        Set the strip level for the incoming diff.\n",
+     "Fold a diff from stdin into the topmost patch"},
+
+    {"fork", cmd_fork,
+     "Usage: quilt fork [new_name]\n"
+     "\n"
+     "Copy the topmost patch to a new name. The series is updated to\n"
+     "reference the copy; the original file is kept but removed from\n"
+     "the series. If no name is given, -2 is appended (or -3, etc.).\n",
+     "Create a copy of the topmost patch under a new name"},
+
+    // Implemented analysis commands
+    {"annotate", cmd_annotate,
+     "Usage: quilt annotate [-P patch] file\n"
+     "\n"
+     "Show which applied patch last modified each line of a file,\n"
+     "similar to git blame. Works by comparing successive backup\n"
+     "copies in .pc/.\n"
+     "\n"
+     "Options:\n"
+     "  -P patch    Stop at the named patch instead of the top.\n",
+     "Show which patch modified each line of a file"},
+
+    {"graph", cmd_graph,
+     "Usage: quilt graph [--all] [--reduce] [--lines[=num]]\n"
+     "                   [--edge-labels=files] [patch]\n"
+     "\n"
+     "Print a dot-format dependency graph of applied patches. Two\n"
+     "patches are dependent if they modify the same file, or with\n"
+     "--lines, if their changes overlap.\n"
+     "\n"
+     "Options:\n"
+     "  --all             Include all applied patches (default: only\n"
+     "                    dependencies of the top or named patch).\n"
+     "  --reduce          Remove transitive edges from the graph.\n"
+     "  --lines[=num]     Compute line-level dependencies using num\n"
+     "                    lines of context (default: 2).\n"
+     "  --edge-labels=files  Label edges with shared filenames.\n",
+     "Print a dot dependency graph of applied patches"},
+
+    {"mail", cmd_mail,
+     "Usage: quilt mail {--mbox file} [--prefix prefix] [--sender addr]\n"
+     "                  [--from addr] [--to addr] [--cc addr] [--bcc addr]\n"
+     "                  [first_patch [last_patch]]\n"
+     "\n"
+     "Generate an mbox file containing one message per patch in the\n"
+     "given range. Output is intended for git am. Either --from or\n"
+     "--sender is required.\n"
+     "\n"
+     "Options:\n"
+     "  --mbox file       Write output to file (required).\n"
+     "  --prefix prefix   Subject line prefix (default: PATCH).\n"
+     "  --sender addr     Set the envelope sender address.\n"
+     "  --from addr       Set the From: header address.\n"
+     "  --to addr         Add a To: recipient (repeatable).\n"
+     "  --cc addr         Add a Cc: recipient (repeatable).\n"
+     "  --bcc addr        Add a Bcc: recipient (repeatable).\n",
+     "Generate an mbox file from a range of patches"},
+
     // Stubs
-    {"annotate",   cmd_annotate,   "Usage: quilt annotate [-P patch] file"},
-    {"grep",       cmd_grep,       "Usage: quilt grep [-h|options] pattern"},
-    {"graph",      cmd_graph,      "Usage: quilt graph [--all] [--reduce] [--lines[=num]] [--edge-labels=files] [-T ps] [patch]"},
-    {"mail",       cmd_mail,       "Usage: quilt mail {--mbox file} [--prefix prefix] [--sender ...] [--from ...] [--to ...] [--cc ...] [--bcc ...] [first_patch [last_patch]]"},
-    {"setup",      cmd_setup,      "Usage: quilt setup [-d path] series"},
-    {"shell",      cmd_shell,      "Usage: quilt shell [command]"},
-    {"snapshot",   cmd_snapshot,   "Usage: quilt snapshot [-d]"},
-    {"upgrade",    cmd_upgrade,    "Usage: quilt upgrade"},
-    {"init",       cmd_init,
-                   "Usage: quilt init\n"
-                   "\n"
-                   "Initializes the quilt meta-data in the current sub-directory. "
-                   "This command is optional as any quilt command creates these "
-                   "meta-data on need, but it can still be interesting to specify "
-                   "easily the directory that should be used as root directory "
-                   "before working from a sub-directory."},
+    {"grep", cmd_grep,
+     "Usage: quilt grep [-h|options] pattern\n"
+     "\n"
+     "Search source files, skipping patches/ and .pc/ directories.\n"
+     "Not yet implemented.\n",
+     "Search source files (not yet implemented)"},
+
+    {"setup", cmd_setup,
+     "Usage: quilt setup [-d path] series\n"
+     "\n"
+     "Initialize a source tree from a series file or RPM spec.\n"
+     "Not yet implemented.\n",
+     "Set up a source tree from a series file (not yet implemented)"},
+
+    {"shell", cmd_shell,
+     "Usage: quilt shell [command]\n"
+     "\n"
+     "Open a shell or run a command in the quilt environment.\n"
+     "Not yet implemented.\n",
+     "Open a subshell (not yet implemented)"},
+
+    {"snapshot", cmd_snapshot,
+     "Usage: quilt snapshot [-d]\n"
+     "\n"
+     "Save a copy of the current working tree state for later\n"
+     "comparison with quilt diff --snapshot.\n"
+     "\n"
+     "Options:\n"
+     "  -d          Remove the current snapshot instead of creating one.\n",
+     "Save a snapshot of the working tree for later diff"},
+
+    {"upgrade", cmd_upgrade,
+     "Usage: quilt upgrade\n"
+     "\n"
+     "Upgrade quilt metadata in .pc/ to the current format. This is\n"
+     "a no-op because only the version 2 format is supported.\n",
+     "Upgrade quilt metadata to the current format"},
+
+    {"init", cmd_init,
+     "Usage: quilt init\n"
+     "\n"
+     "Initialize quilt metadata in the current directory. This is\n"
+     "optional since any quilt command creates .pc/ and patches/ as\n"
+     "needed, but it lets you establish the project root before\n"
+     "working from a subdirectory.\n",
+     "Initialize quilt metadata in the current directory"},
 };
 
 static constexpr int num_commands = sizeof(commands) / sizeof(commands[0]);
@@ -692,11 +999,20 @@ int quilt_main(int argc, char **argv) {
         out_line("Usage: quilt [--quiltrc file] <command> [options] [args]");
         out_line("");
         out_line("Commands:");
+        ptrdiff_t max_len = 0;
+        for (int i = 0; i < num_commands; ++i) {
+            ptrdiff_t len = std::ssize(std::string_view(commands[i].name));
+            if (len > max_len) max_len = len;
+        }
         for (int i = 0; i < num_commands; ++i) {
             std::string line = "  ";
             line += commands[i].name;
+            line.append(to_uz(max_len + 2 - std::ssize(std::string_view(commands[i].name))), ' ');
+            line += commands[i].description;
             out_line(line);
         }
+        out_line("");
+        out_line("Use \"quilt <command> --help\" for details on a specific command.");
         return 0;
     }
 
