@@ -136,18 +136,15 @@ static void compute_ranges(const QuiltState &q,
         return;
     }
 
-    std::vector<std::string> diff_cmd = {
-        "diff",
-        "-U" + std::to_string(context_lines),
-        old_missing ? "/dev/null" : old_path,
-        new_missing ? "/dev/null" : new_path,
-    };
-    ProcessResult diff = run_cmd(diff_cmd);
-    if (diff.exit_code == 2) {
+    DiffResult diff = builtin_diff(
+        old_missing ? "/dev/null" : std::string_view(old_path),
+        new_missing ? "/dev/null" : std::string_view(new_path),
+        context_lines);
+    if (diff.exit_code == 0) {
         return;
     }
 
-    ranges = parse_ranges(diff.out);
+    ranges = parse_ranges(diff.output);
 }
 
 static bool is_conflict(const QuiltState &q,

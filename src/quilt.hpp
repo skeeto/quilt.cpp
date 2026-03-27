@@ -82,6 +82,20 @@ bool ends_with(std::string_view s, std::string_view suffix);
 std::vector<std::string> split_on_whitespace(std::string_view s);
 std::vector<std::string> shell_split(std::string_view s);
 
+// Built-in diff engine
+enum class DiffFormat { unified, context };
+
+struct DiffResult {
+    int exit_code;       // 0 = identical, 1 = different
+    std::string output;  // formatted diff text
+};
+
+DiffResult builtin_diff(std::string_view old_path, std::string_view new_path,
+                         int context_lines = 3,
+                         std::string_view old_label = {},
+                         std::string_view new_label = {},
+                         DiffFormat format = DiffFormat::unified);
+
 // Command function type
 using CmdFn = int (*)(QuiltState &q, int argc, char **argv);
 

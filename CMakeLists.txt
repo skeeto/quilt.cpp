@@ -7,6 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(CORE_SOURCES
     src/core.cpp
+    src/diff.cpp
     src/cmd_stack.cpp
     src/cmd_annotate.cpp
     src/cmd_patch.cpp
@@ -39,7 +40,7 @@ endif()
 # $ cmake --build <dir> --target amalgam
 set(AMALGAM_SOURCES
     src/quilt.hpp src/platform.hpp
-    src/core.cpp src/cmd_stack.cpp src/cmd_annotate.cpp src/cmd_patch.cpp
+    src/core.cpp src/diff.cpp src/cmd_stack.cpp src/cmd_annotate.cpp src/cmd_patch.cpp
     src/cmd_manage.cpp src/cmd_graph.cpp src/cmd_mail.cpp
     src/cmd_stubs.cpp src/platform_win32.cpp
 )
