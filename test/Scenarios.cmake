@@ -74,6 +74,11 @@ set(QUILT_TEST_SCENARIOS
     series_search_order
     strip_level
     push_numeric
+    push_verbose
+    push_fuzz
+    push_merge
+    push_leave_rejects
+    push_refresh
     pop_numeric
     force_push_tracking
     force_pop
@@ -1484,6 +1489,97 @@ function(qt_scenario_push_numeric)
     qt_assert_file_text("${QT_WORK_DIR}/f.txt" "2" "wrong content after push 2")
 endfunction()
 
+function(qt_scenario_push_verbose)
+    qt_begin_test("push_verbose")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "hello\n")
+    qt_write_file("${QT_WORK_DIR}/patches/a.patch" [=[--- a/f.txt
++++ b/f.txt
+@@ -1 +1 @@
+-hello
++world
+]=])
+    qt_write_file("${QT_WORK_DIR}/patches/series" "a.patch\n")
+    qt_quilt_ok(OUTPUT push_out ERROR push_err ARGS push -v MESSAGE "push -v failed")
+    qt_combine_output(combined "${push_out}" "${push_err}")
+    qt_assert_contains("${combined}" "atching file" "verbose output should mention patching file")
+endfunction()
+
+function(qt_scenario_push_fuzz)
+    qt_begin_test("push_fuzz")
+    # File has extra leading lines that shift context
+    qt_write_file("${QT_WORK_DIR}/f.txt" "extra1\nextra2\nextra3\nhello\n")
+    # Patch expects "hello" at line 1, so it needs fuzz to apply with offset
+    qt_write_file("${QT_WORK_DIR}/patches/a.patch" [=[--- a/f.txt
++++ b/f.txt
+@@ -1 +1 @@
+-hello
++world
+]=])
+    qt_write_file("${QT_WORK_DIR}/patches/series" "a.patch\n")
+    qt_quilt_ok(ARGS push --fuzz=3 MESSAGE "push --fuzz=3 failed")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "world" "fuzz push should apply the change")
+endfunction()
+
+function(qt_scenario_push_merge)
+    qt_begin_test("push_merge")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "hello\n")
+    qt_write_file("${QT_WORK_DIR}/patches/a.patch" [=[--- a/f.txt
++++ b/f.txt
+@@ -1 +1 @@
+-hello
++world
+]=])
+    qt_write_file("${QT_WORK_DIR}/patches/series" "a.patch\n")
+    # --merge requires GNU patch; verify quilt accepts the flag and passes
+    # it through (patch may reject it on non-GNU systems, so use -f)
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -f --merge=diff3)
+    qt_combine_output(combined "${out}" "${err}")
+    # Quilt should report applying the patch, not reject --merge as unknown
+    qt_assert_contains("${combined}" "Applying patch" "quilt should accept --merge flag")
+endfunction()
+
+function(qt_scenario_push_leave_rejects)
+    qt_begin_test("push_leave_rejects")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "original\n")
+    qt_write_file("${QT_WORK_DIR}/patches/bad.patch" [=[--- a/f.txt
++++ b/f.txt
+@@ -1 +1 @@
+-wrong
++patched
+]=])
+    qt_write_file("${QT_WORK_DIR}/patches/series" "bad.patch\n")
+
+    # Default: .rej should be cleaned up
+    qt_quilt(RESULT rc1 OUTPUT out1 ERROR err1 ARGS push)
+    qt_assert_failure("${rc1}" "push of conflicting patch should fail")
+    if(EXISTS "${QT_WORK_DIR}/f.txt.rej")
+        qt_fail("f.txt.rej should have been cleaned up by default")
+    endif()
+
+    # With --leave-rejects: .rej should remain
+    qt_quilt(RESULT rc2 OUTPUT out2 ERROR err2 ARGS push --leave-rejects)
+    qt_assert_failure("${rc2}" "push --leave-rejects should still fail")
+    if(NOT EXISTS "${QT_WORK_DIR}/f.txt.rej")
+        qt_fail("f.txt.rej should remain with --leave-rejects")
+    endif()
+endfunction()
+
+function(qt_scenario_push_refresh)
+    qt_begin_test("push_refresh")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "hello\n")
+    qt_write_file("${QT_WORK_DIR}/patches/a.patch" [=[--- a/f.txt
++++ b/f.txt
+@@ -1 +1 @@
+-hello
++world
+]=])
+    qt_write_file("${QT_WORK_DIR}/patches/series" "a.patch\n")
+    qt_quilt_ok(OUTPUT push_out ARGS push --refresh MESSAGE "push --refresh failed")
+    # After --refresh, the patch file should have been rewritten by cmd_refresh
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/a.patch" "-hello" "refreshed patch should contain -hello")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/a.patch" "+world" "refreshed patch should contain +world")
+endfunction()
+
 function(qt_scenario_pop_numeric)
     qt_begin_test("pop_numeric")
     qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
@@ -2419,6 +2515,16 @@ function(qt_run_named_scenario scenario)
         qt_scenario_strip_level()
     elseif(scenario STREQUAL "push_numeric")
         qt_scenario_push_numeric()
+    elseif(scenario STREQUAL "push_verbose")
+        qt_scenario_push_verbose()
+    elseif(scenario STREQUAL "push_fuzz")
+        qt_scenario_push_fuzz()
+    elseif(scenario STREQUAL "push_merge")
+        qt_scenario_push_merge()
+    elseif(scenario STREQUAL "push_leave_rejects")
+        qt_scenario_push_leave_rejects()
+    elseif(scenario STREQUAL "push_refresh")
+        qt_scenario_push_refresh()
     elseif(scenario STREQUAL "pop_numeric")
         qt_scenario_pop_numeric()
     elseif(scenario STREQUAL "force_push_tracking")

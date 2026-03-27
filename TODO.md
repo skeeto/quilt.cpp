@@ -15,12 +15,12 @@ Legend:
 
 ## push (`cmd_stack.cpp`)
 
-- [ ] `-v` — missing. Verbose output.
-- [ ] `--fuzz=N` — missing. Set maximum fuzz factor for patch(1).
-- [ ] `-m` / `--merge[=merge|diff3]` — missing. Use patch(1) merge mode.
-- [ ] `--leave-rejects` — missing. Keep .rej files even without `-f`.
+- [x] `-v` — Verbose output.
+- [x] `--fuzz=N` — Set maximum fuzz factor for patch(1).
+- [x] `-m` / `--merge[=merge|diff3]` — Use patch(1) merge mode.
+- [x] `--leave-rejects` — Keep .rej files even without `-f`.
 - [ ] `--color[=always|auto|never]` — missing. Colorize patch(1) output.
-- [ ] `--refresh` — missing. Auto-refresh after each successful push.
+- [x] `--refresh` — Auto-refresh after each successful push.
 
 ## pop (`cmd_stack.cpp`)
 

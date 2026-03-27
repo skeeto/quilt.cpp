@@ -241,6 +241,12 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
     bool push_all = false;
     bool force = false;
     bool quiet = false;
+    bool verbose = false;
+    int fuzz = -1;
+    bool merge = false;
+    std::string merge_style;
+    bool leave_rejects = false;
+    bool do_refresh = false;
     int push_count = -1;
     std::string target;
 
@@ -249,6 +255,12 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
         if (arg == "-a") { push_all = true; }
         else if (arg == "-f") { force = true; }
         else if (arg == "-q") { quiet = true; }
+        else if (arg == "-v") { verbose = true; }
+        else if (starts_with(arg, "--fuzz=")) { fuzz = std::atoi(std::string(arg.substr(7)).c_str()); }
+        else if (arg == "-m" || arg == "--merge") { merge = true; }
+        else if (starts_with(arg, "--merge=")) { merge = true; merge_style = std::string(arg.substr(8)); }
+        else if (arg == "--leave-rejects") { leave_rejects = true; }
+        else if (arg == "--refresh") { do_refresh = true; }
         else if (arg[0] != '-') {
             // Try as number first
             char *endptr;
@@ -344,6 +356,19 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
         if (force) {
             patch_args.push_back("--force");
         }
+        if (verbose) {
+            patch_args.push_back("--verbose");
+        }
+        if (fuzz >= 0) {
+            patch_args.push_back("--fuzz=" + std::to_string(fuzz));
+        }
+        if (merge) {
+            if (merge_style.empty()) {
+                patch_args.push_back("--merge");
+            } else {
+                patch_args.push_back("--merge=" + merge_style);
+            }
+        }
         for (const auto &opt : extra_patch_opts) {
             patch_args.push_back(opt);
         }
@@ -371,6 +396,14 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
             } else {
                 // Not forced: do not record, clean up backups
                 err_line("Patch " + display + " does not apply (enforce with -f)");
+                if (!leave_rejects) {
+                    for (const auto &file : affected) {
+                        std::string rej = path_join(q.work_dir, file + ".rej");
+                        if (file_exists(rej)) {
+                            delete_file(rej);
+                        }
+                    }
+                }
                 delete_dir_recursive(pc_dir);
                 return 1;
             }
@@ -382,6 +415,13 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
 
         // Create .timestamp
         write_file(path_join(pc_dir, ".timestamp"), "");
+
+        if (do_refresh) {
+            char arg0[] = "refresh";
+            char *refresh_argv[] = {arg0, nullptr};
+            int rr = cmd_refresh(q, 1, refresh_argv);
+            if (rr != 0) return rr;
+        }
 
         last_applied = name;
     }
