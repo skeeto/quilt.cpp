@@ -14,7 +14,7 @@ struct AnnotateOptions {
     std::string file;
 };
 
-std::string strip_patches_prefix(const QuiltState &q, std::string_view name)
+static std::string strip_patches_prefix(const QuiltState &q, std::string_view name)
 {
     std::string prefix = q.patches_dir + "/";
     if (starts_with(name, prefix)) {
@@ -23,7 +23,7 @@ std::string strip_patches_prefix(const QuiltState &q, std::string_view name)
     return std::string(name);
 }
 
-std::string print_patch_name(const QuiltState &q, std::string_view patch)
+static std::string print_patch_name(const QuiltState &q, std::string_view patch)
 {
     if (!get_env("QUILT_PATCHES_PREFIX").empty()) {
         return q.patches_dir + "/" + std::string(patch);
@@ -31,12 +31,12 @@ std::string print_patch_name(const QuiltState &q, std::string_view patch)
     return std::string(patch);
 }
 
-bool path_has_content(std::string_view path)
+static bool path_has_content(std::string_view path)
 {
     return file_exists(path) && !read_file(path).empty();
 }
 
-std::vector<std::string> read_lines(std::string_view path)
+static std::vector<std::string> read_lines(std::string_view path)
 {
     if (!path_has_content(path)) {
         return {};
@@ -44,7 +44,7 @@ std::vector<std::string> read_lines(std::string_view path)
     return split_lines(read_file(path));
 }
 
-std::string next_patch_for_file(const QuiltState &q,
+static std::string next_patch_for_file(const QuiltState &q,
                                 std::string_view patch,
                                 std::string_view file)
 {
@@ -63,7 +63,7 @@ std::string next_patch_for_file(const QuiltState &q,
     return "";
 }
 
-std::vector<std::string> reannotate_lines(const std::vector<std::string> &old_lines,
+static std::vector<std::string> reannotate_lines(const std::vector<std::string> &old_lines,
                                           const std::vector<std::string> &old_annotations,
                                           const std::vector<std::string> &new_lines,
                                           std::string_view annotation)

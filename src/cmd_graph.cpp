@@ -33,7 +33,7 @@ struct EdgeData {
 
 using EdgeKey = std::pair<int, int>;
 
-std::string strip_patches_prefix(const QuiltState &q, std::string_view name) {
+static std::string strip_patches_prefix(const QuiltState &q, std::string_view name) {
     std::string prefix = q.patches_dir + "/";
     if (starts_with(name, prefix)) {
         return std::string(name.substr(prefix.size()));
@@ -41,7 +41,7 @@ std::string strip_patches_prefix(const QuiltState &q, std::string_view name) {
     return std::string(name);
 }
 
-bool is_number(std::string_view value) {
+static bool is_number(std::string_view value) {
     if (value.empty()) return false;
     for (char c : value) {
         if (c < '0' || c > '9') return false;
@@ -49,11 +49,11 @@ bool is_number(std::string_view value) {
     return true;
 }
 
-bool is_zero_length_file(std::string_view path) {
+static bool is_zero_length_file(std::string_view path) {
     return file_exists(path) && read_file(path).empty();
 }
 
-std::string dot_escape(std::string_view text) {
+static std::string dot_escape(std::string_view text) {
     std::string escaped;
     escaped.reserve(text.size());
     for (char c : text) {
@@ -69,14 +69,14 @@ std::string dot_escape(std::string_view text) {
     return escaped;
 }
 
-int parse_hunk_count(const std::ssub_match &match) {
+static int parse_hunk_count(const std::ssub_match &match) {
     if (!match.matched || match.str().empty()) {
         return 1;
     }
     return std::stoi(match.str());
 }
 
-LineRanges parse_ranges(std::string_view diff_text) {
+static LineRanges parse_ranges(std::string_view diff_text) {
     static const std::regex hunk_regex(
         R"(^@@ -([0-9]+)(?:,([0-9]+))? \+([0-9]+)(?:,([0-9]+))? @@)");
 
@@ -99,7 +99,7 @@ LineRanges parse_ranges(std::string_view diff_text) {
     return ranges;
 }
 
-std::optional<int> next_patch_for_file(const std::vector<GraphNode> &nodes,
+static std::optional<int> next_node_for_file(const std::vector<GraphNode> &nodes,
                                        int index,
                                        std::string_view file) {
     for (int i = index + 1; i < static_cast<int>(nodes.size()); ++i) {
@@ -110,7 +110,7 @@ std::optional<int> next_patch_for_file(const std::vector<GraphNode> &nodes,
     return std::nullopt;
 }
 
-void compute_ranges(const QuiltState &q,
+static void compute_ranges(const QuiltState &q,
                     std::vector<GraphNode> &nodes,
                     int index,
                     std::string_view file,
@@ -123,7 +123,7 @@ void compute_ranges(const QuiltState &q,
 
     std::string old_path = path_join(pc_patch_dir(q, nodes[index].name), file);
     std::string new_path;
-    auto next = next_patch_for_file(nodes, index, file);
+    auto next = next_node_for_file(nodes, index, file);
     if (next.has_value()) {
         new_path = path_join(pc_patch_dir(q, nodes[*next].name), file);
     } else {
@@ -150,7 +150,7 @@ void compute_ranges(const QuiltState &q,
     ranges = parse_ranges(diff.out);
 }
 
-bool is_conflict(const QuiltState &q,
+static bool is_conflict(const QuiltState &q,
                  std::vector<GraphNode> &nodes,
                  int from,
                  int to,
@@ -183,7 +183,7 @@ bool is_conflict(const QuiltState &q,
     return false;
 }
 
-void add_edge(std::map<EdgeKey, EdgeData> &edges,
+static void add_edge(std::map<EdgeKey, EdgeData> &edges,
               int earlier,
               int later,
               std::string_view file) {
@@ -191,7 +191,7 @@ void add_edge(std::map<EdgeKey, EdgeData> &edges,
     edge.names.emplace_back(file);
 }
 
-std::set<int> collect_reachable(const std::map<EdgeKey, EdgeData> &edges,
+static std::set<int> collect_reachable(const std::map<EdgeKey, EdgeData> &edges,
                                 int start,
                                 bool forward) {
     std::map<int, std::vector<int>> adjacency;
@@ -221,7 +221,7 @@ std::set<int> collect_reachable(const std::map<EdgeKey, EdgeData> &edges,
     return seen;
 }
 
-bool has_alternate_path(int from,
+static bool has_alternate_path(int from,
                         int to,
                         const std::map<int, std::vector<int>> &adjacency,
                         EdgeKey skip_edge) {
@@ -243,7 +243,7 @@ bool has_alternate_path(int from,
     return false;
 }
 
-void reduce_edges(std::map<EdgeKey, EdgeData> &edges) {
+static void reduce_edges(std::map<EdgeKey, EdgeData> &edges) {
     std::map<int, std::vector<int>> adjacency;
     for (const auto &[key, value] : edges) {
         (void)value;
@@ -263,14 +263,14 @@ void reduce_edges(std::map<EdgeKey, EdgeData> &edges) {
     }
 }
 
-std::string format_len_attr(int from, int to) {
+static std::string format_len_attr(int from, int to) {
     std::ostringstream value;
     value << std::fixed << std::setprecision(2)
           << std::log(static_cast<double>(std::abs(to - from) + 3));
     return "len=\"" + value.str() + "\"";
 }
 
-std::string render_dot(const std::vector<GraphNode> &nodes,
+static std::string render_dot(const std::vector<GraphNode> &nodes,
                        std::map<EdgeKey, EdgeData> edges,
                        std::set<int> used_nodes,
                        bool reduce,
