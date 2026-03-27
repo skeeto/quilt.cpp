@@ -24,9 +24,9 @@ Legend:
 
 ## pop (`cmd_stack.cpp`)
 
-- [ ] `-v` — missing. Verbose output.
-- [ ] `-R` — parsed, ignored. Should verify patch removes cleanly instead of relying on timestamps.
-- [ ] `--refresh` — missing. Auto-refresh before each pop.
+- [x] `-v` — missing. Verbose output.
+- [x] `-R` — parsed, ignored. Should verify patch removes cleanly instead of relying on timestamps.
+- [x] `--refresh` — missing. Auto-refresh before each pop.
 
 ## series (`cmd_stack.cpp`)
 

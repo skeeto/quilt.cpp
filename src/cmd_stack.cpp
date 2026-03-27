@@ -396,6 +396,9 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
     bool pop_all = false;
     bool force = false;
     bool quiet = false;
+    bool verbose = false;
+    bool verify_reverse = false;
+    bool auto_refresh = false;
     int pop_count = -1;
     std::string target;
 
@@ -404,7 +407,9 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
         if (arg == "-a") { pop_all = true; }
         else if (arg == "-f") { force = true; }
         else if (arg == "-q") { quiet = true; }
-        else if (arg == "-R") { /* no-op, default behavior */ }
+        else if (arg == "-v") { verbose = true; }
+        else if (arg == "-R") { verify_reverse = true; }
+        else if (arg == "--refresh") { auto_refresh = true; }
         else if (arg[0] != '-') {
             // Try as number first
             char *endptr;
@@ -461,12 +466,44 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
         const std::string &name = q.applied.back();
         std::string display = patch_path_display(q, name);
 
+        // Auto-refresh before popping if requested
+        if (auto_refresh) {
+            char cmd_name[] = "refresh";
+            char *refresh_argv[] = {cmd_name};
+            int rr = cmd_refresh(q, 1, refresh_argv);
+            if (rr != 0) {
+                err_line("Refresh of patch " + display + " failed, aborting pop");
+                return 1;
+            }
+        }
+
         // Check if patch needs refresh (force-applied) and -f not given
         std::string pc_dir = pc_patch_dir(q, name);
         std::string nr = path_join(pc_dir, ".needs_refresh");
         if (file_exists(nr) && !force) {
             err_line("Patch " + display + " needs to be refreshed first.");
             return 1;
+        }
+
+        // Verify patch removes cleanly if -R given
+        if (verify_reverse) {
+            std::string patch_path = path_join(q.work_dir, q.patches_dir, name);
+            std::string patch_content = read_file(patch_path);
+            if (!patch_content.empty()) {
+                int strip_level = q.get_strip_level(name);
+                std::vector<std::string> verify_args = {
+                    "patch", "-R", "-p" + std::to_string(strip_level),
+                    "--dry-run", "-f"
+                };
+                ProcessResult vr = run_cmd_input(verify_args, patch_content);
+                if (vr.exit_code != 0) {
+                    if (!force) {
+                        err_line("Patch " + display +
+                                 " does not remove cleanly (enforce with -f)");
+                        return 1;
+                    }
+                }
+            }
         }
 
         if (!quiet) {
@@ -476,7 +513,7 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
         // Restore backed-up files
         auto files = files_in_patch(q, name);
         for (const auto &file : files) {
-            if (!quiet) {
+            if (verbose && !quiet) {
                 out_line("Restoring " + file);
             }
             restore_file(q, name, file);

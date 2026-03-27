@@ -634,7 +634,7 @@ static Command commands[] = {
      "Apply patches to the source tree"},
 
     {"pop", cmd_pop,
-     "Usage: quilt pop [-a] [-f] [-q] [num|patch]\n"
+     "Usage: quilt pop [-afRqv] [--refresh] [num|patch]\n"
      "\n"
      "Remove the topmost applied patch by restoring files from backup.\n"
      "Without arguments, removes one patch. With a patch name, removes\n"
@@ -644,8 +644,10 @@ static Command commands[] = {
      "Options:\n"
      "  -a          Remove all applied patches.\n"
      "  -f          Force removal even if the patch needs refresh.\n"
+     "  -R          Always verify that the patch removes cleanly.\n"
      "  -q          Quiet; print only error messages.\n"
-     "  -R          Accepted for compatibility (no effect).\n",
+     "  -v          Verbose; print file-level restore messages.\n"
+     "  --refresh   Automatically refresh every patch before it gets unapplied.\n",
      "Remove applied patches from the stack"},
 
     {"refresh", cmd_refresh,
