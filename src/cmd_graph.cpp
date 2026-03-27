@@ -36,7 +36,7 @@ using EdgeKey = std::pair<int, int>;
 static std::string strip_patches_prefix(const QuiltState &q, std::string_view name) {
     std::string prefix = q.patches_dir + "/";
     if (starts_with(name, prefix)) {
-        return std::string(name.substr(prefix.size()));
+        return std::string(name.substr(to_uz(std::ssize(prefix))));
     }
     return std::string(name);
 }
@@ -55,7 +55,7 @@ static bool is_zero_length_file(std::string_view path) {
 
 static std::string dot_escape(std::string_view text) {
     std::string escaped;
-    escaped.reserve(text.size());
+    escaped.reserve(to_uz(std::ssize(text)));
     for (char c : text) {
         if (c == '\\' || c == '"') {
             escaped += '\\';
@@ -102,8 +102,8 @@ static LineRanges parse_ranges(std::string_view diff_text) {
 static std::optional<int> next_node_for_file(const std::vector<GraphNode> &nodes,
                                        int index,
                                        std::string_view file) {
-    for (int i = index + 1; i < static_cast<int>(nodes.size()); ++i) {
-        if (nodes[i].files.find(std::string(file)) != nodes[i].files.end()) {
+    for (int i = index + 1; i < std::ssize(nodes); ++i) {
+        if (nodes[to_uz(i)].files.find(std::string(file)) != nodes[to_uz(i)].files.end()) {
             return i;
         }
     }
@@ -115,17 +115,17 @@ static void compute_ranges(const QuiltState &q,
                     int index,
                     std::string_view file,
                     int context_lines) {
-    auto it = nodes[index].files.find(std::string(file));
-    if (it == nodes[index].files.end() || it->second.computed) return;
+    auto it = nodes[to_uz(index)].files.find(std::string(file));
+    if (it == nodes[to_uz(index)].files.end() || it->second.computed) return;
 
     LineRanges &ranges = it->second;
     ranges.computed = true;
 
-    std::string old_path = path_join(pc_patch_dir(q, nodes[index].name), file);
+    std::string old_path = path_join(pc_patch_dir(q, nodes[to_uz(index)].name), file);
     std::string new_path;
     auto next = next_node_for_file(nodes, index, file);
     if (next.has_value()) {
-        new_path = path_join(pc_patch_dir(q, nodes[*next].name), file);
+        new_path = path_join(pc_patch_dir(q, nodes[to_uz(*next)].name), file);
     } else {
         new_path = path_join(q.work_dir, file);
     }
@@ -160,22 +160,22 @@ static bool is_conflict(const QuiltState &q,
     compute_ranges(q, nodes, to, file, context_lines);
 
     const auto file_key = std::string(file);
-    const auto &a = nodes[from].files[file_key].right;
-    const auto &b = nodes[to].files[file_key].left;
+    const auto &a = nodes[to_uz(from)].files[file_key].right;
+    const auto &b = nodes[to_uz(to)].files[file_key].left;
 
-    size_t ia = 0;
-    size_t ib = 0;
-    while (ia < a.size() && ib < b.size()) {
-        size_t rem_a = a.size() - ia;
-        size_t rem_b = b.size() - ib;
-        if (a[ia] < b[ib]) {
-            if ((rem_b % 2u) == 1u) return true;
+    ptrdiff_t ia = 0;
+    ptrdiff_t ib = 0;
+    while (ia < std::ssize(a) && ib < std::ssize(b)) {
+        ptrdiff_t rem_a = std::ssize(a) - ia;
+        ptrdiff_t rem_b = std::ssize(b) - ib;
+        if (a[to_uz(ia)] < b[to_uz(ib)]) {
+            if ((rem_b % 2) == 1) return true;
             ++ia;
-        } else if (a[ia] > b[ib]) {
-            if ((rem_a % 2u) == 1u) return true;
+        } else if (a[to_uz(ia)] > b[to_uz(ib)]) {
+            if ((rem_a % 2) == 1) return true;
             ++ib;
         } else {
-            if ((rem_a % 2u) == (rem_b % 2u)) return true;
+            if ((rem_a % 2) == (rem_b % 2)) return true;
             ++ia;
             ++ib;
         }
@@ -295,9 +295,9 @@ static std::string render_dot(const std::vector<GraphNode> &nodes,
         dot += "\tn" + std::to_string(node.number);
         if (!attrs.empty()) {
             dot += " [";
-            for (size_t i = 0; i < attrs.size(); ++i) {
+            for (ptrdiff_t i = 0; i < std::ssize(attrs); ++i) {
                 if (i != 0) dot += ",";
-                dot += attrs[i];
+                dot += attrs[to_uz(i)];
             }
             dot += "]";
         }
@@ -311,9 +311,9 @@ static std::string render_dot(const std::vector<GraphNode> &nodes,
         std::vector<std::string> attrs;
         if (edge_labels && !edge.names.empty()) {
             std::string label;
-            for (size_t i = 0; i < edge.names.size(); ++i) {
+            for (ptrdiff_t i = 0; i < std::ssize(edge.names); ++i) {
                 if (i != 0) label += "\\n";
-                label += dot_escape(edge.names[i]);
+                label += dot_escape(edge.names[to_uz(i)]);
             }
             attrs.push_back("label=\"" + label + "\"");
         }
@@ -321,9 +321,9 @@ static std::string render_dot(const std::vector<GraphNode> &nodes,
 
         dot += "\tn" + std::to_string(key.first) + " -> n" + std::to_string(key.second);
         dot += " [";
-        for (size_t i = 0; i < attrs.size(); ++i) {
+        for (ptrdiff_t i = 0; i < std::ssize(attrs); ++i) {
             if (i != 0) dot += ",";
-            dot += attrs[i];
+            dot += attrs[to_uz(i)];
         }
         dot += "];\n";
     }
@@ -423,14 +423,14 @@ int cmd_graph(QuiltState &q, int argc, char **argv) {
     }
 
     std::vector<GraphNode> nodes;
-    nodes.reserve(q.applied.size());
-    for (size_t i = 0; i < q.applied.size(); ++i) {
-        const std::string &patch = q.applied[i];
+    nodes.reserve(to_uz(std::ssize(q.applied)));
+    for (ptrdiff_t i = 0; i < std::ssize(q.applied); ++i) {
+        const std::string &patch = q.applied[to_uz(i)];
         auto files = files_in_patch(q, patch);
         std::sort(files.begin(), files.end());
 
         GraphNode node;
-        node.number = static_cast<int>(i);
+        node.number = to_int(i);
         node.name = patch;
         for (const auto &file : files) {
             node.files.emplace(file, LineRanges{});

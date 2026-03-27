@@ -18,7 +18,7 @@ static std::string strip_patches_prefix(const QuiltState &q, std::string_view na
 {
     std::string prefix = q.patches_dir + "/";
     if (starts_with(name, prefix)) {
-        return std::string(name.substr(prefix.size()));
+        return std::string(name.substr(to_uz(std::ssize(prefix))));
     }
     return std::string(name);
 }
@@ -68,30 +68,30 @@ static std::vector<std::string> reannotate_lines(const std::vector<std::string> 
                                           const std::vector<std::string> &new_lines,
                                           std::string_view annotation)
 {
-    const size_t m = old_lines.size();
-    const size_t n = new_lines.size();
-    std::vector<std::vector<int>> dp(m + 1, std::vector<int>(n + 1, 0));
+    const ptrdiff_t m = std::ssize(old_lines);
+    const ptrdiff_t n = std::ssize(new_lines);
+    std::vector<std::vector<int>> dp(to_uz(m + 1), std::vector<int>(to_uz(n + 1), 0));
 
-    for (size_t i = m; i-- > 0;) {
-        for (size_t j = n; j-- > 0;) {
-            if (old_lines[i] == new_lines[j]) {
-                dp[i][j] = dp[i + 1][j + 1] + 1;
+    for (ptrdiff_t i = m; i-- > 0;) {
+        for (ptrdiff_t j = n; j-- > 0;) {
+            if (old_lines[to_uz(i)] == new_lines[to_uz(j)]) {
+                dp[to_uz(i)][to_uz(j)] = dp[to_uz(i + 1)][to_uz(j + 1)] + 1;
             } else {
-                dp[i][j] = std::max(dp[i + 1][j], dp[i][j + 1]);
+                dp[to_uz(i)][to_uz(j)] = std::max(dp[to_uz(i + 1)][to_uz(j)], dp[to_uz(i)][to_uz(j + 1)]);
             }
         }
     }
 
     std::vector<std::string> result;
-    result.reserve(n);
-    size_t i = 0;
-    size_t j = 0;
+    result.reserve(to_uz(n));
+    ptrdiff_t i = 0;
+    ptrdiff_t j = 0;
     while (i < m || j < n) {
-        if (i < m && j < n && old_lines[i] == new_lines[j]) {
-            result.push_back(i < old_annotations.size() ? old_annotations[i] : "");
+        if (i < m && j < n && old_lines[to_uz(i)] == new_lines[to_uz(j)]) {
+            result.push_back(i < std::ssize(old_annotations) ? old_annotations[to_uz(i)] : "");
             ++i;
             ++j;
-        } else if (j < n && (i == m || dp[i][j + 1] >= dp[i + 1][j])) {
+        } else if (j < n && (i == m || dp[to_uz(i)][to_uz(j + 1)] >= dp[to_uz(i + 1)][to_uz(j)])) {
             result.emplace_back(annotation);
             ++j;
         } else {
@@ -196,22 +196,22 @@ int cmd_annotate(QuiltState &q, int argc, char **argv)
         return 0;
     }
 
-    std::vector<std::string> annotations(read_lines(files.front()).size(), "");
-    for (size_t i = 0; i < patches.size(); ++i) {
-        annotations = reannotate_lines(read_lines(files[i]), annotations,
-                                       read_lines(files[i + 1]),
+    std::vector<std::string> annotations(to_uz(std::ssize(read_lines(files.front()))), "");
+    for (ptrdiff_t i = 0; i < std::ssize(patches); ++i) {
+        annotations = reannotate_lines(read_lines(files[to_uz(i)]), annotations,
+                                       read_lines(files[to_uz(i + 1)]),
                                        std::to_string(i + 1));
     }
 
     auto final_lines = read_lines(files.back());
-    for (size_t i = 0; i < annotations.size(); ++i) {
-        std::string line = i < final_lines.size() ? final_lines[i] : "";
-        out(annotations[i] + "\t" + line + "\n");
+    for (ptrdiff_t i = 0; i < std::ssize(annotations); ++i) {
+        std::string line = i < std::ssize(final_lines) ? final_lines[to_uz(i)] : "";
+        out(annotations[to_uz(i)] + "\t" + line + "\n");
     }
 
     out("\n");
-    for (size_t i = 0; i < patches.size(); ++i) {
-        out(std::to_string(i + 1) + "\t" + print_patch_name(q, patches[i]) + "\n");
+    for (ptrdiff_t i = 0; i < std::ssize(patches); ++i) {
+        out(std::to_string(i + 1) + "\t" + print_patch_name(q, patches[to_uz(i)]) + "\n");
     }
     return 0;
 }

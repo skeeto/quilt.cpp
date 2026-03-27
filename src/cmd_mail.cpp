@@ -58,7 +58,7 @@ static std::string rfc2047_encode(std::string_view s) {
     // Encode as =?UTF-8?q?...?=
     // Characters that must be encoded: non-ASCII, =, ?, _, space
     std::string result = "=?UTF-8?q?";
-    int line_len = 10; // length of "=?UTF-8?q?"
+    ptrdiff_t line_len = 10; // length of "=?UTF-8?q?"
     for (char ch : s) {
         auto c = static_cast<unsigned char>(ch);
         std::string encoded;
@@ -70,12 +70,12 @@ static std::string rfc2047_encode(std::string_view s) {
             encoded = std::string(1, ch);
         }
         // Line wrap: if adding this would exceed ~75 chars, close and start new encoded word
-        if (line_len + (int)encoded.size() + 2 > 75) { // 2 for "?="
+        if (line_len + std::ssize(encoded) + 2 > 75) { // 2 for "?="
             result += "?=\n =?UTF-8?q?";
             line_len = 12; // " =?UTF-8?q?"
         }
         result += encoded;
-        line_len += (int)encoded.size();
+        line_len += std::ssize(encoded);
     }
     result += "?=";
     return result;
@@ -122,11 +122,11 @@ static std::string format_rfc2822_date(time_t t) {
 static std::string make_message_id(time_t t, int seq, std::string_view from) {
     // Extract domain from the from address
     std::string domain = "localhost";
-    auto at = from.find('@');
-    if (at != std::string_view::npos) {
-        auto end = from.find('>', at);
-        if (end == std::string_view::npos) end = from.size();
-        domain = std::string(from.substr(at + 1, end - at - 1));
+    auto at = str_find(from, '@');
+    if (at >= 0) {
+        auto end = str_find(from, '>', at);
+        if (end < 0) end = std::ssize(from);
+        domain = std::string(from.substr(to_uz(at + 1), to_uz(end - at - 1)));
     }
 
     char buf[128];
@@ -219,10 +219,10 @@ int cmd_mail(QuiltState &q, int argc, char **argv) {
     }
 
     // Resolve patch range
-    int first_idx = 0;
-    int last_idx = (int)q.series.size() - 1;
+    ptrdiff_t first_idx = 0;
+    ptrdiff_t last_idx = std::ssize(q.series) - 1;
 
-    if (positional.size() == 1) {
+    if (std::ssize(positional) == 1) {
         // Single patch
         std::string name = positional[0];
         if (name == "-") {
@@ -236,7 +236,7 @@ int cmd_mail(QuiltState &q, int argc, char **argv) {
             first_idx = *idx;
             last_idx = *idx;
         }
-    } else if (positional.size() == 2) {
+    } else if (std::ssize(positional) == 2) {
         std::string first_name = positional[0];
         std::string last_name = positional[1];
 
@@ -252,7 +252,7 @@ int cmd_mail(QuiltState &q, int argc, char **argv) {
         }
 
         if (last_name == "-") {
-            last_idx = (int)q.series.size() - 1;
+            last_idx = std::ssize(q.series) - 1;
         } else {
             auto idx = q.find_in_series(last_name);
             if (!idx) {
@@ -266,19 +266,19 @@ int cmd_mail(QuiltState &q, int argc, char **argv) {
             err_line("quilt mail: first patch must come before last patch in series");
             return 1;
         }
-    } else if (positional.size() > 2) {
+    } else if (std::ssize(positional) > 2) {
         err_line("Usage: quilt mail {--mbox file} [options] [first_patch [last_patch]]");
         return 1;
     }
 
-    int total = last_idx - first_idx + 1;
-    int width = num_width(total);
+    ptrdiff_t total = last_idx - first_idx + 1;
+    int width = num_width(to_int(total));
     time_t base_time = std::time(nullptr);
 
     std::string mbox;
 
-    for (int i = first_idx; i <= last_idx; ++i) {
-        const std::string &patch = q.series[static_cast<size_t>(i)];
+    for (ptrdiff_t i = first_idx; i <= last_idx; ++i) {
+        const std::string &patch = q.series[to_uz(i)];
         std::string patch_file = path_join(q.work_dir, q.patches_dir, patch);
         std::string content = read_file(patch_file);
 
@@ -299,15 +299,15 @@ int cmd_mail(QuiltState &q, int argc, char **argv) {
         if (!header.empty()) {
             auto hdr_lines = split_lines(header);
             // Find first non-empty line for subject
-            size_t subj_line = 0;
-            while (subj_line < hdr_lines.size() && trim(hdr_lines[subj_line]).empty()) {
+            ptrdiff_t subj_line = 0;
+            while (subj_line < std::ssize(hdr_lines) && trim(hdr_lines[to_uz(subj_line)]).empty()) {
                 subj_line++;
             }
-            if (subj_line < hdr_lines.size()) {
-                subject_text = trim(hdr_lines[subj_line]);
+            if (subj_line < std::ssize(hdr_lines)) {
+                subject_text = trim(hdr_lines[to_uz(subj_line)]);
                 // Remaining lines become body
-                for (size_t j = subj_line + 1; j < hdr_lines.size(); ++j) {
-                    body += hdr_lines[j];
+                for (ptrdiff_t j = subj_line + 1; j < std::ssize(hdr_lines); ++j) {
+                    body += hdr_lines[to_uz(j)];
                     body += '\n';
                 }
             }
@@ -323,10 +323,10 @@ int cmd_mail(QuiltState &q, int argc, char **argv) {
         if (total == 1) {
             subject_prefix = "[" + prefix + "]";
         } else {
-            int seq = i - first_idx + 1;
+            int seq = to_int(i - first_idx + 1);
             char num_buf[32];
             std::snprintf(num_buf, sizeof(num_buf), "[%s %0*d/%d]",
-                          prefix.c_str(), width, seq, total);
+                          prefix.c_str(), width, seq, to_int(total));
             subject_prefix = num_buf;
         }
 
@@ -341,7 +341,7 @@ int cmd_mail(QuiltState &q, int argc, char **argv) {
         }
 
         time_t msg_time = base_time + (i - first_idx);
-        int seq = i - first_idx + 1;
+        int seq = to_int(i - first_idx + 1);
 
         // Build message
         std::string msg;

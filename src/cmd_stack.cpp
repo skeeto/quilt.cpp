@@ -44,16 +44,16 @@ static std::vector<std::string> parse_patch_files(std::string_view content, int 
         // Skip /dev/null
         if (starts_with(rest, "/dev/null")) continue;
         // Strip trailing tab and timestamp (e.g., "\t2024-01-01 ...")
-        auto tab = rest.find('\t');
-        if (tab != std::string_view::npos) {
-            rest = rest.substr(0, tab);
+        ptrdiff_t tab = str_find(rest, '\t');
+        if (tab >= 0) {
+            rest = rest.substr(0, to_uz(tab));
         }
         std::string f = trim(rest);
         // Strip N leading path components (like patch -pN)
         for (int i = 0; i < strip && !f.empty(); ++i) {
-            auto slash = f.find('/');
-            if (slash != std::string::npos) {
-                f = f.substr(slash + 1);
+            ptrdiff_t slash = str_find(std::string_view(f), '/');
+            if (slash >= 0) {
+                f = f.substr(to_uz(slash) + 1);
             }
         }
         if (!f.empty()) {
@@ -126,7 +126,7 @@ int cmd_unapplied(QuiltState &q, int argc, char **argv) {
         }
     }
 
-    int start_idx;
+    ptrdiff_t start_idx;
     if (!target.empty()) {
         auto idx = q.find_in_series(target);
         if (!idx.has_value()) {
@@ -135,18 +135,18 @@ int cmd_unapplied(QuiltState &q, int argc, char **argv) {
         }
         start_idx = idx.value() + 1;
     } else {
-        int top = q.top_index();
+        ptrdiff_t top = q.top_index();
         start_idx = top + 1;
     }
 
-    if (start_idx >= (int)q.series.size()) {
+    if (start_idx >= std::ssize(q.series)) {
         std::string top_name = q.applied.empty() ? std::string("??") : q.applied.back();
         err_line("File series fully applied, ends at patch " + format_patch(q, top_name));
         return 1;
     }
 
-    for (int i = start_idx; i < (int)q.series.size(); ++i) {
-        out_line(format_patch(q, q.series[i]));
+    for (ptrdiff_t i = start_idx; i < std::ssize(q.series); ++i) {
+        out_line(format_patch(q, q.series[to_uz(i)]));
     }
     return 0;
 }
@@ -174,7 +174,7 @@ int cmd_next(QuiltState &q, int argc, char **argv) {
         }
     }
 
-    int after_idx;
+    ptrdiff_t after_idx;
     if (!target.empty()) {
         auto idx = q.find_in_series(target);
         if (!idx.has_value()) {
@@ -183,17 +183,17 @@ int cmd_next(QuiltState &q, int argc, char **argv) {
         }
         after_idx = idx.value() + 1;
     } else {
-        int top = q.top_index();
+        ptrdiff_t top = q.top_index();
         after_idx = top + 1;
     }
 
-    if (after_idx >= (int)q.series.size()) {
+    if (after_idx >= std::ssize(q.series)) {
         std::string top_name = q.applied.empty() ? std::string("??") : q.applied.back();
         err_line("File series fully applied, ends at patch " + format_patch(q, top_name));
         return 2;
     }
 
-    out_line(format_patch(q, q.series[after_idx]));
+    out_line(format_patch(q, q.series[to_uz(after_idx)]));
     return 0;
 }
 
@@ -215,7 +215,7 @@ int cmd_previous(QuiltState &q, int argc, char **argv) {
         if (idx.value() == 0) {
             return 2;
         }
-        out_line(format_patch(q, q.series[idx.value() - 1]));
+        out_line(format_patch(q, q.series[to_uz(idx.value() - 1)]));
         return 0;
     }
 
@@ -229,11 +229,11 @@ int cmd_previous(QuiltState &q, int argc, char **argv) {
         return 2;
     }
 
-    if (q.applied.size() == 1) {
+    if (std::ssize(q.applied) == 1) {
         return 2;
     }
 
-    out_line(format_patch(q, q.applied[q.applied.size() - 2]));
+    out_line(format_patch(q, q.applied[to_uz(std::ssize(q.applied) - 2)]));
     return 0;
 }
 
@@ -254,7 +254,7 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
             char *endptr;
             long val = strtol(std::string(arg).c_str(), &endptr, 10);
             if (*endptr == '\0' && val > 0) {
-                push_count = (int)val;
+                push_count = static_cast<int>(val);
             } else {
                 target = strip_patches_prefix(q, arg);
             }
@@ -271,18 +271,18 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
         }
     }
 
-    int top = q.top_index();
-    int start_idx = top + 1;
+    ptrdiff_t top = q.top_index();
+    ptrdiff_t start_idx = top + 1;
 
-    if (start_idx >= (int)q.series.size()) {
+    if (start_idx >= std::ssize(q.series)) {
         err_line("File series fully applied, ends at patch " +
                  patch_path_display(q, q.applied.back()));
         return 2;
     }
 
-    int end_idx;  // inclusive
+    ptrdiff_t end_idx;  // inclusive
     if (push_all) {
-        end_idx = (int)q.series.size() - 1;
+        end_idx = std::ssize(q.series) - 1;
     } else if (!target.empty()) {
         auto idx = q.find_in_series(target);
         if (!idx.has_value()) {
@@ -296,8 +296,8 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
         }
     } else if (push_count > 0) {
         end_idx = start_idx + push_count - 1;
-        if (end_idx >= (int)q.series.size()) {
-            end_idx = (int)q.series.size() - 1;
+        if (end_idx >= std::ssize(q.series)) {
+            end_idx = std::ssize(q.series) - 1;
         }
     } else {
         end_idx = start_idx;
@@ -309,8 +309,8 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
     auto extra_patch_opts = shell_split(get_env("QUILT_PATCH_OPTS"));
 
     std::string last_applied;
-    for (int i = start_idx; i <= end_idx; ++i) {
-        const std::string &name = q.series[i];
+    for (ptrdiff_t i = start_idx; i <= end_idx; ++i) {
+        const std::string &name = q.series[to_uz(i)];
         std::string display = patch_path_display(q, name);
 
         if (!quiet) {
@@ -410,7 +410,7 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
             char *endptr;
             long val = strtol(std::string(arg).c_str(), &endptr, 10);
             if (*endptr == '\0' && val > 0) {
-                pop_count = (int)val;
+                pop_count = static_cast<int>(val);
             } else {
                 target = strip_patches_prefix(q, arg);
             }
@@ -426,14 +426,14 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
         return 2;
     }
 
-    int stop_idx;  // index in applied to stop BEFORE (exclusive); pop down to this
+    ptrdiff_t stop_idx;  // index in applied to stop BEFORE (exclusive); pop down to this
     if (pop_all) {
         stop_idx = 0;
     } else if (!target.empty()) {
         // Find target in applied list
-        int found_idx = -1;
-        for (int i = 0; i < (int)q.applied.size(); ++i) {
-            if (q.applied[i] == target) {
+        ptrdiff_t found_idx = -1;
+        for (ptrdiff_t i = 0; i < std::ssize(q.applied); ++i) {
+            if (q.applied[to_uz(i)] == target) {
                 found_idx = i;
                 break;
             }
@@ -444,20 +444,20 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
         }
         // Pop down to (but not including) the target patch
         stop_idx = found_idx + 1;
-        if (stop_idx >= (int)q.applied.size()) {
+        if (stop_idx >= std::ssize(q.applied)) {
             err_line("Patch " + format_patch(q, target) + " is currently on top");
             return 2;
         }
     } else if (pop_count > 0) {
-        stop_idx = (int)q.applied.size() - pop_count;
+        stop_idx = std::ssize(q.applied) - pop_count;
         if (stop_idx < 0) stop_idx = 0;
     } else {
         // Pop just the top patch
-        stop_idx = (int)q.applied.size() - 1;
+        stop_idx = std::ssize(q.applied) - 1;
     }
 
     // Pop from the top down to stop_idx
-    while ((int)q.applied.size() > stop_idx) {
+    while (std::ssize(q.applied) > stop_idx) {
         const std::string &name = q.applied.back();
         std::string display = patch_path_display(q, name);
 

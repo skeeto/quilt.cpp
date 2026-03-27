@@ -1,16 +1,45 @@
 // This is free and unencumbered software released into the public domain.
 #pragma once
 #define _POSIX_THREAD_SAFE_FUNCTIONS
-#include <cstdint>
+#include <cassert>
+#include <climits>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
-#include <string>
-#include <vector>
-#include <string_view>
-#include <optional>
-#include <functional>
 #include <algorithm>
+#include <functional>
+#include <iterator>
 #include <map>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+// Signed-to-unsigned boundary: asserts non-negative, casts to size_t.
+inline size_t to_uz(ptrdiff_t n) {
+    assert(n >= 0);
+    return static_cast<size_t>(n);
+}
+
+// Signed-to-int boundary: asserts value fits in int range.
+inline int to_int(ptrdiff_t n) {
+    assert(n >= 0 && n <= INT_MAX);
+    return static_cast<int>(n);
+}
+
+// find/rfind wrappers returning ptrdiff_t (-1 for not-found).
+inline ptrdiff_t str_find(std::string_view s, char c, ptrdiff_t pos = 0) {
+    auto r = s.find(c, to_uz(pos));
+    return r == std::string_view::npos ? ptrdiff_t{-1} : static_cast<ptrdiff_t>(r);
+}
+inline ptrdiff_t str_find(std::string_view s, std::string_view needle, ptrdiff_t pos = 0) {
+    auto r = s.find(needle, to_uz(pos));
+    return r == std::string_view::npos ? ptrdiff_t{-1} : static_cast<ptrdiff_t>(r);
+}
+inline ptrdiff_t str_rfind(std::string_view s, char c) {
+    auto r = s.rfind(c);
+    return r == std::string_view::npos ? ptrdiff_t{-1} : static_cast<ptrdiff_t>(r);
+}
 
 // Quilt .pc/ directory state
 struct QuiltState {
@@ -26,9 +55,9 @@ struct QuiltState {
     std::map<std::string, std::string> config;     // merged quiltrc + env settings
 
     // Computed helpers
-    int top_index() const;     // index of topmost applied in series (-1 if none)
+    ptrdiff_t top_index() const;     // index of topmost applied in series (-1 if none)
     bool is_applied(std::string_view patch) const;
-    std::optional<int> find_in_series(std::string_view patch) const;
+    std::optional<ptrdiff_t> find_in_series(std::string_view patch) const;
     int get_strip_level(std::string_view patch) const;  // returns 1 if not set
 };
 

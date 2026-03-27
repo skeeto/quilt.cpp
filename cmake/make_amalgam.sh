@@ -13,7 +13,7 @@ BEGIN {
     nf = split(file_list, files)
 
     printf "// quilt.cpp \342\200\224 single-file amalgamation (Windows platform)\n"
-    printf "// $ c++ -std=c++17 -o quilt.exe quilt.cpp -lshell32\n"
+    printf "// $ c++ -std=c++20 -o quilt.exe quilt.cpp -lshell32\n"
     printf "// This is free and unencumbered software released into the public domain.\n\n"
 
     for (fi = 1; fi <= nf; fi++) {

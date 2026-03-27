@@ -4,7 +4,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ## Project
 
-A C++17 reimplementation of [quilt](https://savannah.nongnu.org/projects/quilt), the patch management tool.
+A C++20 reimplementation of [quilt](https://savannah.nongnu.org/projects/quilt), the patch management tool.
 Builds a single `quilt` binary that manages a stack of patches against a source tree. Public domain (Unlicense).
 
 The reference document for quilt behavior is `quilt.html` (or `quilt.txt`). When in doubt about how a command should behave, run real `quilt` (system-installed) through the same scenario and match its output.
@@ -46,10 +46,10 @@ amalgamation of all sources using `platform_win32.cpp`. Compile it standalone wi
 
 ```bash
 # Cross-compile to Windows (mingw-w64)
-x86_64-w64-mingw32-g++ -std=c++17 -o quilt.exe quilt.cpp -static -lshell32
+x86_64-w64-mingw32-g++ -std=c++20 -o quilt.exe quilt.cpp -static -lshell32
 
 # Native Windows g++
-g++ -std=c++17 -o quilt.exe quilt.cpp -lshell32
+g++ -std=c++20 -o quilt.exe quilt.cpp -lshell32
 ```
 
 Regenerate: `cmake --build build --target amalgam` (not built by default).
@@ -75,7 +75,7 @@ The legacy shell harness remains in `test/test.sh` for ad hoc comparison, includ
 
 ## Architecture
 
-All internal strings are UTF-8. The type aliases `Str` and `StrView` (defined in `quilt.hpp`) are used throughout.
+All internal strings are UTF-8. Indices and counts use `ptrdiff_t` (signed) with `std::ssize()` instead of `.size()`. The boundary utilities `to_uz()` (→ `size_t`), `to_int()` (→ `int`), `str_find()`, and `str_rfind()` (→ `ptrdiff_t`, returning −1 for not-found) are defined in `quilt.hpp` and used at every signed-to-unsigned conversion point. `size_t` is only used at system call boundaries (POSIX `write`, Win32 `WriteFile`).
 
 ### Headers
 

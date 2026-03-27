@@ -41,7 +41,7 @@ static std::string patch_path_display(const QuiltState &q, std::string_view patc
 static std::string strip_patches_prefix(const QuiltState &q, std::string_view name) {
     std::string prefix = q.patches_dir + "/";
     if (starts_with(name, prefix)) {
-        return std::string(name.substr(prefix.size()));
+        return std::string(name.substr(to_uz(std::ssize(prefix))));
     }
     return std::string(name);
 }
@@ -150,7 +150,7 @@ int cmd_new(QuiltState &q, int argc, char **argv) {
     }
 
     // Insert patch name into series (after current top, or at beginning)
-    int top_idx = q.top_index();
+    ptrdiff_t top_idx = q.top_index();
     if (top_idx < 0) {
         // No applied patches — insert at beginning
         q.series.insert(q.series.begin(), patch_name);
@@ -447,12 +447,12 @@ static std::map<std::string, std::string> split_patch_by_file(std::string_view c
             } else {
                 // Strip b/ prefix and trailing tab/timestamp
                 if (starts_with(rest, "b/")) rest = rest.substr(2);
-                auto tab = rest.find('\t');
-                if (tab != std::string_view::npos) rest = rest.substr(0, tab);
+                auto tab = str_find(rest, '\t');
+                if (tab >= 0) rest = rest.substr(0, to_uz(tab));
                 // Strip leading directory component (e.g., "dir.orig/")
-                auto slash = rest.find('/');
-                if (slash != std::string_view::npos) {
-                    current_file = trim(rest.substr(slash + 1));
+                auto slash = str_find(rest, '/');
+                if (slash >= 0) {
+                    current_file = trim(rest.substr(to_uz(slash + 1)));
                 } else {
                     current_file = trim(rest);
                 }

@@ -100,7 +100,7 @@ static ProcessResult run_cmd_impl(const std::vector<std::string> &argv,
 
         // Build argv for execvp
         std::vector<char *> args;
-        args.reserve(argv.size() + 1);
+        args.reserve(to_uz(std::ssize(argv) + 1));
         for (auto &a : argv)
             args.push_back(const_cast<char *>(a.c_str()));
         args.push_back(nullptr);
@@ -158,7 +158,7 @@ int run_cmd_tty(const std::vector<std::string> &argv)
     if (pid == 0) {
         // Child inherits stdin/stdout/stderr from parent
         std::vector<char *> args;
-        args.reserve(argv.size() + 1);
+        args.reserve(to_uz(std::ssize(argv) + 1));
         for (auto &a : argv)
             args.push_back(const_cast<char *>(a.c_str()));
         args.push_back(nullptr);
@@ -291,12 +291,12 @@ bool make_dirs(std::string_view path)
     if (p.empty()) return false;
 
     // Walk through the path and create each component
-    for (size_t i = 1; i < p.size(); ++i) {
-        if (p[i] == '/') {
-            p[i] = '\0';
+    for (ptrdiff_t i = 1; i < std::ssize(p); ++i) {
+        if (p[to_uz(i)] == '/') {
+            p[to_uz(i)] = '\0';
             if (::mkdir(p.c_str(), 0755) != 0 && errno != EEXIST)
                 return false;
-            p[i] = '/';
+            p[to_uz(i)] = '/';
         }
     }
     if (::mkdir(p.c_str(), 0755) != 0 && errno != EEXIST)

@@ -18,7 +18,7 @@ extern bool restore_file(QuiltState &q, std::string_view patch, std::string_view
 static std::string strip_patches_prefix(const QuiltState &q, std::string_view name) {
     std::string prefix = q.patches_dir + "/";
     if (starts_with(name, prefix)) {
-        return std::string(name.substr(prefix.size()));
+        return std::string(name.substr(to_uz(std::ssize(prefix))));
     }
     return std::string(name);
 }
@@ -54,9 +54,9 @@ static std::vector<std::string> parse_patch_files(std::string_view content, int 
         if (!starts_with(line, "+++ ")) continue;
         std::string path = std::string(std::string_view(line).substr(4));
         // Strip trailing tab and anything after (timestamps)
-        auto tab = path.find('\t');
-        if (tab != std::string::npos) {
-            path = std::string(path.substr(0, tab));
+        auto tab = str_find(path, '\t');
+        if (tab >= 0) {
+            path = std::string(path.substr(0, to_uz(tab)));
         }
         // Skip /dev/null
         if (path == "/dev/null") continue;
@@ -64,9 +64,9 @@ static std::vector<std::string> parse_patch_files(std::string_view content, int 
         if (path.empty()) continue;
         // Strip N leading path components (like patch -pN)
         for (int i = 0; i < strip && !path.empty(); ++i) {
-            auto slash = path.find('/');
-            if (slash != std::string::npos) {
-                path = path.substr(slash + 1);
+            auto slash = str_find(path, '/');
+            if (slash >= 0) {
+                path = path.substr(to_uz(slash) + 1);
             }
         }
         if (path.empty()) continue;
@@ -103,12 +103,12 @@ static std::string replace_header(std::string_view content, std::string_view new
     auto lines = split_lines(content);
     bool in_diff = false;
     // Find where diffs start
-    size_t diff_start = 0;
-    for (size_t i = 0; i < lines.size(); ++i) {
-        if (starts_with(lines[i], "Index:") ||
-            starts_with(lines[i], "--- ") ||
-            starts_with(lines[i], "diff ") ||
-            starts_with(lines[i], "===")) {
+    ptrdiff_t diff_start = 0;
+    for (ptrdiff_t i = 0; i < std::ssize(lines); ++i) {
+        if (starts_with(lines[to_uz(i)], "Index:") ||
+            starts_with(lines[to_uz(i)], "--- ") ||
+            starts_with(lines[to_uz(i)], "diff ") ||
+            starts_with(lines[to_uz(i)], "===")) {
             diff_start = i;
             in_diff = true;
             break;
@@ -122,8 +122,8 @@ static std::string replace_header(std::string_view content, std::string_view new
     }
 
     if (in_diff) {
-        for (size_t i = diff_start; i < lines.size(); ++i) {
-            result += lines[i];
+        for (ptrdiff_t i = diff_start; i < std::ssize(lines); ++i) {
+            result += lines[to_uz(i)];
             result += '\n';
         }
     }
@@ -181,13 +181,13 @@ int cmd_delete(QuiltState &q, int argc, char **argv) {
         patch = patch_arg;
     } else if (opt_next) {
         // Next unapplied patch
-        int top_idx = q.top_index();
-        int next_idx = top_idx + 1;
-        if (next_idx >= (int)q.series.size()) {
+        ptrdiff_t top_idx = q.top_index();
+        ptrdiff_t next_idx = top_idx + 1;
+        if (next_idx >= std::ssize(q.series)) {
             err_line("No next patch");
             return 1;
         }
-        patch = q.series[next_idx];
+        patch = q.series[to_uz(next_idx)];
     } else {
         // Topmost applied patch
         if (q.applied.empty()) {
@@ -324,7 +324,7 @@ int cmd_rename(QuiltState &q, int argc, char **argv) {
     }
 
     auto new_series = q.series;
-    new_series[*idx] = new_name;
+    new_series[to_uz(*idx)] = new_name;
     if (!write_series_checked(q, new_series)) {
         if (renamed_pc_dir) {
             rename_path(pc_patch_dir(q, new_name), pc_patch_dir(q, old_patch));
@@ -425,9 +425,9 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
         // Add to series if not already present
         if (!existing) {
             // Insert after top applied patch, or at end if none applied
-            int top_idx = q.top_index();
+            ptrdiff_t top_idx = q.top_index();
             auto new_series = q.series;
-            if (top_idx >= 0 && top_idx + 1 < (int)new_series.size()) {
+            if (top_idx >= 0 && top_idx + 1 < std::ssize(new_series)) {
                 new_series.insert(new_series.begin() + top_idx + 1, name);
             } else {
                 new_series.push_back(name);
@@ -763,9 +763,9 @@ int cmd_fork(QuiltState &q, int argc, char **argv) {
 
     // Generate default name if none given: add "-2" before extension
     if (new_name.empty()) {
-        auto dot = old_name.rfind('.');
-        if (dot != std::string::npos && dot > 0) {
-            new_name = old_name.substr(0, dot) + "-2" + old_name.substr(dot);
+        auto dot = str_rfind(old_name, '.');
+        if (dot > 0) {
+            new_name = old_name.substr(0, to_uz(dot)) + "-2" + old_name.substr(to_uz(dot));
         } else {
             new_name = old_name + "-2";
         }
@@ -818,7 +818,7 @@ int cmd_fork(QuiltState &q, int argc, char **argv) {
     }
 
     auto new_series = q.series;
-    new_series[*idx] = new_name;
+    new_series[to_uz(*idx)] = new_name;
     if (!write_series_checked(q, new_series)) {
         if (renamed_pc_dir) {
             rename_path(new_pc, old_pc);

@@ -1,6 +1,6 @@
 # Quilt.cpp: implementation of Quilt in C++
 
-Quilt.cpp is a clone of [Quilt][] in C++17. The original is implemented
+Quilt.cpp is a clone of [Quilt][] in C++20. The original is implemented
 primarily as Bash scripts, with associated unix utilities, with a few
 components in Perl. It does not run natively on Windows. Quilt.cpp is a
 native application designed to within on [w64devkit][], still requiring
@@ -23,11 +23,11 @@ Windows amalgamation source, `quilt.cpp`, for easy distribution:
 
 Then with `g++` or `clang++`:
 
-    $ c++ -std=c++17 -o quilt.exe quilt.cpp -lshell32
+    $ c++ -std=c++20 -o quilt.exe quilt.cpp -lshell32
 
 Or with `cl` or `clang-cl`:
 
-    $ cl /std:c++17 quilt.cpp shell32.lib
+    $ cl /std:c++20 quilt.cpp shell32.lib
 
 ## Tests
 

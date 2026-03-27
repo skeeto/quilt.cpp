@@ -27,11 +27,11 @@
 static std::wstring utf8_to_wide(std::string_view s)
 {
     if (s.empty()) return {};
-    int len = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(),
-                                  nullptr, 0);
+    int len = MultiByteToWideChar(CP_UTF8, 0, s.data(),
+                                  to_int(std::ssize(s)), nullptr, 0);
     if (len <= 0) return {};
     std::wstring out(len, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(),
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), to_int(std::ssize(s)),
                         out.data(), len);
     return out;
 }
@@ -39,7 +39,7 @@ static std::wstring utf8_to_wide(std::string_view s)
 static std::string wide_to_utf8(const wchar_t *w, int wlen = -1)
 {
     if (!w) return {};
-    if (wlen < 0) wlen = (int)wcslen(w);
+    if (wlen < 0) wlen = to_int(static_cast<ptrdiff_t>(wcslen(w)));
     if (wlen == 0) return {};
     int len = WideCharToMultiByte(CP_UTF8, 0, w, wlen,
                                   nullptr, 0, nullptr, nullptr);
@@ -99,10 +99,10 @@ static std::wstring build_cmdline(const std::vector<std::string> &argv)
     // Windows command-line quoting: wrap each arg in quotes, escape
     // internal quotes and backslashes before quotes.
     std::wstring cmdline;
-    for (size_t i = 0; i < argv.size(); ++i) {
+    for (ptrdiff_t i = 0; i < std::ssize(argv); ++i) {
         if (i > 0) cmdline += L' ';
 
-        std::wstring arg = utf8_to_wide(argv[i]);
+        std::wstring arg = utf8_to_wide(argv[to_uz(i)]);
 
         // Check if quoting is needed
         bool needs_quote = arg.empty();
@@ -354,7 +354,8 @@ bool delete_dir_recursive(std::string_view path)
             continue;
 
         std::wstring child = wpath + L"\\" + fd.cFileName;
-        std::string child_utf8 = wide_to_utf8(child.c_str(), (int)child.size());
+        std::string child_utf8 = wide_to_utf8(child.c_str(),
+                                              to_int(std::ssize(child)));
 
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
             if (!delete_dir_recursive(child_utf8)) ok = false;
@@ -385,16 +386,16 @@ bool make_dirs(std::string_view path)
         if (c == '/') c = '\\';
     }
 
-    size_t start = 1;
-    if (p.size() >= 3 && std::isalpha(static_cast<unsigned char>(p[0])) &&
+    ptrdiff_t start = 1;
+    if (std::ssize(p) >= 3 && std::isalpha(static_cast<unsigned char>(p[0])) &&
         p[1] == ':' && p[2] == '\\') {
         start = 3;
-    } else if (p.size() >= 2 && p[0] == '\\' && p[1] == '\\') {
+    } else if (std::ssize(p) >= 2 && p[0] == '\\' && p[1] == '\\') {
         // Leave UNC handling to the normal loop after the \\server\share prefix.
-        size_t slash_count = 0;
+        ptrdiff_t slash_count = 0;
         start = 2;
-        for (size_t i = 2; i < p.size(); ++i) {
-            if (p[i] == '\\') {
+        for (ptrdiff_t i = 2; i < std::ssize(p); ++i) {
+            if (p[to_uz(i)] == '\\') {
                 ++slash_count;
                 if (slash_count == 2) {
                     start = i + 1;
@@ -405,15 +406,15 @@ bool make_dirs(std::string_view path)
     }
 
     // Walk through path components, creating each.
-    for (size_t i = start; i < p.size(); ++i) {
-        if (p[i] == '\\') {
-            p[i] = '\0';
+    for (ptrdiff_t i = start; i < std::ssize(p); ++i) {
+        if (p[to_uz(i)] == '\\') {
+            p[to_uz(i)] = '\0';
             std::wstring wp = utf8_to_wide(p.c_str());
             if (!CreateDirectoryW(wp.c_str(), nullptr)) {
                 if (GetLastError() != ERROR_ALREADY_EXISTS)
                     return false;
             }
-            p[i] = '\\';
+            p[to_uz(i)] = '\\';
         }
     }
     std::wstring wp = utf8_to_wide(p);
@@ -530,7 +531,7 @@ std::string get_env(std::string_view name)
     GetEnvironmentVariableW(wname.c_str(), buf.data(), len);
     // Remove trailing null
     if (!buf.empty() && buf.back() == L'\0') buf.pop_back();
-    return wide_to_utf8(buf.c_str(), (int)buf.size());
+    return wide_to_utf8(buf.c_str(), to_int(std::ssize(buf)));
 }
 
 void set_env(std::string_view name, std::string_view value)
@@ -558,7 +559,7 @@ std::string get_cwd()
     GetCurrentDirectoryW(len, buf.data());
     // Remove trailing null
     if (!buf.empty() && buf.back() == L'\0') buf.pop_back();
-    std::string result = wide_to_utf8(buf.c_str(), (int)buf.size());
+    std::string result = wide_to_utf8(buf.c_str(), to_int(std::ssize(buf)));
     // Normalize backslashes to forward slashes for consistency
     for (char &c : result) {
         if (c == '\\') c = '/';

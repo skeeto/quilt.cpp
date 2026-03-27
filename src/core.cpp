@@ -2,11 +2,11 @@
 #include "quilt.hpp"
 #include "platform.hpp"
 
-int QuiltState::top_index() const {
+ptrdiff_t QuiltState::top_index() const {
     if (applied.empty()) return -1;
     const std::string &top = applied.back();
-    for (int i = 0; i < (int)series.size(); ++i) {
-        if (series[i] == top) return i;
+    for (ptrdiff_t i = 0; i < std::ssize(series); ++i) {
+        if (series[to_uz(i)] == top) return i;
     }
     return -1;
 }
@@ -18,9 +18,9 @@ bool QuiltState::is_applied(std::string_view patch) const {
     return false;
 }
 
-std::optional<int> QuiltState::find_in_series(std::string_view patch) const {
-    for (int i = 0; i < (int)series.size(); ++i) {
-        if (series[i] == patch) return i;
+std::optional<ptrdiff_t> QuiltState::find_in_series(std::string_view patch) const {
+    for (ptrdiff_t i = 0; i < std::ssize(series); ++i) {
+        if (series[to_uz(i)] == patch) return i;
     }
     return std::nullopt;
 }
@@ -65,9 +65,9 @@ std::string basename(std::string_view path) {
     // Strip trailing slashes
     while (path.size() > 1 && path.back() == '/')
         path.remove_suffix(1);
-    auto pos = path.rfind('/');
-    if (pos == std::string_view::npos) return std::string(path);
-    return std::string(path.substr(pos + 1));
+    auto pos = str_rfind(path, '/');
+    if (pos < 0) return std::string(path);
+    return std::string(path.substr(to_uz(pos + 1)));
 }
 
 std::string dirname(std::string_view path) {
@@ -75,10 +75,10 @@ std::string dirname(std::string_view path) {
     // Strip trailing slashes
     while (path.size() > 1 && path.back() == '/')
         path.remove_suffix(1);
-    auto pos = path.rfind('/');
-    if (pos == std::string_view::npos) return ".";
+    auto pos = str_rfind(path, '/');
+    if (pos < 0) return ".";
     if (pos == 0) return "/";
-    return std::string(path.substr(0, pos));
+    return std::string(path.substr(0, to_uz(pos)));
 }
 
 std::string strip_trailing_slash(std::string_view s) {
@@ -100,38 +100,38 @@ std::string trim(std::string_view s) {
 std::vector<std::string> split_lines(std::string_view s) {
     std::vector<std::string> lines;
     while (!s.empty()) {
-        auto pos = s.find('\n');
-        if (pos == std::string_view::npos) {
+        auto pos = str_find(s, '\n');
+        if (pos < 0) {
             lines.emplace_back(s);
             break;
         }
-        lines.emplace_back(s.substr(0, pos));
-        s.remove_prefix(pos + 1);
+        lines.emplace_back(s.substr(0, to_uz(pos)));
+        s.remove_prefix(to_uz(pos + 1));
     }
     return lines;
 }
 
 bool starts_with(std::string_view s, std::string_view prefix) {
-    if (prefix.size() > s.size()) return false;
+    if (std::ssize(prefix) > std::ssize(s)) return false;
     return s.substr(0, prefix.size()) == prefix;
 }
 
 bool ends_with(std::string_view s, std::string_view suffix) {
-    if (suffix.size() > s.size()) return false;
-    return s.substr(s.size() - suffix.size()) == suffix;
+    if (std::ssize(suffix) > std::ssize(s)) return false;
+    return s.substr(to_uz(std::ssize(s) - std::ssize(suffix))) == suffix;
 }
 
 std::vector<std::string> split_on_whitespace(std::string_view s) {
     std::vector<std::string> tokens;
-    size_t i = 0;
-    while (i < s.size()) {
-        while (i < s.size() && (s[i] == ' ' || s[i] == '\t'))
+    ptrdiff_t i = 0;
+    while (i < std::ssize(s)) {
+        while (i < std::ssize(s) && (s[to_uz(i)] == ' ' || s[to_uz(i)] == '\t'))
             ++i;
-        if (i >= s.size()) break;
-        size_t start = i;
-        while (i < s.size() && s[i] != ' ' && s[i] != '\t')
+        if (i >= std::ssize(s)) break;
+        ptrdiff_t start = i;
+        while (i < std::ssize(s) && s[to_uz(i)] != ' ' && s[to_uz(i)] != '\t')
             ++i;
-        tokens.emplace_back(s.substr(start, i - start));
+        tokens.emplace_back(s.substr(to_uz(start), to_uz(i - start)));
     }
     return tokens;
 }
@@ -144,18 +144,18 @@ static bool is_varname_char(char c) {
     return is_varname_start(c) || (c >= '0' && c <= '9');
 }
 
-static std::string expand_var(std::string_view s, size_t &i) {
+static std::string expand_var(std::string_view s, ptrdiff_t &i) {
     // i points just past '$'
     std::string name;
-    if (i < s.size() && s[i] == '{') {
+    if (i < std::ssize(s) && s[to_uz(i)] == '{') {
         ++i; // skip '{'
-        while (i < s.size() && s[i] != '}') {
-            name += s[i++];
+        while (i < std::ssize(s) && s[to_uz(i)] != '}') {
+            name += s[to_uz(i++)];
         }
-        if (i < s.size()) ++i; // skip '}'
+        if (i < std::ssize(s)) ++i; // skip '}'
     } else {
-        while (i < s.size() && is_varname_char(s[i])) {
-            name += s[i++];
+        while (i < std::ssize(s) && is_varname_char(s[to_uz(i)])) {
+            name += s[to_uz(i++)];
         }
     }
     if (name.empty()) return "$";
@@ -164,52 +164,52 @@ static std::string expand_var(std::string_view s, size_t &i) {
 
 std::vector<std::string> shell_split(std::string_view s) {
     std::vector<std::string> tokens;
-    size_t i = 0;
-    while (i < s.size()) {
+    ptrdiff_t i = 0;
+    while (i < std::ssize(s)) {
         // Skip whitespace between tokens
-        while (i < s.size() && (s[i] == ' ' || s[i] == '\t'))
+        while (i < std::ssize(s) && (s[to_uz(i)] == ' ' || s[to_uz(i)] == '\t'))
             ++i;
-        if (i >= s.size()) break;
+        if (i >= std::ssize(s)) break;
 
         std::string tok;
         // Accumulate segments until unquoted whitespace
-        while (i < s.size() && s[i] != ' ' && s[i] != '\t') {
-            if (s[i] == '\'') {
+        while (i < std::ssize(s) && s[to_uz(i)] != ' ' && s[to_uz(i)] != '\t') {
+            if (s[to_uz(i)] == '\'') {
                 // Single-quoted: literal, no escapes, no variable expansion
                 ++i;
-                while (i < s.size() && s[i] != '\'')
-                    tok += s[i++];
-                if (i < s.size()) ++i; // skip closing '
-            } else if (s[i] == '"') {
+                while (i < std::ssize(s) && s[to_uz(i)] != '\'')
+                    tok += s[to_uz(i++)];
+                if (i < std::ssize(s)) ++i; // skip closing '
+            } else if (s[to_uz(i)] == '"') {
                 // Double-quoted: backslash escapes and variable expansion
                 ++i;
-                while (i < s.size() && s[i] != '"') {
-                    if (s[i] == '\\' && i + 1 < s.size()) {
-                        char next = s[i + 1];
+                while (i < std::ssize(s) && s[to_uz(i)] != '"') {
+                    if (s[to_uz(i)] == '\\' && i + 1 < std::ssize(s)) {
+                        char next = s[to_uz(i + 1)];
                         if (next == '"' || next == '\\' || next == '$') {
                             tok += next;
                             i += 2;
                             continue;
                         }
                     }
-                    if (s[i] == '$') {
+                    if (s[to_uz(i)] == '$') {
                         ++i;
                         tok += expand_var(s, i);
                         continue;
                     }
-                    tok += s[i++];
+                    tok += s[to_uz(i++)];
                 }
-                if (i < s.size()) ++i; // skip closing "
-            } else if (s[i] == '$') {
+                if (i < std::ssize(s)) ++i; // skip closing "
+            } else if (s[to_uz(i)] == '$') {
                 // Unquoted variable expansion
                 ++i;
                 tok += expand_var(s, i);
-            } else if (s[i] == '\\' && i + 1 < s.size()) {
+            } else if (s[to_uz(i)] == '\\' && i + 1 < std::ssize(s)) {
                 // Unquoted backslash escape
-                tok += s[i + 1];
+                tok += s[to_uz(i + 1)];
                 i += 2;
             } else {
-                tok += s[i++];
+                tok += s[to_uz(i++)];
             }
         }
         if (!tok.empty()) {
@@ -230,9 +230,9 @@ std::vector<std::string> read_series(std::string_view path,
         if (trimmed.empty()) continue;
         if (trimmed[0] == '#') continue;
         // Strip inline comments
-        auto hash = trimmed.find(" #");
-        if (hash != std::string::npos) {
-            trimmed = trim(std::string_view(trimmed).substr(0, hash));
+        auto hash = str_find(std::string_view(trimmed), " #");
+        if (hash >= 0) {
+            trimmed = trim(std::string_view(trimmed).substr(0, to_uz(hash)));
         }
         // Split into tokens
         auto tokens = split_on_whitespace(trimmed);
@@ -240,12 +240,12 @@ std::vector<std::string> read_series(std::string_view path,
         std::string name = tokens[0];
         // Parse options (e.g., "-p0", "-p 0")
         int strip = 1;
-        for (size_t i = 1; i < tokens.size(); ++i) {
-            if (tokens[i] == "-p" && i + 1 < tokens.size()) {
-                strip = std::stoi(tokens[i + 1]);
+        for (ptrdiff_t i = 1; i < std::ssize(tokens); ++i) {
+            if (tokens[to_uz(i)] == "-p" && i + 1 < std::ssize(tokens)) {
+                strip = std::stoi(tokens[to_uz(i + 1)]);
                 ++i;
-            } else if (starts_with(tokens[i], "-p") && tokens[i].size() > 2) {
-                strip = std::stoi(tokens[i].substr(2));
+            } else if (starts_with(tokens[to_uz(i)], "-p") && std::ssize(tokens[to_uz(i)]) > 2) {
+                strip = std::stoi(tokens[to_uz(i)].substr(2));
             }
         }
         if (strip_levels && strip != 1) {
@@ -351,10 +351,10 @@ static std::map<std::string, std::string> parse_quiltrc(std::string_view content
                 sv.remove_prefix(1);
         }
         // Find '=' for KEY=VALUE
-        auto eq = sv.find('=');
-        if (eq == std::string_view::npos || eq == 0) continue;
+        auto eq = str_find(sv, '=');
+        if (eq <= 0) continue;
         // Validate key: must be alphanumeric/underscore
-        std::string_view key = sv.substr(0, eq);
+        std::string_view key = sv.substr(0, to_uz(eq));
         bool valid_key = true;
         for (char c : key) {
             if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
@@ -365,7 +365,7 @@ static std::map<std::string, std::string> parse_quiltrc(std::string_view content
         }
         if (!valid_key) continue;
         // Parse value
-        std::string_view rest = sv.substr(eq + 1);
+        std::string_view rest = sv.substr(to_uz(eq + 1));
         std::string value;
         if (!rest.empty() && rest.front() == '"') {
             // Double-quoted: handle \" and \\ escapes
@@ -519,9 +519,9 @@ std::vector<std::string> files_in_patch(const QuiltState &q, std::string_view pa
     std::vector<std::string> result;
     for (auto &f : all) {
         // Skip quilt metadata files (e.g. .timestamp, .needs_refresh)
-        auto slash = f.rfind('/');
-        std::string_view base = (slash != std::string::npos)
-            ? std::string_view(f).substr(slash + 1)
+        auto slash = str_rfind(std::string_view(f), '/');
+        std::string_view base = (slash >= 0)
+            ? std::string_view(f).substr(to_uz(slash + 1))
             : std::string_view(f);
         if (!base.empty() && base[0] == '.') continue;
         result.push_back(std::move(f));
@@ -670,7 +670,7 @@ int quilt_main(int argc, char **argv) {
         }
         clean_argv.push_back(argv[i]);
     }
-    int clean_argc = (int)clean_argv.size();
+    int clean_argc = to_int(std::ssize(clean_argv));
 
     // Handle no arguments
     if (clean_argc < 2) {
@@ -740,7 +740,7 @@ int quilt_main(int argc, char **argv) {
 
     // Handle per-command -h/--help before dispatching
     for (int i = 2; i < clean_argc; ++i) {
-        std::string_view a = clean_argv[i];
+        std::string_view a = clean_argv[to_uz(i)];
         if (a == "-h" || a == "--help") {
             out_line(found->usage);
             return 0;
@@ -777,7 +777,7 @@ int quilt_main(int argc, char **argv) {
         final_argv_storage.push_back(ea);
     }
     for (int i = 2; i < clean_argc; ++i) {
-        final_argv_storage.push_back(clean_argv[i]);
+        final_argv_storage.push_back(clean_argv[to_uz(i)]);
     }
 
     for (auto &s : final_argv_storage) {
@@ -785,5 +785,5 @@ int quilt_main(int argc, char **argv) {
     }
 
     // Dispatch
-    return found->fn(q, (int)final_argv.size(), final_argv.data());
+    return found->fn(q, to_int(std::ssize(final_argv)), final_argv.data());
 }
