@@ -354,7 +354,8 @@ static std::string generate_path_diff(const QuiltState &q,
                                       std::string_view new_path,
                                       bool new_placeholder,
                                       std::string_view p_format = "1",
-                                      bool reverse = false) {
+                                      bool reverse = false,
+                                      const std::vector<std::string> &diff_cmd_base = {}) {
     bool old_missing = old_path.empty() || !file_exists(old_path) ||
         (old_placeholder && is_placeholder_copy(old_path));
     bool new_missing = new_path.empty() || !file_exists(new_path) ||
@@ -389,7 +390,12 @@ static std::string generate_path_diff(const QuiltState &q,
         std::swap(old_label, new_label);
     }
 
-    std::vector<std::string> cmd_argv = {"diff", "-u"};
+    std::vector<std::string> cmd_argv;
+    if (diff_cmd_base.empty()) {
+        cmd_argv = {"diff", "-u"};
+    } else {
+        cmd_argv = diff_cmd_base;
+    }
     auto extra_diff_opts = shell_split(get_env("QUILT_DIFF_OPTS"));
     for (const auto &opt : extra_diff_opts) {
         cmd_argv.push_back(opt);
@@ -414,11 +420,12 @@ static std::string generate_path_diff(const QuiltState &q,
 static std::string generate_file_diff(const QuiltState &q, std::string_view patch,
                                       std::string_view file,
                                       std::string_view p_format = "1",
-                                      bool reverse = false) {
+                                      bool reverse = false,
+                                      const std::vector<std::string> &diff_cmd_base = {}) {
     std::string backup_path = path_join(pc_patch_dir(q, patch), file);
     std::string working_path = path_join(q.work_dir, file);
     return generate_path_diff(q, file, backup_path, true, working_path, false,
-                              p_format, reverse);
+                              p_format, reverse, diff_cmd_base);
 }
 
 static std::map<std::string, std::string> split_patch_by_file(std::string_view content) {
@@ -763,6 +770,11 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
     bool since_refresh = false;
     bool against_snapshot = false;
     bool reverse = false;
+    bool sort_files = false;
+    std::string diff_utility;
+    std::string combine_patch;
+    std::string diff_type = "u";
+    std::string context_num;
     (void)no_timestamps;
     int i = 1;
 
@@ -784,7 +796,37 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
             continue;
         }
         if (arg == "-u") {
+            diff_type = "u";
+            context_num.clear();
             i += 1;
+            continue;
+        }
+        if (arg == "-c") {
+            diff_type = "c";
+            context_num.clear();
+            i += 1;
+            continue;
+        }
+        if (starts_with(arg, "-C")) {
+            diff_type = "C";
+            if (arg == "-C" && i + 1 < argc) {
+                context_num = argv[i + 1];
+                i += 2;
+            } else {
+                context_num = std::string(arg.substr(2));
+                i += 1;
+            }
+            continue;
+        }
+        if (starts_with(arg, "-U")) {
+            diff_type = "U";
+            if (arg == "-U" && i + 1 < argc) {
+                context_num = argv[i + 1];
+                i += 2;
+            } else {
+                context_num = std::string(arg.substr(2));
+                i += 1;
+            }
             continue;
         }
         if (arg == "-z") {
@@ -802,14 +844,6 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
             i += 1;
             continue;
         }
-        if (starts_with(arg, "-U")) {
-            if (arg == "-U" && i + 1 < argc) {
-                i += 2;
-            } else {
-                i += 1;
-            }
-            continue;
-        }
         if (arg == "--no-timestamps" || arg == "--no-timestamp") {
             no_timestamps = true;
             i += 1;
@@ -817,6 +851,21 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
         }
         if (arg == "--no-index") {
             no_index = true;
+            i += 1;
+            continue;
+        }
+        if (arg == "--sort") {
+            sort_files = true;
+            i += 1;
+            continue;
+        }
+        if (arg == "--combine" && i + 1 < argc) {
+            combine_patch = argv[i + 1];
+            i += 2;
+            continue;
+        }
+        if (starts_with(arg, "--diff=")) {
+            diff_utility = std::string(arg.substr(7));
             i += 1;
             continue;
         }
@@ -836,6 +885,41 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
+    if (!combine_patch.empty() && since_refresh) {
+        err_line("Options `--combine' and `-z' cannot be combined.");
+        return 1;
+    }
+
+    if (!combine_patch.empty() && against_snapshot) {
+        err_line("Options `--combine' and `--snapshot' cannot be combined.");
+        return 1;
+    }
+
+    // Build diff command base from parsed options
+    std::vector<std::string> diff_cmd_base;
+    diff_cmd_base.push_back(diff_utility.empty() ? "diff" : diff_utility);
+    if (diff_type == "c") {
+        diff_cmd_base.push_back("-c");
+    } else if (diff_type == "C") {
+        diff_cmd_base.push_back("-C");
+        diff_cmd_base.push_back(context_num);
+    } else if (diff_type == "U") {
+        diff_cmd_base.push_back("-U");
+        diff_cmd_base.push_back(context_num);
+    } else {
+        diff_cmd_base.push_back("-u");
+    }
+
+    // Resolve --combine patch name
+    std::string combine_start;
+    if (!combine_patch.empty()) {
+        if (combine_patch == "-") {
+            combine_start = q.applied.front();
+        } else {
+            combine_start = strip_patches_prefix(q, combine_patch);
+        }
+    }
+
     auto patches = patch_range_for_diff(q, patch);
     std::vector<std::string> tracked;
     if (against_snapshot) {
@@ -848,11 +932,25 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
         std::set<std::string> seen;
         append_unique_files(tracked, seen, files_in_patch(q, SNAPSHOT_PATCH));
         append_unique_files(tracked, seen, collect_files_for_patches(q, patches));
+    } else if (!combine_start.empty()) {
+        // Collect files across the combine range
+        std::vector<std::string> combine_range;
+        bool in_range = false;
+        for (const auto &a : q.applied) {
+            if (a == combine_start) in_range = true;
+            if (in_range) combine_range.push_back(a);
+            if (a == patch) break;
+        }
+        tracked = collect_files_for_patches(q, combine_range);
     } else {
         tracked = files_in_patch(q, patch);
     }
 
     apply_file_filter(tracked, file_filter);
+
+    if (sort_files) {
+        std::sort(tracked.begin(), tracked.end());
+    }
 
     std::string work_base = basename(q.work_dir);
 
@@ -949,7 +1047,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                 std::swap(old_label, new_label);
             }
 
-            std::vector<std::string> diff_cmd = {"diff", "-u"};
+            std::vector<std::string> diff_cmd = diff_cmd_base;
             auto extra_diff_opts = shell_split(get_env("QUILT_DIFF_OPTS"));
             for (const auto &opt : extra_diff_opts) diff_cmd.push_back(opt);
             diff_cmd.push_back("--label");
@@ -992,7 +1090,48 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
 
             std::string diff_out = generate_path_diff(
                 q, file, old_path, old_placeholder, new_path, new_placeholder,
-                p_format, reverse);
+                p_format, reverse, diff_cmd_base);
+            if (!diff_out.empty()) {
+                if (!no_index) {
+                    out("Index: " + work_base + "/" + file + "\n");
+                    out("===================================================================\n");
+                }
+                out(diff_out);
+            }
+        }
+    } else if (!combine_start.empty()) {
+        // --combine: diff backup from the earliest patch in range against working file
+        for (const auto &file : tracked) {
+            // Find the earliest patch in the combine range that tracks this file
+            std::string earliest;
+            bool in_range = false;
+            for (const auto &a : q.applied) {
+                if (a == combine_start) in_range = true;
+                if (in_range) {
+                    auto fip = files_in_patch(q, a);
+                    if (std::find(fip.begin(), fip.end(), file) != fip.end()) {
+                        earliest = a;
+                        break;
+                    }
+                }
+                if (a == patch) break;
+            }
+            if (earliest.empty()) continue;
+
+            std::string old_path = path_join(pc_patch_dir(q, earliest), file);
+            std::string new_path = path_join(q.work_dir, file);
+            bool new_placeholder = false;
+
+            // If a patch above the range shadows this file, use its backup
+            std::string shadowing_patch = next_patch_for_file(q, patch, file);
+            if (!shadowing_patch.empty()) {
+                new_path = path_join(pc_patch_dir(q, shadowing_patch), file);
+                new_placeholder = true;
+            }
+
+            std::string diff_out = generate_path_diff(
+                q, file, old_path, true, new_path, new_placeholder,
+                p_format, reverse, diff_cmd_base);
             if (!diff_out.empty()) {
                 if (!no_index) {
                     out("Index: " + work_base + "/" + file + "\n");
@@ -1003,7 +1142,8 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
         }
     } else {
         for (const auto &file : tracked) {
-            std::string diff_out = generate_file_diff(q, patch, file, p_format, reverse);
+            std::string diff_out = generate_file_diff(q, patch, file, p_format, reverse,
+                                                      diff_cmd_base);
             if (!diff_out.empty()) {
                 if (!no_index) {
                     out("Index: " + work_base + "/" + file + "\n");

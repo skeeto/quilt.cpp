@@ -34,11 +34,11 @@ Legend:
 
 ## diff (`cmd_patch.cpp`)
 
-- [ ] `-c` / `-C num` — missing. Context diff format.
-- [ ] `-U num` — parsed, ignored. Unified context line count (value discarded).
-- [ ] `--combine patch` — missing. Combined diff across a range of patches.
-- [ ] `--diff=utility` — missing. Use alternate diff program.
-- [ ] `--sort` — missing. Sort files alphabetically.
+- [x] `-c` / `-C num` — implemented. Context diff format.
+- [x] `-U num` — implemented. Unified context line count passed to diff.
+- [x] `--combine patch` — implemented. Combined diff across a range of patches.
+- [x] `--diff=utility` — implemented. Use alternate diff program.
+- [x] `--sort` — implemented. Sort files alphabetically.
 - [ ] `--color[=always|auto|never]` — missing. Syntax coloring.
 
 ## refresh (`cmd_patch.cpp`)
