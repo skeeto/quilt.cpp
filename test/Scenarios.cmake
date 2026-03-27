@@ -75,6 +75,9 @@ set(QUILT_TEST_SCENARIOS
     strip_level
     push_numeric
     push_verbose
+    push_fuzz
+    push_merge
+    push_leave_rejects
     push_refresh
     pop_numeric
     force_push_tracking
@@ -121,9 +124,6 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     pop_verbose
     pop_verify_reverse
     pop_auto_refresh
-    push_fuzz
-    push_merge
-    push_leave_rejects
     init_creates_metadata
     init_help_text
     mail_basic
