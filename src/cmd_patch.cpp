@@ -817,6 +817,9 @@ static std::string generate_diffstat(std::string_view diff)
 
     if (stats.empty()) return {};
 
+    // Leading "---" separator (matches git format-patch / original quilt)
+    std::string result = "---\n";
+
     // Find max filename width and max change count
     ptrdiff_t max_name = 0;
     ptrdiff_t max_changes = 0;
@@ -839,7 +842,6 @@ static std::string generate_diffstat(std::string_view diff)
         ? static_cast<double>(bar_width) / static_cast<double>(max_changes)
         : 1.0;
 
-    std::string result;
     ptrdiff_t total_added = 0, total_removed = 0;
     ptrdiff_t total_files = std::ssize(stats);
 
@@ -905,20 +907,27 @@ static std::string generate_diffstat(std::string_view diff)
 }
 
 // Remove an existing diffstat section from a patch header.
-// Detects contiguous blocks of " file | N ++--" lines ending with
-// a "N file(s) changed" summary line.
+// Detects "---" separator followed by " file | N ++--" lines ending
+// with a "N file(s) changed" summary line.
 static std::string remove_diffstat_section(std::string_view header) {
     auto lines = split_lines(header);
     std::string result;
     for (ptrdiff_t i = 0; i < std::ssize(lines); ++i) {
         const auto &line = lines[checked_cast<size_t>(i)];
-        // Detect potential start of diffstat: " file | N"
-        if (!line.empty() && line[0] == ' ' &&
-            str_find(line, '|') >= 0) {
+
+        // Detect "---" separator followed by diffstat, or bare diffstat
+        ptrdiff_t ds_start = i;
+        if (line == "---" && i + 1 < std::ssize(lines)) {
+            ds_start = i + 1;
+        }
+
+        const auto &first = lines[checked_cast<size_t>(ds_start)];
+        if (!first.empty() && first[0] == ' ' &&
+            str_find(first, '|') >= 0) {
             // Look ahead to confirm this is a diffstat block
             bool found_summary = false;
             ptrdiff_t summary_end = -1;
-            for (ptrdiff_t j = i; j < std::ssize(lines); ++j) {
+            for (ptrdiff_t j = ds_start; j < std::ssize(lines); ++j) {
                 const auto &l = lines[checked_cast<size_t>(j)];
                 if (l.find("changed") != std::string::npos &&
                     l.find("file") != std::string::npos) {

@@ -173,6 +173,7 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     mail_no_mbox_error
     mail_no_patches
     mail_header_multiline
+    mail_diffstat
     builtin_diff_identical_files
     builtin_diff_simple_change
     builtin_diff_new_file
@@ -2781,7 +2782,6 @@ function(qt_scenario_mail_basic)
     # Check Message-ID exists
     qt_assert_contains("${mbox}" "Message-ID:" "missing Message-ID header")
     # Check diff content is present
-    qt_assert_contains("${mbox}" "---" "missing --- separator")
     qt_assert_contains("${mbox}" "@@" "missing diff hunks")
     # Check trailer
     qt_assert_contains("${mbox}" "-- \nquilt" "missing trailer")
@@ -2974,6 +2974,36 @@ function(qt_scenario_mail_header_multiline)
     qt_assert_contains("${mbox}" "This is the second paragraph." "missing body paragraph 2")
     # Body should NOT contain the subject line again in the body section
     # (it's only in the Subject header)
+endfunction()
+
+function(qt_scenario_mail_diffstat)
+    qt_begin_test("mail_diffstat")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "old\n")
+    qt_quilt_ok(ARGS new ds.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "new\n")
+    qt_quilt_ok(ARGS header -a INPUT "Subject line\n\nBody text.\n" MESSAGE "header failed")
+    qt_quilt_ok(ARGS refresh --diffstat MESSAGE "refresh --diffstat failed")
+    qt_quilt_ok(
+        ARGS mail --mbox "${QT_TEST_BASE}/ds.mbox" --from "t@e.com"
+        MESSAGE "mail with diffstat failed"
+    )
+    qt_read_file_raw(mbox "${QT_TEST_BASE}/ds.mbox")
+    # Body should contain the diffstat
+    qt_assert_contains("${mbox}" "file changed" "mbox should contain diffstat")
+    # Should have exactly one "---" separator (from the diffstat), not two
+    string(REPLACE "\n" ";" mbox_lines "${mbox}")
+    set(sep_count 0)
+    foreach(ml IN LISTS mbox_lines)
+        if(ml STREQUAL "---")
+            math(EXPR sep_count "${sep_count} + 1")
+        endif()
+    endforeach()
+    if(NOT sep_count EQUAL 1)
+        qt_fail("expected exactly 1 --- separator in mbox, got ${sep_count}")
+    endif()
+    # Diff content should still be present
+    qt_assert_contains("${mbox}" "+new" "mbox should have diff content")
 endfunction()
 
 # --- shell_split scenarios (quoting and variable expansion in QUILT_*_ARGS) ---
@@ -3708,6 +3738,8 @@ function(qt_scenario_refresh_diffstat)
     qt_write_file("${QT_WORK_DIR}/b.txt" "BBB\n")
     qt_quilt_ok(ARGS refresh --diffstat MESSAGE "refresh --diffstat failed")
     qt_read_file_strip(patch_text "${QT_WORK_DIR}/patches/ds.patch")
+    # Patch must contain "---" separator before diffstat
+    qt_assert_matches("${patch_text}" "^---\n|(\n---\n)" "diffstat should be preceded by --- separator")
     # Patch must contain diffstat section
     qt_assert_contains("${patch_text}" "2 files changed" "diffstat summary missing")
     qt_assert_contains("${patch_text}" "insertion" "diffstat should mention insertions")
@@ -3718,6 +3750,23 @@ function(qt_scenario_refresh_diffstat)
     # Patch must still contain the actual diffs
     qt_assert_contains("${patch_text}" "+AAA" "patch should have +AAA")
     qt_assert_contains("${patch_text}" "+BBB" "patch should have +BBB")
+
+    # Re-refresh with --diffstat should not duplicate the --- separator
+    qt_write_file("${QT_WORK_DIR}/a.txt" "aaa2\n")
+    qt_quilt_ok(ARGS refresh --diffstat MESSAGE "re-refresh --diffstat failed")
+    qt_read_file_raw(patch2 "${QT_WORK_DIR}/patches/ds.patch")
+    # Count lines that are exactly "---" (the diffstat separator).
+    # "--- a/file" lines are diff headers, not separators.
+    string(REPLACE "\n" ";" patch2_lines "${patch2}")
+    set(sep_count 0)
+    foreach(pline IN LISTS patch2_lines)
+        if(pline STREQUAL "---")
+            math(EXPR sep_count "${sep_count} + 1")
+        endif()
+    endforeach()
+    if(NOT sep_count EQUAL 1)
+        qt_fail("expected exactly 1 --- separator, got ${sep_count}")
+    endif()
 endfunction()
 
 function(qt_scenario_header_strip_diffstat)
@@ -3727,8 +3776,8 @@ function(qt_scenario_header_strip_diffstat)
     qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
     qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
     qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
-    # Set a header with an embedded diffstat section
-    set(hdr_with_ds "My patch description\n\n f.txt | 1 +\n 1 file changed, 1 insertion(+)\n\nSome trailing text\n")
+    # Set a header with an embedded diffstat section (--- separator + stats)
+    set(hdr_with_ds "My patch description\n---\n f.txt | 1 +\n 1 file changed, 1 insertion(+)\n\nSome trailing text\n")
     qt_quilt_ok(ARGS header -r --strip-diffstat INPUT "${hdr_with_ds}" MESSAGE "header -r --strip-diffstat failed")
     qt_quilt_ok(OUTPUT hdr_out ARGS header MESSAGE "header read failed")
     qt_assert_contains("${hdr_out}" "My patch description" "description should survive")
@@ -3759,8 +3808,8 @@ function(qt_scenario_header_strip_diffstat_print)
     qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
     qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
     qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
-    # Set header with diffstat
-    set(hdr_ds "Title\n\n a.c | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n\n")
+    # Set header with diffstat (--- separator + stats)
+    set(hdr_ds "Title\n---\n a.c | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n\n")
     qt_quilt_ok(ARGS header -r INPUT "${hdr_ds}" MESSAGE "header -r failed")
     # Print without strip: should have diffstat
     qt_quilt_ok(OUTPUT raw_out ARGS header MESSAGE "header print failed")
@@ -3825,8 +3874,8 @@ function(qt_scenario_header_strip_diffstat_append)
     qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
     qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
     qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
-    # Set header with diffstat
-    set(hdr_ds "Title\n\n f.txt | 1 +\n 1 file changed, 1 insertion(+)\n\n")
+    # Set header with diffstat (--- separator + stats)
+    set(hdr_ds "Title\n---\n f.txt | 1 +\n 1 file changed, 1 insertion(+)\n\n")
     qt_quilt_ok(ARGS header -r INPUT "${hdr_ds}" MESSAGE "header -r failed")
     # Append with --strip-diffstat
     qt_quilt_ok(ARGS header -a --strip-diffstat INPUT "Extra note\n" MESSAGE "header -a --strip-diffstat failed")
@@ -3844,7 +3893,7 @@ function(qt_scenario_header_strip_combined)
     qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
     qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
     # Set header with both diffstat and trailing whitespace
-    set(hdr_both "Title   \n\n f.txt | 1 +\n 1 file changed, 1 insertion(+)\n\nNote   \n")
+    set(hdr_both "Title   \n---\n f.txt | 1 +\n 1 file changed, 1 insertion(+)\n\nNote   \n")
     qt_quilt_ok(ARGS header -r --strip-diffstat --strip-trailing-whitespace INPUT "${hdr_both}" MESSAGE "header -r combined strip failed")
     qt_quilt_ok(OUTPUT hdr_out ARGS header MESSAGE "header read failed")
     qt_assert_contains("${hdr_out}" "Title" "title should remain")
@@ -4292,6 +4341,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_mail_no_patches()
     elseif(scenario STREQUAL "mail_header_multiline")
         qt_scenario_mail_header_multiline()
+    elseif(scenario STREQUAL "mail_diffstat")
+        qt_scenario_mail_diffstat()
     elseif(scenario STREQUAL "shell_split_single_quotes")
         qt_scenario_shell_split_single_quotes()
     elseif(scenario STREQUAL "shell_split_double_quotes")

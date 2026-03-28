@@ -375,8 +375,11 @@ int cmd_mail(QuiltState &q, int argc, char **argv) {
             }
         }
 
-        // Separator
-        msg += "---\n";
+        // Blank line between body and diff (when no diffstat separator)
+        if (!msg.empty() && msg.back() == '\n' &&
+            (msg.size() < 2 || msg[msg.size() - 2] != '\n')) {
+            msg += '\n';
+        }
 
         // Diff content
         if (!diff.empty()) {
