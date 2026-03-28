@@ -715,7 +715,7 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
             if (pos >= 0) {
                 hunk_positions[checked_cast<size_t>(h)] = pos;
                 ptrdiff_t pat_len = std::ssize(pattern);
-                ptrdiff_t actual_offset = pos - (hunk.old_start - 1);
+                ptrdiff_t actual_offset = pos - (std::max(hunk.old_start, ptrdiff_t{1}) - 1);
                 auto ctx = get_hunk_context(hunk);
 
                 if (actual_offset != cumulative_offset && !opts.quiet) {
