@@ -7,7 +7,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 A C++20 reimplementation of [quilt](https://savannah.nongnu.org/projects/quilt), the patch management tool.
 Builds a single `quilt` binary that manages a stack of patches against a source tree. Public domain (Unlicense).
 
-The reference document for quilt behavior is `quilt.html` (or `quilt.txt`). When in doubt about how a command should behave, run real `quilt` (system-installed) through the same scenario and match its output.
+The reference document for quilt behavior is `docs/manual.md`. When in doubt about how a command should behave, run real `quilt` (system-installed) through the same scenario and match its output.
 
 ## Dependencies
 
@@ -75,7 +75,7 @@ The legacy shell harness remains in `test/test.sh` for ad hoc comparison, includ
 
 ## Architecture
 
-All internal strings are UTF-8. Indices and counts use `ptrdiff_t` (signed) with `std::ssize()` instead of `.size()`. The boundary utilities `to_uz()` (→ `size_t`), `to_int()` (→ `int`), `str_find()`, and `str_rfind()` (→ `ptrdiff_t`, returning −1 for not-found) are defined in `quilt.hpp` and used at every signed-to-unsigned conversion point. `size_t` is only used at system call boundaries (POSIX `write`, Win32 `WriteFile`).
+All internal strings are UTF-8. Indices and counts use `ptrdiff_t` (signed) with `std::ssize()` instead of `.size()`. The boundary utility `checked_cast<T>()` is used at every signed-to-unsigned conversion point, along with `str_find()` and `str_rfind()` (→ `ptrdiff_t`, returning −1 for not-found), all defined in `quilt.hpp`. `size_t` is only used at system call boundaries (POSIX `write`, Win32 `WriteFile`).
 
 ### Headers
 
@@ -86,17 +86,20 @@ All internal strings are UTF-8. Indices and counts use `ptrdiff_t` (signed) with
 
 - `core.cpp` — `QuiltState` methods, string/path utilities, series/applied-patches file I/O, backup/restore file helpers, `quilt_main()` entry point with command dispatch table.
 - `cmd_stack.cpp` — stack navigation and push/pop: series, applied, unapplied, top, next, previous, push, pop.
-- `cmd_patch.cpp` — patch content commands: new, add, remove, edit, refresh, diff, revert.
+- `cmd_patch.cpp` — patch content commands: new, add, remove, edit, refresh, diff, revert, snapshot, init.
 - `cmd_manage.cpp` — patch management: delete, rename, import, header, files, patches, fold, fork, upgrade.
 - `cmd_mail.cpp` — mbox generation for emailing patches (`quilt mail`).
-- `cmd_stubs.cpp` — unimplemented commands that return "not yet implemented": annotate, grep, graph, setup, shell, snapshot, init.
+- `cmd_annotate.cpp` — annotated file listing showing which patches modify which lines.
+- `cmd_graph.cpp` — dependency graph generation in dot(1) format.
+- `patch.cpp` — built-in patch engine for applying unified diffs (fuzz, reverse, merge conflicts, reject files).
+- `cmd_stubs.cpp` — unimplemented commands that return "not yet implemented": grep, setup, shell.
 - `platform_posix.cpp` — POSIX implementation (fork/exec, POSIX file I/O). Contains `main()`.
 - `platform_win32.cpp` — Win32 implementation (`CreateProcess`, wide-char APIs, UTF-16 conversion). Contains `main()`.
 
 ### Key design patterns
 
 - **Platform selection at build time**: `CMakeLists.txt` links exactly one of `platform_posix.cpp` or `platform_win32.cpp`. No `#ifdef` in shared code.
-- **Backup-based patch tracking**: Push/pop works by backing up files into `.pc/<patchname>/` before applying patches. Pop restores from these backups. The external `patch` command is used for applying diffs; `diff` is used for generating them.
+- **Backup-based patch tracking**: Push/pop works by backing up files into `.pc/<patchname>/` before applying patches. Pop restores from these backups. A built-in patch engine (`patch.cpp`) applies unified diffs; the external `diff` command is used for generating them.
 - **Metadata files in `.pc/<patch>/`**: The `.timestamp` and `.needs_refresh` files are quilt metadata, not tracked files. `files_in_patch()` filters these out (anything starting with `.`).
 - **Core helpers accessed via extern**: Functions like `ensure_pc_dir`, `backup_file`, `restore_file`, `write_series`, `write_applied`, `pc_patch_dir`, and `files_in_patch` are defined in `core.cpp` but not declared in headers — command files use `extern` forward declarations.
 - **Command signature**: Every command is `int cmd_*(QuiltState &q, int argc, char **argv)` where `argv[0]` is the command name. Commands do their own option parsing with simple loops.
