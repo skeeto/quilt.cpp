@@ -763,6 +763,147 @@ int cmd_snapshot(QuiltState &q, int argc, char **argv) {
     return 0;
 }
 
+// Built-in diffstat: parse unified diff, produce a summary matching
+// the output format of the external diffstat(1) utility.
+static std::string generate_diffstat(std::string_view diff)
+{
+    struct FileStat {
+        std::string name;
+        ptrdiff_t added   = 0;
+        ptrdiff_t removed = 0;
+    };
+
+    std::vector<FileStat> stats;
+    auto lines = split_lines(diff);
+
+    for (ptrdiff_t i = 0; i < std::ssize(lines); ++i) {
+        const auto &line = lines[checked_cast<size_t>(i)];
+
+        // Detect file header: "--- a/file" followed by "+++ b/file"
+        if (line.starts_with("--- ") &&
+            i + 1 < std::ssize(lines) &&
+            lines[checked_cast<size_t>(i + 1)].starts_with("+++ ")) {
+            const auto &plus_line = lines[checked_cast<size_t>(i + 1)];
+
+            // Extract filename from +++ line, strip "b/" prefix
+            auto name = plus_line.substr(4);
+            // Strip trailing timestamp (tab-separated)
+            auto tab = str_find(name, '\t');
+            if (tab >= 0) name = name.substr(0, checked_cast<size_t>(tab));
+            // Strip one leading path component (a/ or b/ prefix)
+            auto slash = str_find(name, '/');
+            if (slash >= 0) name = name.substr(checked_cast<size_t>(slash + 1));
+            // /dev/null means new or deleted file — use --- line instead
+            if (name == "dev/null" || plus_line.substr(4).starts_with("/dev/null")) {
+                name = lines[checked_cast<size_t>(i)].substr(4);
+                tab = str_find(name, '\t');
+                if (tab >= 0) name = name.substr(0, checked_cast<size_t>(tab));
+                slash = str_find(name, '/');
+                if (slash >= 0) name = name.substr(checked_cast<size_t>(slash + 1));
+            }
+
+            stats.push_back({std::string(name), 0, 0});
+            i += 1;  // skip +++ line
+            continue;
+        }
+
+        if (stats.empty()) continue;
+
+        if (line.starts_with("+") && !line.starts_with("+++"))
+            stats.back().added++;
+        else if (line.starts_with("-") && !line.starts_with("---"))
+            stats.back().removed++;
+    }
+
+    if (stats.empty()) return {};
+
+    // Find max filename width and max change count
+    ptrdiff_t max_name = 0;
+    ptrdiff_t max_changes = 0;
+    for (const auto &s : stats) {
+        max_name = std::max(max_name, std::ssize(s.name));
+        max_changes = std::max(max_changes, s.added + s.removed);
+    }
+
+    // Format change count to find its width
+    auto num_width = std::ssize(std::to_string(max_changes));
+
+    // Bar graph width: fit in ~72 columns after " name | num "
+    //   1 (leading space) + max_name + 3 (" | ") + num_width + 1 (space)
+    ptrdiff_t used = 1 + max_name + 3 + num_width + 1;
+    ptrdiff_t bar_width = std::max(static_cast<ptrdiff_t>(1),
+                                   static_cast<ptrdiff_t>(72) - used);
+
+    // Scale factor for bar graph
+    double scale = (max_changes > bar_width)
+        ? static_cast<double>(bar_width) / static_cast<double>(max_changes)
+        : 1.0;
+
+    std::string result;
+    ptrdiff_t total_added = 0, total_removed = 0;
+    ptrdiff_t total_files = std::ssize(stats);
+
+    for (const auto &s : stats) {
+        total_added += s.added;
+        total_removed += s.removed;
+
+        ptrdiff_t changes = s.added + s.removed;
+        ptrdiff_t plus_bars = static_cast<ptrdiff_t>(
+            static_cast<double>(s.added) * scale + 0.5);
+        ptrdiff_t minus_bars = static_cast<ptrdiff_t>(
+            static_cast<double>(s.removed) * scale + 0.5);
+
+        // Ensure at least 1 bar for non-zero counts
+        if (s.added > 0 && plus_bars == 0) plus_bars = 1;
+        if (s.removed > 0 && minus_bars == 0) minus_bars = 1;
+
+        // Cap total bars at scaled width
+        ptrdiff_t total_bars = plus_bars + minus_bars;
+        ptrdiff_t limit = static_cast<ptrdiff_t>(
+            static_cast<double>(changes) * scale + 0.5);
+        if (limit < 1 && changes > 0) limit = 1;
+        if (total_bars > limit) {
+            // Reduce the larger portion
+            if (plus_bars > minus_bars)
+                plus_bars = limit - minus_bars;
+            else
+                minus_bars = limit - plus_bars;
+        }
+
+        result += ' ';
+        result += s.name;
+        for (ptrdiff_t j = std::ssize(s.name); j < max_name; ++j)
+            result += ' ';
+        result += " | ";
+        auto num_str = std::to_string(changes);
+        for (ptrdiff_t j = std::ssize(num_str); j < num_width; ++j)
+            result += ' ';
+        result += num_str;
+        result += ' ';
+        for (ptrdiff_t j = 0; j < plus_bars; ++j) result += '+';
+        for (ptrdiff_t j = 0; j < minus_bars; ++j) result += '-';
+        result += '\n';
+    }
+
+    // Summary line
+    result += ' ';
+    result += std::to_string(total_files);
+    result += (total_files == 1) ? " file changed" : " files changed";
+    if (total_added > 0) {
+        result += ", ";
+        result += std::to_string(total_added);
+        result += (total_added == 1) ? " insertion(+)" : " insertions(+)";
+    }
+    if (total_removed > 0) {
+        result += ", ";
+        result += std::to_string(total_removed);
+        result += (total_removed == 1) ? " deletion(-)" : " deletions(-)";
+    }
+    result += '\n';
+
+    return result;
+}
+
 // Remove an existing diffstat section from a patch header.
 // Detects contiguous blocks of " file | N ++--" lines ending with
 // a "N file(s) changed" summary line.
@@ -1079,11 +1220,8 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     if (opt_diffstat) {
         std::string diff_portion = patch_content.substr(checked_cast<size_t>(std::ssize(header)));
         if (!diff_portion.empty()) {
-            std::vector<std::string> ds_argv = {"diffstat"};
-            auto ds_opts = shell_split(get_env("QUILT_DIFFSTAT_OPTS"));
-            for (auto &o : ds_opts) ds_argv.push_back(std::move(o));
-            ProcessResult ds = run_cmd_input(ds_argv, diff_portion);
-            if (ds.exit_code == 0 && !ds.out.empty()) {
+            std::string ds_out = generate_diffstat(diff_portion);
+            if (!ds_out.empty()) {
                 std::string clean_header = remove_diffstat_section(header);
                 // Remove trailing blank lines from header
                 while (std::ssize(clean_header) > 1 &&
@@ -1094,8 +1232,8 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
                 patch_content = clean_header;
                 if (!patch_content.empty() && patch_content.back() != '\n')
                     patch_content += '\n';
-                patch_content += ds.out;
-                if (!ds.out.empty() && ds.out.back() != '\n')
+                patch_content += ds_out;
+                if (!ds_out.empty() && ds_out.back() != '\n')
                     patch_content += '\n';
                 patch_content += '\n';
                 patch_content += diff_portion;

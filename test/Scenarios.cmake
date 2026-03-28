@@ -3706,12 +3706,16 @@ function(qt_scenario_refresh_diffstat)
     qt_quilt_ok(ARGS add b.txt MESSAGE "add b failed")
     qt_write_file("${QT_WORK_DIR}/a.txt" "AAA\n")
     qt_write_file("${QT_WORK_DIR}/b.txt" "BBB\n")
-    # Try refresh with --diffstat; if diffstat is not installed, just check it doesn't crash
-    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh --diffstat)
-    qt_assert_success("${rc}" "refresh --diffstat should succeed")
-    # If diffstat was available, the patch should contain a diffstat section
+    qt_quilt_ok(ARGS refresh --diffstat MESSAGE "refresh --diffstat failed")
     qt_read_file_strip(patch_text "${QT_WORK_DIR}/patches/ds.patch")
-    # At minimum, the patch should contain the diffs
+    # Patch must contain diffstat section
+    qt_assert_contains("${patch_text}" "2 files changed" "diffstat summary missing")
+    qt_assert_contains("${patch_text}" "insertion" "diffstat should mention insertions")
+    qt_assert_contains("${patch_text}" "deletion" "diffstat should mention deletions")
+    # Diffstat file lines
+    qt_assert_contains("${patch_text}" "a.txt" "diffstat should list a.txt")
+    qt_assert_contains("${patch_text}" "b.txt" "diffstat should list b.txt")
+    # Patch must still contain the actual diffs
     qt_assert_contains("${patch_text}" "+AAA" "patch should have +AAA")
     qt_assert_contains("${patch_text}" "+BBB" "patch should have +BBB")
 endfunction()
