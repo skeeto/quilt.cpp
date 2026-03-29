@@ -194,6 +194,13 @@ set(QUILT_TEST_SCENARIOS
     refresh_sort
     files_bad_option
     files_no_patch_applied
+    diff_C_combined
+    diff_U_combined
+    diff_with_P
+    diff_combine_snapshot_conflict
+    diff_file_filter
+    diff_p_explicit
+    diff_no_timestamps
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -276,6 +283,7 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     fold_reverse_no_newline
     diff_external_context_format
     fold_empty_stdin
+    init_extra_args
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -4431,6 +4439,104 @@ function(qt_scenario_pop_unapplied_target)
     qt_assert_contains("${combined}" "not applied" "pop to unapplied patch should report not applied")
 endfunction()
 
+function(qt_scenario_diff_C_combined)
+    qt_begin_test("diff_C_combined")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "line1\nline2\nline3\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "line1\nchanged\nline3\n")
+    # Combined -C3 instead of -C 3
+    qt_quilt_ok(OUTPUT diff_out ERROR diff_err ARGS diff -C3 MESSAGE "diff -C3 failed")
+    qt_assert_contains("${diff_out}" "***" "context diff should have *** markers")
+endfunction()
+
+function(qt_scenario_diff_U_combined)
+    qt_begin_test("diff_U_combined")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "line1\nline2\nline3\nline4\nline5\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "line1\nline2\nchanged\nline4\nline5\n")
+    # Combined -U0 instead of -U 0
+    qt_quilt_ok(OUTPUT diff_out ERROR diff_err ARGS diff -U0 MESSAGE "diff -U0 failed")
+    qt_assert_contains("${diff_out}" "@@" "unified diff should have @@ markers")
+    qt_assert_not_contains("${diff_out}" " line1" "U0 should have no context")
+endfunction()
+
+function(qt_scenario_diff_with_P)
+    qt_begin_test("diff_with_P")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p1 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "v1\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p2 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "v2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2 failed")
+    # diff -P p1 should show changes from p1's backup to current
+    qt_quilt_ok(OUTPUT diff_out ERROR diff_err ARGS diff -P p1.patch MESSAGE "diff -P p1 failed")
+    qt_assert_contains("${diff_out}" "-base" "diff -P p1 should show base→v1 change")
+endfunction()
+
+function(qt_scenario_diff_combine_snapshot_conflict)
+    qt_begin_test("diff_combine_snapshot_conflict")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS diff --combine - --snapshot)
+    qt_assert_failure("${rc}" "diff --combine --snapshot should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "cannot be combined" "should explain the conflict")
+endfunction()
+
+function(qt_scenario_diff_file_filter)
+    qt_begin_test("diff_file_filter")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "old_a\n")
+    qt_write_file("${QT_WORK_DIR}/b.txt" "old_b\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add a.txt MESSAGE "add a failed")
+    qt_quilt_ok(ARGS add b.txt MESSAGE "add b failed")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "new_a\n")
+    qt_write_file("${QT_WORK_DIR}/b.txt" "new_b\n")
+    # Filter diff to only a.txt
+    qt_quilt_ok(OUTPUT diff_out ERROR diff_err ARGS diff a.txt MESSAGE "diff a.txt failed")
+    qt_assert_contains("${diff_out}" "a.txt" "filtered diff should show a.txt")
+    qt_assert_not_contains("${diff_out}" "b.txt" "filtered diff should not show b.txt")
+endfunction()
+
+function(qt_scenario_diff_p_explicit)
+    qt_begin_test("diff_p_explicit")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "old\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "new\n")
+    # -p ab produces a/b prefix labels
+    qt_quilt_ok(OUTPUT diff_out ERROR diff_err ARGS diff -p ab MESSAGE "diff -p ab failed")
+    qt_assert_contains("${diff_out}" "a/f.txt" "diff -p ab should have a/ prefix")
+    qt_assert_contains("${diff_out}" "b/f.txt" "diff -p ab should have b/ prefix")
+endfunction()
+
+function(qt_scenario_diff_no_timestamps)
+    qt_begin_test("diff_no_timestamps")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "old\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "new\n")
+    qt_quilt_ok(OUTPUT diff_out ERROR diff_err ARGS diff --no-timestamps MESSAGE "diff --no-timestamps failed")
+    qt_assert_contains("${diff_out}" "--- " "diff should have --- header")
+    # With --no-timestamps, header should not contain date/time digits after the filename
+    qt_assert_not_contains("${diff_out}" "2026" "diff --no-timestamps should not include year")
+endfunction()
+
+function(qt_scenario_init_extra_args)
+    qt_begin_test("init_extra_args")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS init unexpected_arg)
+    qt_assert_failure("${rc}" "init with extra args should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Usage" "init with extra arg should print usage")
+endfunction()
+
 function(qt_scenario_fold_bad_option)
     qt_begin_test("fold_bad_option")
     qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
@@ -5293,6 +5399,22 @@ function(qt_run_named_scenario scenario)
         qt_scenario_files_no_patch_applied()
     elseif(scenario STREQUAL "fold_empty_stdin")
         qt_scenario_fold_empty_stdin()
+    elseif(scenario STREQUAL "diff_C_combined")
+        qt_scenario_diff_C_combined()
+    elseif(scenario STREQUAL "diff_U_combined")
+        qt_scenario_diff_U_combined()
+    elseif(scenario STREQUAL "diff_with_P")
+        qt_scenario_diff_with_P()
+    elseif(scenario STREQUAL "diff_combine_snapshot_conflict")
+        qt_scenario_diff_combine_snapshot_conflict()
+    elseif(scenario STREQUAL "diff_file_filter")
+        qt_scenario_diff_file_filter()
+    elseif(scenario STREQUAL "diff_p_explicit")
+        qt_scenario_diff_p_explicit()
+    elseif(scenario STREQUAL "diff_no_timestamps")
+        qt_scenario_diff_no_timestamps()
+    elseif(scenario STREQUAL "init_extra_args")
+        qt_scenario_init_extra_args()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
