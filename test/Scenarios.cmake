@@ -5288,7 +5288,8 @@ function(qt_scenario_refresh_U_combined)
     qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
     qt_write_file("${QT_WORK_DIR}/f.txt" "1\n2\nCHANGED\n4\n5\n")
     # Combined -U1 (number in same arg) exercises the else branch in cmd_refresh -U parsing
-    qt_quilt_ok(ARGS refresh -U1 MESSAGE "refresh -U1 failed")
+    # QUILT_NO_DIFF_TIMESTAMPS=1 prevents timestamps from containing " 1" as a substring
+    qt_quilt_ok(ENV "QUILT_NO_DIFF_TIMESTAMPS=1" ARGS refresh -U1 MESSAGE "refresh -U1 failed")
     qt_read_file_strip(patch_text "${QT_WORK_DIR}/patches/p.patch")
     qt_assert_contains("${patch_text}" "@@" "patch should be unified format")
     qt_assert_contains("${patch_text}" " 2" "should have line 2 as context (1 line before change)")
@@ -5376,7 +5377,10 @@ function(qt_scenario_diff_quilt_diff_opts_combined)
     qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
     qt_write_file("${QT_WORK_DIR}/f.txt" "1\n2\n3\nCHANGED\n5\n6\n7\n")
     # QUILT_DIFF_OPTS=-U1 (combined form) exercises parse_diff_opts_context -U<n> path
-    qt_quilt_ok(OUTPUT diff_out ERROR diff_err ENV "QUILT_DIFF_OPTS=-U1" ARGS diff MESSAGE "diff with QUILT_DIFF_OPTS=-U1 failed")
+    # QUILT_NO_DIFF_TIMESTAMPS=1 prevents timestamps from containing " 1" as a substring
+    qt_quilt_ok(OUTPUT diff_out ERROR diff_err
+        ENV "QUILT_DIFF_OPTS=-U1" "QUILT_NO_DIFF_TIMESTAMPS=1"
+        ARGS diff MESSAGE "diff with QUILT_DIFF_OPTS=-U1 failed")
     qt_assert_contains("${diff_out}" "@@" "diff should be unified format")
     # With -U1, context is 1 line: should have lines 3 and 5 but not 1 or 7
     qt_assert_contains("${diff_out}" " 3" "should have line 3 as context")
@@ -5413,7 +5417,10 @@ function(qt_scenario_diff_quilt_diff_opts_separate)
     qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
     qt_write_file("${QT_WORK_DIR}/f.txt" "1\n2\n3\nCHANGED\n5\n6\n7\n")
     # QUILT_DIFF_OPTS="-U 1" (separate args) exercises parse_diff_opts_context -U n path
-    qt_quilt_ok(OUTPUT diff_out ERROR diff_err ENV "QUILT_DIFF_OPTS=-U 1" ARGS diff MESSAGE "diff with QUILT_DIFF_OPTS=-U 1 failed")
+    # QUILT_NO_DIFF_TIMESTAMPS=1 prevents timestamps from containing " 1" as a substring
+    qt_quilt_ok(OUTPUT diff_out ERROR diff_err
+        ENV "QUILT_DIFF_OPTS=-U 1" "QUILT_NO_DIFF_TIMESTAMPS=1"
+        ARGS diff MESSAGE "diff with QUILT_DIFF_OPTS=-U 1 failed")
     qt_assert_contains("${diff_out}" "@@" "diff should be unified format")
     qt_assert_contains("${diff_out}" " 3" "should have line 3 as context")
     qt_assert_not_contains("${diff_out}" " 1" "should not have line 1 with U1")
