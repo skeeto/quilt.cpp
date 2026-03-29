@@ -344,6 +344,14 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     fold_force
     fold_force_env
     header_backup_append
+    stub_grep
+    stub_setup
+    stub_shell
+    annotate_bad_option
+    annotate_two_files
+    annotate_no_applied
+    annotate_empty_series
+    annotate_nonexistent_file
     quilt_no_args
     quilt_version
     quilt_global_help
@@ -1399,6 +1407,93 @@ function(qt_scenario_annotate_subdirectory)
         "annotate from subdirectory should attribute replaced line to second patch")
     qt_assert_contains("${annotate_out}" "2\ttwo\n"
         "annotate from subdirectory should attribute inserted line to second patch")
+endfunction()
+
+function(qt_scenario_stub_grep)
+    qt_begin_test("stub_grep")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS grep pattern)
+    qt_assert_failure("${rc}" "quilt grep should fail (not implemented)")
+    qt_assert_contains("${err}" "not implemented" "grep should say not implemented")
+endfunction()
+
+function(qt_scenario_stub_setup)
+    qt_begin_test("stub_setup")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS setup)
+    qt_assert_failure("${rc}" "quilt setup should fail (not implemented)")
+    qt_assert_contains("${err}" "not implemented" "setup should say not implemented")
+endfunction()
+
+function(qt_scenario_stub_shell)
+    qt_begin_test("stub_shell")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS shell)
+    qt_assert_failure("${rc}" "quilt shell should fail (not implemented)")
+    qt_assert_contains("${err}" "not implemented" "shell should say not implemented")
+endfunction()
+
+function(qt_scenario_annotate_bad_option)
+    qt_begin_test("annotate_bad_option")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS annotate -x f.txt)
+    qt_assert_failure("${rc}" "annotate with bad option should fail")
+    qt_assert_contains("${err}" "Usage:" "bad option should print usage")
+endfunction()
+
+function(qt_scenario_annotate_two_files)
+    qt_begin_test("annotate_two_files")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "a\n")
+    qt_write_file("${QT_WORK_DIR}/b.txt" "b\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add a.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "x\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS annotate a.txt b.txt)
+    qt_assert_failure("${rc}" "annotate with two files should fail")
+    qt_assert_contains("${err}" "Usage:" "two files should print usage")
+endfunction()
+
+function(qt_scenario_annotate_no_applied)
+    qt_begin_test("annotate_no_applied")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # Series non-empty but nothing applied
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS annotate f.txt)
+    qt_assert_failure("${rc}" "annotate with nothing applied should fail")
+    qt_assert_contains("${err}" "patches applied" "should say no patches applied")
+endfunction()
+
+function(qt_scenario_annotate_empty_series)
+    qt_begin_test("annotate_empty_series")
+    # Create a series file with no patches
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/patches")
+    file(WRITE "${QT_WORK_DIR}/patches/series" "")
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/.pc")
+    file(WRITE "${QT_WORK_DIR}/.pc/.version" "2\n")
+    file(WRITE "${QT_WORK_DIR}/.pc/.quilt_patches" "patches\n")
+    file(WRITE "${QT_WORK_DIR}/.pc/.quilt_series" "series\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS annotate f.txt)
+    qt_assert_failure("${rc}" "annotate with empty series should fail")
+    qt_assert_contains("${err}" "patches" "should mention patches")
+endfunction()
+
+function(qt_scenario_annotate_nonexistent_file)
+    qt_begin_test("annotate_nonexistent_file")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # Annotate a file that doesn't exist and is not tracked by any patch
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS annotate nosuchfile.txt)
+    qt_assert_failure("${rc}" "annotate nonexistent file should fail")
+    qt_assert_contains("${err}" "nosuchfile.txt" "should mention the file name")
 endfunction()
 
 function(qt_scenario_header)
@@ -6038,6 +6133,22 @@ function(qt_run_named_scenario scenario)
         qt_scenario_annotate_help()
     elseif(scenario STREQUAL "annotate_subdirectory")
         qt_scenario_annotate_subdirectory()
+    elseif(scenario STREQUAL "stub_grep")
+        qt_scenario_stub_grep()
+    elseif(scenario STREQUAL "stub_setup")
+        qt_scenario_stub_setup()
+    elseif(scenario STREQUAL "stub_shell")
+        qt_scenario_stub_shell()
+    elseif(scenario STREQUAL "annotate_bad_option")
+        qt_scenario_annotate_bad_option()
+    elseif(scenario STREQUAL "annotate_two_files")
+        qt_scenario_annotate_two_files()
+    elseif(scenario STREQUAL "annotate_no_applied")
+        qt_scenario_annotate_no_applied()
+    elseif(scenario STREQUAL "annotate_empty_series")
+        qt_scenario_annotate_empty_series()
+    elseif(scenario STREQUAL "annotate_nonexistent_file")
+        qt_scenario_annotate_nonexistent_file()
     elseif(scenario STREQUAL "edit_multiple_files")
         qt_scenario_edit_multiple_files()
     elseif(scenario STREQUAL "edit_no_patch")
