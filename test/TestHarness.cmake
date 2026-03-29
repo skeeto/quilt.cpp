@@ -171,7 +171,7 @@ function(qt_combine_output out_var stdout_text stderr_text)
 endfunction()
 
 function(qt_quilt)
-    set(options)
+    set(options DEFAULT_QUILTRC)
     set(one_value_args RESULT OUTPUT ERROR WORKING_DIRECTORY INPUT)
     set(multi_value_args ARGS ENV)
     cmake_parse_arguments(PARSE_ARGV 0 QT "${options}" "${one_value_args}" "${multi_value_args}")
@@ -204,11 +204,18 @@ function(qt_quilt)
         list(APPEND command "${env_entry}")
     endforeach()
     list(APPEND command "${QUILT_TEST_EXECUTABLE}")
+    # Prevent system/user quiltrc from interfering unless the test explicitly
+    # passes --quiltrc or opts in via DEFAULT_QUILTRC.
+    if(NOT QT_DEFAULT_QUILTRC)
+        set(qt_args_str "${QT_ARGS}")
+        if(NOT qt_args_str MATCHES "--quiltrc")
+            list(APPEND command "--quiltrc" "-")
+        endif()
+    endif()
     list(APPEND command ${QT_ARGS})
     set(wrapped_command "${CMAKE_COMMAND}" "-E" "chdir" "${work_dir}")
     list(APPEND wrapped_command ${command})
 
-    set(input_file)
     if(DEFINED QT_INPUT)
         string(RANDOM LENGTH 8 ALPHABET 0123456789abcdef input_suffix)
         get_property(test_base GLOBAL PROPERTY QT_TEST_BASE)
@@ -217,21 +224,20 @@ function(qt_quilt)
         endif()
         set(input_file "${test_base}/input-${input_suffix}.txt")
         file(WRITE "${input_file}" "${QT_INPUT}")
-        execute_process(
-            COMMAND ${wrapped_command}
-            RESULT_VARIABLE result
-            OUTPUT_VARIABLE output
-            ERROR_VARIABLE error
-            INPUT_FILE "${input_file}"
-        )
     else()
-        execute_process(
-            COMMAND ${wrapped_command}
-            RESULT_VARIABLE result
-            OUTPUT_VARIABLE output
-            ERROR_VARIABLE error
-        )
+        if(CMAKE_HOST_WIN32)
+            set(input_file "NUL")
+        else()
+            set(input_file "/dev/null")
+        endif()
     endif()
+    execute_process(
+        COMMAND ${wrapped_command}
+        RESULT_VARIABLE result
+        OUTPUT_VARIABLE output
+        ERROR_VARIABLE error
+        INPUT_FILE "${input_file}"
+    )
 
     string(REGEX REPLACE "\r\n" "\n" output "${output}")
     string(REGEX REPLACE "\r\n" "\n" error "${error}")
@@ -241,7 +247,7 @@ function(qt_quilt)
 endfunction()
 
 function(qt_quilt_ok)
-    set(options)
+    set(options DEFAULT_QUILTRC)
     set(one_value_args OUTPUT ERROR WORKING_DIRECTORY INPUT MESSAGE)
     set(multi_value_args ARGS ENV)
     cmake_parse_arguments(QTO "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
@@ -251,6 +257,9 @@ function(qt_quilt_ok)
         OUTPUT output
         ERROR error
     )
+    if(QTO_DEFAULT_QUILTRC)
+        list(APPEND call_args DEFAULT_QUILTRC)
+    endif()
     if(DEFINED QTO_WORKING_DIRECTORY AND NOT QTO_WORKING_DIRECTORY STREQUAL "")
         list(APPEND call_args WORKING_DIRECTORY "${QTO_WORKING_DIRECTORY}")
     endif()
