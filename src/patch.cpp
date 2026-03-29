@@ -241,6 +241,7 @@ static std::vector<PatchFile> parse_patch(std::string_view text, int strip_level
 struct FileContent {
     std::vector<std::string> lines;
     bool has_trailing_newline = true;
+    bool crlf = false;  // true if original file used \r\n line endings
 };
 
 static FileContent load_file_lines(std::string_view path)
@@ -253,6 +254,11 @@ static FileContent load_file_lines(std::string_view path)
     }
 
     fc.has_trailing_newline = (content.back() == '\n');
+
+    // Detect \r\n from the first line ending
+    auto first_lf = str_find(std::string_view(content), '\n');
+    if (first_lf > 0 && content[checked_cast<size_t>(first_lf - 1)] == '\r')
+        fc.crlf = true;
 
     ptrdiff_t start = 0;
     ptrdiff_t len = std::ssize(content);
@@ -788,6 +794,20 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                 } else {
                     new_content = build_output(fc.lines, fc.has_trailing_newline,
                                                pf, hunk_positions);
+                }
+
+                // Restore \r\n line endings if the original file used them
+                if (fc.crlf) {
+                    std::string crlf_content;
+                    crlf_content.reserve(new_content.size() + new_content.size() / 40);
+                    for (size_t k = 0; k < new_content.size(); ++k) {
+                        if (new_content[k] == '\n' &&
+                            (k == 0 || new_content[k - 1] != '\r')) {
+                            crlf_content += '\r';
+                        }
+                        crlf_content += new_content[k];
+                    }
+                    new_content = std::move(crlf_content);
                 }
 
                 // Create parent directories if needed
