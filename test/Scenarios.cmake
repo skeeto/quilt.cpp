@@ -382,6 +382,10 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     push_missing_patch
     push_quilt_patch_opts
     pop_auto_refresh_fail
+    import_no_files
+    header_strip_ws_empty_line
+    files_combine_dash_no_applied
+    push_quilt_patch_opts_fuzz
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -6986,6 +6990,14 @@ function(qt_run_named_scenario scenario)
         qt_scenario_push_quilt_patch_opts()
     elseif(scenario STREQUAL "pop_auto_refresh_fail")
         qt_scenario_pop_auto_refresh_fail()
+    elseif(scenario STREQUAL "import_no_files")
+        qt_scenario_import_no_files()
+    elseif(scenario STREQUAL "header_strip_ws_empty_line")
+        qt_scenario_header_strip_ws_empty_line()
+    elseif(scenario STREQUAL "files_combine_dash_no_applied")
+        qt_scenario_files_combine_dash_no_applied()
+    elseif(scenario STREQUAL "push_quilt_patch_opts_fuzz")
+        qt_scenario_push_quilt_patch_opts_fuzz()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -7108,4 +7120,63 @@ function(qt_scenario_pop_auto_refresh_fail)
         ARGS --quiltrc "${QT_TEST_BASE}/badrc" pop --refresh)
     qt_assert_failure("${rc}" "pop --refresh with invalid QUILT_REFRESH_ARGS should fail")
     qt_assert_contains("${err}" "Refresh of patch" "pop should report refresh failure")
+endfunction()
+
+function(qt_scenario_import_no_files)
+    qt_begin_test("import_no_files")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS import)
+    qt_assert_failure("${rc}" "import with no files should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Usage" "import with no files should print usage")
+endfunction()
+
+function(qt_scenario_header_strip_ws_empty_line)
+    qt_begin_test("header_strip_ws_empty_line")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # Header with empty lines and whitespace-only lines
+    qt_quilt_ok(
+        ARGS header -r --strip-trailing-whitespace
+        INPUT "Title line   \n\n   \nBody line\t\n"
+        MESSAGE "header -r --strip-trailing-whitespace with empty lines failed"
+    )
+    qt_quilt_ok(OUTPUT hdr_out ARGS header MESSAGE "header print failed")
+    qt_assert_contains("${hdr_out}" "Title line" "title should be present")
+    qt_assert_contains("${hdr_out}" "Body line" "body should be present")
+    qt_assert_not_contains("${hdr_out}" "   " "whitespace-only lines should be stripped")
+endfunction()
+
+function(qt_scenario_files_combine_dash_no_applied)
+    qt_begin_test("files_combine_dash_no_applied")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # --combine - with no patches applied should fail
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS files --combine -)
+    qt_assert_failure("${rc}" "files --combine - with no applied patches should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "No patch applied" "should report no patch applied")
+endfunction()
+
+function(qt_scenario_push_quilt_patch_opts_fuzz)
+    qt_begin_test("push_quilt_patch_opts_fuzz")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "line1\nline2\nline3\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "line1\nMODIFIED\nline3\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # QUILT_PATCH_OPTS=--fuzz=2 exercises the --fuzz= branch in cmd_push's options loop
+    qt_quilt_ok(
+        ENV "QUILT_PATCH_OPTS=--fuzz=2"
+        ARGS push
+        MESSAGE "push with QUILT_PATCH_OPTS=--fuzz=2 failed"
+    )
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "line1\nMODIFIED\nline3" "push should apply patch with fuzz")
 endfunction()
