@@ -184,6 +184,16 @@ set(QUILT_TEST_SCENARIOS
     push_already_applied
     import_bad_option
     rename_unknown_patch
+    fold_bad_option
+    fork_no_extension
+    diff_no_applied_patches
+    revert_bad_option
+    revert_no_files
+    revert_with_P
+    header_with_patch_arg
+    refresh_sort
+    files_bad_option
+    files_no_patch_applied
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -265,6 +275,7 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     builtin_patch_merge_diff3
     fold_reverse_no_newline
     diff_external_context_format
+    fold_empty_stdin
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -4420,6 +4431,142 @@ function(qt_scenario_pop_unapplied_target)
     qt_assert_contains("${combined}" "not applied" "pop to unapplied patch should report not applied")
 endfunction()
 
+function(qt_scenario_fold_bad_option)
+    qt_begin_test("fold_bad_option")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS fold --bad-option INPUT "--- a/f\n+++ b/f\n@@ -1 +1 @@\n-x\n+y\n")
+    qt_assert_failure("${rc}" "fold with bad option should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "--bad-option" "fold should mention the bad option")
+endfunction()
+
+function(qt_scenario_fork_no_extension)
+    qt_begin_test("fork_no_extension")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    # Create a patch with no file extension
+    qt_quilt_ok(ARGS new mypatch MESSAGE "new mypatch failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(OUTPUT fork_out ERROR fork_err ARGS fork MESSAGE "fork no-extension failed")
+    # Should create mypatch-2 (no extension case)
+    qt_assert_contains("${fork_out}${fork_err}" "mypatch-2" "fork should create mypatch-2")
+endfunction()
+
+function(qt_scenario_diff_no_applied_patches)
+    qt_begin_test("diff_no_applied_patches")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS diff)
+    qt_assert_failure("${rc}" "diff with no applied patches should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "No patches applied" "diff should explain no patches applied")
+endfunction()
+
+function(qt_scenario_revert_bad_option)
+    qt_begin_test("revert_bad_option")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS revert --bad-opt f.txt)
+    qt_assert_failure("${rc}" "revert with bad option should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "--bad-opt" "revert should mention the bad option")
+endfunction()
+
+function(qt_scenario_revert_no_files)
+    qt_begin_test("revert_no_files")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS revert)
+    qt_assert_failure("${rc}" "revert with no files should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Usage" "revert with no files should print usage")
+endfunction()
+
+function(qt_scenario_revert_with_P)
+    qt_begin_test("revert_with_P")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "original\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "modified\n")
+    # Revert using -P to specify patch explicitly
+    qt_quilt_ok(OUTPUT revert_out ERROR revert_err ARGS revert -P p.patch f.txt MESSAGE "revert -P failed")
+    qt_assert_contains("${revert_out}" "reverted" "revert -P should report success")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "original" "revert -P should restore original content")
+endfunction()
+
+function(qt_scenario_header_with_patch_arg)
+    qt_begin_test("header_with_patch_arg")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # Set a header on p.patch
+    qt_quilt_ok(ARGS header -r INPUT "Subject: My patch\n" MESSAGE "header -r failed")
+    # Read the header back by specifying the patch explicitly
+    qt_quilt_ok(OUTPUT hdr_out ERROR hdr_err ARGS header p.patch MESSAGE "header p.patch failed")
+    qt_assert_contains("${hdr_out}" "Subject: My patch" "header with patch arg should show the header")
+endfunction()
+
+function(qt_scenario_refresh_sort)
+    qt_begin_test("refresh_sort")
+    qt_write_file("${QT_WORK_DIR}/b.txt" "b\n")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add b.txt MESSAGE "add b failed")
+    qt_quilt_ok(ARGS add a.txt MESSAGE "add a failed")
+    qt_write_file("${QT_WORK_DIR}/b.txt" "B\n")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "A\n")
+    qt_quilt_ok(ARGS refresh --sort MESSAGE "refresh --sort failed")
+    # With --sort, the patch should have files in sorted order: a.txt before b.txt
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/p.patch" "a.txt" "patch should contain a.txt")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/p.patch" "b.txt" "patch should contain b.txt")
+endfunction()
+
+function(qt_scenario_files_bad_option)
+    qt_begin_test("files_bad_option")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS files --bad-opt)
+    qt_assert_failure("${rc}" "files with bad option should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "--bad-opt" "files should mention the bad option")
+endfunction()
+
+function(qt_scenario_files_no_patch_applied)
+    qt_begin_test("files_no_patch_applied")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # Nothing applied; files should fail
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS files)
+    qt_assert_failure("${rc}" "files with nothing applied should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "No patch applied" "files should explain no patch applied")
+endfunction()
+
+function(qt_scenario_fold_empty_stdin)
+    qt_begin_test("fold_empty_stdin")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    # fold with no stdin data should fail
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS fold INPUT "")
+    qt_assert_failure("${rc}" "fold with empty stdin should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "No patch data" "fold should explain no patch data on stdin")
+endfunction()
+
 function(qt_scenario_unapplied_unknown_target)
     qt_begin_test("unapplied_unknown_target")
     qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
@@ -5124,6 +5271,28 @@ function(qt_run_named_scenario scenario)
         qt_scenario_import_bad_option()
     elseif(scenario STREQUAL "rename_unknown_patch")
         qt_scenario_rename_unknown_patch()
+    elseif(scenario STREQUAL "fold_bad_option")
+        qt_scenario_fold_bad_option()
+    elseif(scenario STREQUAL "fork_no_extension")
+        qt_scenario_fork_no_extension()
+    elseif(scenario STREQUAL "diff_no_applied_patches")
+        qt_scenario_diff_no_applied_patches()
+    elseif(scenario STREQUAL "revert_bad_option")
+        qt_scenario_revert_bad_option()
+    elseif(scenario STREQUAL "revert_no_files")
+        qt_scenario_revert_no_files()
+    elseif(scenario STREQUAL "revert_with_P")
+        qt_scenario_revert_with_P()
+    elseif(scenario STREQUAL "header_with_patch_arg")
+        qt_scenario_header_with_patch_arg()
+    elseif(scenario STREQUAL "refresh_sort")
+        qt_scenario_refresh_sort()
+    elseif(scenario STREQUAL "files_bad_option")
+        qt_scenario_files_bad_option()
+    elseif(scenario STREQUAL "files_no_patch_applied")
+        qt_scenario_files_no_patch_applied()
+    elseif(scenario STREQUAL "fold_empty_stdin")
+        qt_scenario_fold_empty_stdin()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
