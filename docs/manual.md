@@ -296,25 +296,59 @@ quilt mail --send --to lkml@vger.kernel.org - -   # All patches
 
 ### Special operations
 
-#### `quilt setup [-d path-prefix] [-v] [--sourcedir dir] [--fuzz=N] [--spec-filter FILTER] [--slow|--fast] {specfile|seriesfile}`
+#### `quilt setup [-d path-prefix] [--sourcedir dir] [-v] {seriesfile}`
 
-Initializes a source tree from an RPM spec file or a quilt series file. This is primarily used in RPM-based packaging workflows (openSUSE, SUSE, Fedora).
+Initializes a source tree from a quilt series file. Reads the series file, extracts any archives referenced by `# Source:` metadata comments, creates `patches` and `series` symlinks, and initializes `.pc/` metadata. Does **not** apply patches — the user must run `quilt push -a` afterward.
 
-**With an RPM spec file**, quilt setup performs these steps: (1) Verifies `rpmbuild` is installed. (2) Invokes the `inspect` helper script which calls `rpmbuild -bp` (processing the `%prep` section). (3) In **fast mode** (default since quilt 0.67): `rpmbuild` generates the working tree directly in the target directory; patch application calls are intercepted and added to the series file instead of being applied. (4) In **slow mode** (`--slow`): Everything is done in a temporary directory first — wrapper scripts intercept `tar`, `unzip`, and `patch` calls to record actions, then quilt replays from scratch. (5) Creates the quilt directory structure (`patches/`, `.pc/`, series file). (6) Does **not** apply patches — the user must run `quilt push -a`.
+The series file may contain special metadata comments that control archive extraction:
+- `# Sourcedir: dir` — where to find source archives (overridden by `--sourcedir`)
+- `# Source: filename` — an archive (tar/zip/7z) to extract into the working tree
+- `# Patchdir: dir` — subdirectory prefix for patches that follow
 
-**Fast vs. slow mode performance**: For the Linux kernel-default package, fast mode reduced setup time from 1 min 48 sec to **25 seconds**. Trade-off: series file headers are less complete in fast mode, and patch failures aren't reported until `quilt push`.
+**Key flags**: `--sourcedir dir` specifies where package sources (tarballs, patches) are located (default `.`). The `patches` symlink will point to this directory. `-d path-prefix` creates the source tree under the given prefix directory. `-v` enables verbose output.
 
-**With a series file**: Simpler operation — reads the series file, creates the directory structure for quilt management, no RPM tooling needed.
+If the target directory already contains a `patches` entry, quilt falls back to using `quilt_patches` and `quilt_series` as alternative names.
 
-**Key flags**: `--sourcedir dir` specifies where package sources (tarballs, patches) are located (default `.`). `-d path-prefix` sets the output directory. `--spec-filter FILTER` preprocesses the spec file through a filter script (reads from stdin, writes to stdout). `--fuzz=N` sets the maximum fuzz factor for rpmbuild (requires rpm 4.6+).
+**Note**: RPM spec file support (`--fast`, `--slow`, `--fuzz`, `--spec-filter`) is not implemented. Only series files are supported.
 
-**Security warning**: The `%prep` section executes arbitrary commands in the calling user's context. Running `quilt setup` on untrusted spec files is dangerous.
+**Typical workflow**: The primary use case is RPM-style packaging where upstream source and patches are separate artifacts in a single directory:
+
+```
+package-sources/
+  widget-1.0.tar.gz          # upstream tarball
+  series                     # patch list with metadata
+  fix-crash.patch
+  add-feature.patch
+```
+
+The series file contains archive metadata alongside the patch list:
+
+```
+# Source: widget-1.0.tar.gz
+fix-crash.patch
+add-feature.patch
+```
+
+Running setup extracts the tarball, then creates symlinks so that `quilt push` can find the patches without copying them:
 
 ```bash
-quilt setup package.spec
-cd package-1.0/
+quilt setup --sourcedir package-sources package-sources/series
+cd widget-1.0
 quilt push -a
 ```
+
+This produces:
+
+```
+widget-1.0/                       # extracted from tarball
+  .pc/                            # quilt metadata
+  patches -> ../package-sources/  # symlink to source directory
+  series -> ../package-sources/series
+```
+
+Here `--sourcedir` says "where the files are" and `-d` says "where to put the result." The `-d` flag adds a path prefix when the tarball doesn't create its own subdirectory, or when you want to control the output layout.
+
+Without `# Source:` archive metadata, setup just creates the symlinks and `.pc/` — essentially `quilt init` but pointing `patches/` at an external directory via symlink. The archive extraction is where the real value of the command lives.
 
 #### `quilt snapshot [-d]`
 

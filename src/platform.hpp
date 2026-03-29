@@ -29,6 +29,7 @@ bool make_dir(std::string_view path);
 bool make_dirs(std::string_view path);
 bool file_exists(std::string_view path);
 bool is_directory(std::string_view path);
+bool create_symlink(std::string_view target, std::string_view link_path);
 int64_t file_mtime(std::string_view path);  // -1 on failure
 
 struct DirEntry {

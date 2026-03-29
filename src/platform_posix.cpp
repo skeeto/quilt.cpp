@@ -320,6 +320,13 @@ bool is_directory(std::string_view path)
     return S_ISDIR(st.st_mode);
 }
 
+bool create_symlink(std::string_view target, std::string_view link_path)
+{
+    std::string t = null_terminated(target);
+    std::string l = null_terminated(link_path);
+    return ::symlink(t.c_str(), l.c_str()) == 0;
+}
+
 int64_t file_mtime(std::string_view path)
 {
     std::string p = null_terminated(path);

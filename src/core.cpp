@@ -967,11 +967,18 @@ static Command commands[] = {
      "Search source files (not implemented)"},
 
     {"setup", cmd_setup,
-     "Usage: quilt setup [-d path] series\n"
+     "Usage: quilt setup [-d path-prefix] [--sourcedir dir] [-v] {seriesfile}\n"
      "\n"
-     "Initialize a source tree from a series file or RPM spec.\n"
-     "Not yet implemented.\n",
-     "Set up a source tree from a series file (not implemented)"},
+     "Initialize a source tree from a series file. Reads the series\n"
+     "file, extracts any archives listed as # Source: comments,\n"
+     "creates patches and series symlinks, and initializes .pc/\n"
+     "metadata. Does not apply patches; run quilt push -a afterward.\n"
+     "\n"
+     "Options:\n"
+     "  -d path-prefix    Create the source tree under path-prefix.\n"
+     "  --sourcedir dir   Directory containing sources (default: .).\n"
+     "  -v                Verbose output.\n",
+     "Set up a source tree from a series file"},
 
     {"shell", cmd_shell,
      "Usage: quilt shell [command]\n"
@@ -1130,7 +1137,8 @@ int quilt_main(int argc, char **argv) {
     // --- Phase 4: Load state ---
     std::string original_cwd = get_cwd();
     QuiltState q = load_state();
-    if (std::string_view(found->name) == "init" && get_cwd() != original_cwd) {
+    if ((std::string_view(found->name) == "init" ||
+         std::string_view(found->name) == "setup") && get_cwd() != original_cwd) {
         set_cwd(original_cwd);
     }
     q.config = rc_vars;

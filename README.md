@@ -74,12 +74,13 @@ shell. This applies to all `QUILT_*_ARGS` and `QUILT_*_OPTS` variables.
 
 ### Deliberately omitted features
 
-Quilt.cpp omits `setup` because it's an old, RPM-specific workflow that
-won't benefit from this rewrite. It omits `grep` because it's merely a
-wrapper around an external `grep`, which exists mainly because it's easy
-to do from a shell script. The `shell` command is to help work around the
-Quilt's untracked-file limitations, but it's blunt, and like grep it's a
-natural outgrowth of the original's shell-script nature.
+Quilt.cpp's `setup` supports series files only (no RPM spec files).
+The `--fast`, `--slow`, `--fuzz`, and `--spec-filter` options are rejected.
+It omits `grep` because it's merely a wrapper around an external `grep`,
+which exists mainly because it's easy to do from a shell script. The
+`shell` command is to help work around Quilt's untracked-file limitations,
+but it's blunt, and like grep it's a natural outgrowth of the original's
+shell-script nature.
 
 There is no built-in pager support. `LESS` and `QUILT_PAGER` do nothing.
 

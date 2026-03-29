@@ -440,6 +440,22 @@ bool is_directory(std::string_view path)
     return (attr & FILE_ATTRIBUTE_DIRECTORY) != 0;
 }
 
+bool create_symlink(std::string_view target, std::string_view link_path)
+{
+    std::wstring wtarget = utf8_to_wide(target);
+    std::wstring wlink = utf8_to_wide(link_path);
+    // Try symbolic link first (requires Developer Mode on Win10+)
+    DWORD flags = SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
+    // Check if target looks like a directory
+    DWORD attr = GetFileAttributesW(wtarget.c_str());
+    if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY))
+        flags |= SYMBOLIC_LINK_FLAG_DIRECTORY;
+    if (CreateSymbolicLinkW(wlink.c_str(), wtarget.c_str(), flags))
+        return true;
+    // Fallback: copy file contents (for regular files only)
+    return copy_file(target, link_path);
+}
+
 int64_t file_mtime(std::string_view path)
 {
     std::wstring wpath = utf8_to_wide(path);

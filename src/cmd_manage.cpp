@@ -1088,3 +1088,354 @@ int cmd_upgrade(QuiltState &, int argc, char **argv)
     }
     return 0;
 }
+
+// --- quilt setup ---
+
+// Compute relative symlink target: given a link at link_path, what relative
+// path reaches target?  Both paths should be absolute or both relative to the
+// same base.  Returns target unchanged if either is absolute.
+static std::string relative_symlink(std::string_view target,
+                                    std::string_view link_path)
+{
+    // If either path is absolute but not both, just return target as-is
+    bool t_abs = !target.empty() && target[0] == '/';
+    bool l_abs = !link_path.empty() && link_path[0] == '/';
+    if (t_abs != l_abs) return std::string(target);
+
+    // Split paths into components
+    auto split = [](std::string_view p) {
+        std::vector<std::string> parts;
+        while (!p.empty()) {
+            auto pos = str_find(p, '/');
+            if (pos < 0) {
+                if (p != ".") parts.emplace_back(p);
+                break;
+            }
+            auto seg = p.substr(0, checked_cast<size_t>(pos));
+            if (!seg.empty() && seg != ".") parts.emplace_back(seg);
+            p.remove_prefix(checked_cast<size_t>(pos + 1));
+        }
+        return parts;
+    };
+
+    auto target_parts = split(target);
+    // link_path's directory (drop the filename component)
+    auto link_dir_parts = split(dirname(link_path));
+
+    // Find common prefix length
+    ptrdiff_t common = 0;
+    ptrdiff_t max_common = std::min(std::ssize(target_parts),
+                                    std::ssize(link_dir_parts));
+    while (common < max_common && target_parts[checked_cast<size_t>(common)] ==
+                                  link_dir_parts[checked_cast<size_t>(common)])
+        ++common;
+
+    // Build relative path: go up from link_dir, then down to target
+    std::string result;
+    for (ptrdiff_t i = common; i < std::ssize(link_dir_parts); ++i) {
+        if (!result.empty()) result += '/';
+        result += "..";
+    }
+    for (ptrdiff_t i = common; i < std::ssize(target_parts); ++i) {
+        if (!result.empty()) result += '/';
+        result += target_parts[checked_cast<size_t>(i)];
+    }
+    return result.empty() ? "." : result;
+}
+
+// Parse a series file for setup metadata comments.
+struct SetupEntry {
+    enum Kind { ARCHIVE, PATCH };
+    Kind kind;
+    std::string dir;       // target directory (from # Patchdir:)
+    std::string arg;       // archive filename or patch line
+    std::string arg2;      // extra patch args (e.g. -p0)
+};
+
+static std::vector<SetupEntry> parse_setup_series(std::string_view content)
+{
+    std::vector<SetupEntry> entries;
+    std::string patch_dir = ".";
+
+    auto lines = split_lines(content);
+    for (auto &line : lines) {
+        auto trimmed = trim(line);
+        if (trimmed.empty()) continue;
+
+        // Check metadata comments
+        if (trimmed.starts_with("# Sourcedir: ")) {
+            // Handled externally; skip
+            continue;
+        }
+        if (trimmed.starts_with("# Source: ")) {
+            std::string source = trim(trimmed.substr(10));
+            SetupEntry e;
+            e.kind = SetupEntry::ARCHIVE;
+            e.dir = patch_dir;
+            e.arg = source;
+            entries.push_back(std::move(e));
+            continue;
+        }
+        if (trimmed.starts_with("# Patchdir: ")) {
+            patch_dir = trim(trimmed.substr(12));
+            continue;
+        }
+        if (trimmed[0] == '#') continue;  // other comments
+
+        // Patch line: "name.patch [-pN] [-R]"
+        auto parts = split_on_whitespace(trimmed);
+        if (parts.empty()) continue;
+        SetupEntry e;
+        e.kind = SetupEntry::PATCH;
+        e.dir = patch_dir;
+        e.arg = parts[0];
+        // Collect remaining args
+        for (ptrdiff_t i = 1; i < std::ssize(parts); ++i) {
+            if (!e.arg2.empty()) e.arg2 += ' ';
+            e.arg2 += parts[checked_cast<size_t>(i)];
+        }
+        entries.push_back(std::move(e));
+    }
+    return entries;
+}
+
+int cmd_setup(QuiltState &q, int argc, char **argv) {
+    std::string prefix;
+    std::string sourcedir;
+    bool verbose = false;
+    std::string series_file;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string_view arg = argv[i];
+        if (arg == "-d" && i + 1 < argc) {
+            prefix = strip_trailing_slash(argv[++i]) + "/";
+        } else if (arg == "--sourcedir" && i + 1 < argc) {
+            sourcedir = strip_trailing_slash(argv[++i]) + "/";
+        } else if (arg == "-v") {
+            verbose = true;
+        } else if (arg == "--fast" || arg == "--slow") {
+            err("Option not supported for series files: ");
+            err_line(arg);
+            return 1;
+        } else if (arg.starts_with("--fuzz")) {
+            err_line("Option not supported for series files: --fuzz");
+            return 1;
+        } else if (arg == "--spec-filter") {
+            err_line("Option not supported: --spec-filter");
+            if (i + 1 < argc) ++i;  // consume argument
+            return 1;
+        } else if (arg[0] == '-') {
+            err("Unrecognized option: "); err_line(arg);
+            return 1;
+        } else {
+            if (!series_file.empty()) {
+                err_line("Usage: quilt setup [-d path-prefix] [--sourcedir dir] [-v] {seriesfile}");
+                return 1;
+            }
+            series_file = arg;
+        }
+    }
+
+    if (series_file.empty()) {
+        err_line("Usage: quilt setup [-d path-prefix] [--sourcedir dir] [-v] {seriesfile}");
+        return 1;
+    }
+
+    // Reject spec files
+    if (series_file.ends_with(".spec")) {
+        err_line("RPM spec files are not supported. Use a series file.");
+        return 1;
+    }
+
+    // Read the series file
+    std::string cwd = get_cwd();
+    std::string series_abs = series_file;
+    if (series_abs[0] != '/') {
+        series_abs = path_join(cwd, series_abs);
+    }
+
+    if (!file_exists(series_abs)) {
+        err("File not found: "); err_line(series_file);
+        return 1;
+    }
+
+    std::string content = read_file(series_abs);
+    auto entries = parse_setup_series(content);
+
+    // Determine effective sourcedir
+    if (sourcedir.empty()) {
+        // Check for # Sourcedir: in the series file
+        for (auto &line : split_lines(content)) {
+            auto trimmed = trim(line);
+            if (trimmed.starts_with("# Sourcedir: ")) {
+                sourcedir = strip_trailing_slash(trim(trimmed.substr(13))) + "/";
+                break;
+            }
+        }
+    }
+    if (sourcedir.empty()) sourcedir = "./";
+
+    // Normalize sourcedir: remove trailing /
+    std::string sourcedir_clean = strip_trailing_slash(sourcedir);
+
+    // Check for existing directories that would be created by archives
+    for (auto &e : entries) {
+        if (e.kind != SetupEntry::ARCHIVE) continue;
+        if (e.dir == ".") continue;
+        std::string target = prefix + e.dir;
+        if (file_exists(target)) {
+            err("Directory "); err(target); err_line(" exists");
+            return 1;
+        }
+    }
+
+    // Extract archives
+    for (auto &e : entries) {
+        if (e.kind != SetupEntry::ARCHIVE) continue;
+        std::string archive = sourcedir_clean + "/" + e.arg;
+        if (!file_exists(archive)) {
+            err("File "); err(archive); err_line(" not found");
+            return 1;
+        }
+        std::string target_dir = prefix.empty() ? "." : strip_trailing_slash(prefix);
+        if (e.dir != ".") {
+            target_dir = prefix + e.dir;
+        }
+        if (!make_dirs(target_dir)) {
+            err("Failed to create directory: "); err_line(target_dir);
+            return 1;
+        }
+
+        out("Unpacking archive "); out_line(archive);
+
+        // Determine archive type and extract
+        std::vector<std::string> cmd;
+        if (e.arg.ends_with(".tar.gz") || e.arg.ends_with(".tgz")) {
+            cmd = {"tar", "xzf", archive, "-C", target_dir};
+        } else if (e.arg.ends_with(".tar.bz2") || e.arg.ends_with(".tbz2")) {
+            cmd = {"tar", "xjf", archive, "-C", target_dir};
+        } else if (e.arg.ends_with(".tar.xz") || e.arg.ends_with(".txz")) {
+            cmd = {"tar", "xJf", archive, "-C", target_dir};
+        } else if (e.arg.ends_with(".tar.zst")) {
+            cmd = {"tar", "x", "--zstd", "-f", archive, "-C", target_dir};
+        } else if (e.arg.ends_with(".tar")) {
+            cmd = {"tar", "xf", archive, "-C", target_dir};
+        } else if (e.arg.ends_with(".zip")) {
+            cmd = {"unzip", "-qqo", archive, "-d", target_dir};
+        } else if (e.arg.ends_with(".7z")) {
+            cmd = {"7z", "x", "-bd", archive, "-o" + target_dir};
+        } else {
+            // Default: try tar
+            cmd = {"tar", "xf", archive, "-C", target_dir};
+        }
+
+        auto result = run_cmd(cmd);
+        if (result.exit_code != 0) {
+            err("Failed to unpack "); err(archive);
+            if (!result.err.empty()) { err(": "); err(result.err); }
+            err_line("");
+            return 1;
+        }
+    }
+
+    // Collect distinct patch directories
+    std::vector<std::string> patch_dirs;
+    for (auto &e : entries) {
+        if (e.kind != SetupEntry::PATCH) continue;
+        bool found = false;
+        for (auto &d : patch_dirs) {
+            if (d == e.dir) { found = true; break; }
+        }
+        if (!found) patch_dirs.push_back(e.dir);
+    }
+    // If no patches were listed, use "." as the default directory
+    if (patch_dirs.empty()) patch_dirs.push_back(".");
+
+    // For each patch directory, create symlinks and .pc/
+    std::string patches_name = "patches";
+    std::string series_name = "series";
+
+    for (auto &dir : patch_dirs) {
+        std::string target_base = prefix + dir;
+        if (target_base == "./" || target_base == ".") target_base = "";
+
+        // Ensure target directory exists
+        if (!target_base.empty() && !is_directory(target_base)) {
+            if (!make_dirs(target_base)) {
+                err("Failed to create directory: "); err_line(target_base);
+                return 1;
+            }
+        }
+
+        // Determine patches link name (fall back to quilt_patches if exists)
+        std::string patches_link = target_base.empty()
+            ? patches_name
+            : target_base + "/" + patches_name;
+        if (file_exists(patches_link)) {
+            if (verbose) {
+                err("Directory "); err(patches_link); err_line(" exists");
+            }
+            patches_name = "quilt_patches";
+            series_name = "quilt_series";
+            patches_link = target_base.empty()
+                ? patches_name
+                : target_base + "/" + patches_name;
+            if (file_exists(patches_link)) {
+                err("Directory "); err(patches_link); err_line(" exists");
+                return 1;
+            }
+        }
+
+        // Check for series file conflict
+        std::string series_link = target_base.empty()
+            ? series_name
+            : target_base + "/" + series_name;
+        if (file_exists(series_link)) {
+            if (verbose) {
+                err("File "); err(series_link); err_line(" exists");
+            }
+            if (patches_name != "quilt_patches") {
+                patches_name = "quilt_patches";
+                series_name = "quilt_series";
+                err_line("Trying alternative patches and series names...");
+                patches_link = target_base.empty()
+                    ? patches_name
+                    : target_base + "/" + patches_name;
+                series_link = target_base.empty()
+                    ? series_name
+                    : target_base + "/" + series_name;
+                if (file_exists(patches_link) || file_exists(series_link)) {
+                    err_line("Cannot create patches or series links");
+                    return 1;
+                }
+            }
+        }
+
+        // Create patches symlink → sourcedir
+        std::string symlink_target = relative_symlink(sourcedir_clean,
+                                                      patches_link);
+        if (!create_symlink(symlink_target, patches_link)) {
+            err("Failed to create symlink: "); err_line(patches_link);
+            return 1;
+        }
+
+        // Create series symlink → original series file
+        if (!create_symlink(relative_symlink(series_file, series_link),
+                            series_link)) {
+            err("Failed to create symlink: "); err_line(series_link);
+            return 1;
+        }
+
+        // Initialize .pc/ metadata
+        q.work_dir = target_base.empty() ? cwd : path_join(cwd, target_base);
+        q.pc_dir = ".pc";
+        q.patches_dir = patches_name;
+        q.series_file = path_join(patches_name, series_name);
+
+        if (!ensure_pc_dir(q)) {
+            return 1;
+        }
+    }
+
+    return 0;
+}

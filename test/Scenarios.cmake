@@ -205,6 +205,11 @@ set(QUILT_TEST_SCENARIOS
     delete_no_patch
     delete_topmost
     upgrade_bad_option
+    setup_no_args
+    setup_basic
+    setup_with_sourcedir
+    setup_existing_patches_fallback
+    setup_then_push
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -326,7 +331,10 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     fold_force_env
     header_backup_append
     stub_grep
-    stub_setup
+    setup_unsupported_options
+    setup_spec_rejected
+    setup_with_prefix
+    setup_nonexistent_file
     stub_shell
     graph_lines_with_num
     graph_lines_nan
@@ -1676,11 +1684,151 @@ function(qt_scenario_stub_grep)
     qt_assert_contains("${err}" "not implemented" "grep should say not implemented")
 endfunction()
 
-function(qt_scenario_stub_setup)
-    qt_begin_test("stub_setup")
+function(qt_scenario_setup_no_args)
+    qt_begin_test("setup_no_args")
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS setup)
-    qt_assert_failure("${rc}" "quilt setup should fail (not implemented)")
-    qt_assert_contains("${err}" "not implemented" "setup should say not implemented")
+    qt_assert_failure("${rc}" "quilt setup with no args should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Usage:" "setup should show usage")
+endfunction()
+
+function(qt_scenario_setup_unsupported_options)
+    qt_begin_test("setup_unsupported_options")
+    get_property(work_dir GLOBAL PROPERTY QT_WORK_DIR)
+    qt_write_file("${work_dir}/series" "patch.diff\n")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS setup --fast series)
+    qt_assert_failure("${rc}" "setup --fast should fail")
+    qt_assert_contains("${err}" "not supported" "setup --fast should say not supported")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS setup --slow series)
+    qt_assert_failure("${rc}" "setup --slow should fail")
+    qt_assert_contains("${err}" "not supported" "setup --slow should say not supported")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS setup --fuzz=2 series)
+    qt_assert_failure("${rc}" "setup --fuzz should fail")
+    qt_assert_contains("${err}" "not supported" "setup --fuzz should say not supported")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS setup --spec-filter foo series)
+    qt_assert_failure("${rc}" "setup --spec-filter should fail")
+    qt_assert_contains("${err}" "not supported" "setup --spec-filter should say not supported")
+endfunction()
+
+function(qt_scenario_setup_spec_rejected)
+    qt_begin_test("setup_spec_rejected")
+    get_property(work_dir GLOBAL PROPERTY QT_WORK_DIR)
+    qt_write_file("${work_dir}/package.spec" "Name: test\n")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS setup package.spec)
+    qt_assert_failure("${rc}" "setup with .spec should fail")
+    qt_assert_contains("${err}" "spec" "setup should mention spec files")
+endfunction()
+
+function(qt_scenario_setup_basic)
+    qt_begin_test("setup_basic")
+    get_property(work_dir GLOBAL PROPERTY QT_WORK_DIR)
+
+    # Create a patches directory with series and patch files
+    file(MAKE_DIRECTORY "${work_dir}/mypatches")
+    qt_write_file("${work_dir}/mypatches/series" "fix.patch\n")
+    qt_write_file("${work_dir}/mypatches/fix.patch"
+        "--- a/hello.txt\n+++ b/hello.txt\n@@ -1 +1 @@\n-hello\n+hello world\n")
+
+    qt_quilt_ok(ARGS setup mypatches/series MESSAGE "setup should succeed")
+
+    # Check .pc/ was created
+    qt_assert_dir_exists("${work_dir}/.pc" ".pc should exist after setup")
+    qt_assert_exists("${work_dir}/.pc/.version" ".pc/.version should exist")
+    qt_read_file_strip(version "${work_dir}/.pc/.version")
+    qt_assert_equal("${version}" "2" ".pc/.version should be 2")
+
+    # Check patches symlink exists and is functional
+    qt_assert_exists("${work_dir}/patches" "patches link should exist")
+    # The series file should be accessible through the symlink
+    qt_assert_exists("${work_dir}/series" "series link should exist")
+endfunction()
+
+function(qt_scenario_setup_with_prefix)
+    qt_begin_test("setup_with_prefix")
+    get_property(work_dir GLOBAL PROPERTY QT_WORK_DIR)
+
+    file(MAKE_DIRECTORY "${work_dir}/mypatches")
+    qt_write_file("${work_dir}/mypatches/series" "fix.patch\n")
+    qt_write_file("${work_dir}/mypatches/fix.patch"
+        "--- a/hello.txt\n+++ b/hello.txt\n@@ -1 +1 @@\n-hello\n+hello world\n")
+
+    qt_quilt_ok(ARGS setup -d subdir mypatches/series MESSAGE "setup -d should succeed")
+
+    # Check that subdir was created with .pc/
+    qt_assert_dir_exists("${work_dir}/subdir" "subdir should exist")
+    qt_assert_dir_exists("${work_dir}/subdir/.pc" "subdir/.pc should exist")
+    qt_assert_exists("${work_dir}/subdir/patches" "subdir/patches link should exist")
+    qt_assert_exists("${work_dir}/subdir/series" "subdir/series link should exist")
+endfunction()
+
+function(qt_scenario_setup_with_sourcedir)
+    qt_begin_test("setup_with_sourcedir")
+    get_property(work_dir GLOBAL PROPERTY QT_WORK_DIR)
+
+    file(MAKE_DIRECTORY "${work_dir}/srcdir")
+    qt_write_file("${work_dir}/srcdir/series" "fix.patch\n")
+    qt_write_file("${work_dir}/srcdir/fix.patch"
+        "--- a/hello.txt\n+++ b/hello.txt\n@@ -1 +1 @@\n-hello\n+hello world\n")
+
+    qt_quilt_ok(ARGS setup --sourcedir srcdir srcdir/series
+        MESSAGE "setup --sourcedir should succeed")
+
+    qt_assert_exists("${work_dir}/patches" "patches link should exist")
+    qt_assert_exists("${work_dir}/.pc" ".pc should exist")
+endfunction()
+
+function(qt_scenario_setup_existing_patches_fallback)
+    qt_begin_test("setup_existing_patches_fallback")
+    get_property(work_dir GLOBAL PROPERTY QT_WORK_DIR)
+
+    # Pre-create a patches directory so setup has to use fallback names
+    file(MAKE_DIRECTORY "${work_dir}/patches")
+    file(MAKE_DIRECTORY "${work_dir}/mypatches")
+    qt_write_file("${work_dir}/mypatches/series" "fix.patch\n")
+    qt_write_file("${work_dir}/mypatches/fix.patch"
+        "--- a/hello.txt\n+++ b/hello.txt\n@@ -1 +1 @@\n-hello\n+hello world\n")
+
+    qt_quilt_ok(ARGS setup mypatches/series MESSAGE "setup with existing patches should succeed")
+
+    # Should have used quilt_patches as fallback
+    qt_assert_exists("${work_dir}/quilt_patches" "quilt_patches link should exist")
+    qt_assert_exists("${work_dir}/quilt_series" "quilt_series link should exist")
+endfunction()
+
+function(qt_scenario_setup_then_push)
+    qt_begin_test("setup_then_push")
+    get_property(work_dir GLOBAL PROPERTY QT_WORK_DIR)
+
+    # Create patches directory with a real patch
+    file(MAKE_DIRECTORY "${work_dir}/mypatches")
+    qt_write_file("${work_dir}/mypatches/series" "fix.patch\n")
+    qt_write_file("${work_dir}/mypatches/fix.patch"
+        "--- /dev/null\n+++ b/hello.txt\n@@ -0,0 +1 @@\n+hello world\n")
+
+    # Setup creates symlinks and .pc/ in cwd
+    # --sourcedir points patches symlink at mypatches/ so patches are found
+    qt_quilt_ok(ARGS setup --sourcedir mypatches mypatches/series
+        MESSAGE "setup should succeed")
+
+    # Now push the patch
+    qt_quilt_ok(ARGS push -a MESSAGE "push -a after setup should succeed")
+
+    # Verify the file was created
+    qt_assert_exists("${work_dir}/hello.txt" "hello.txt should exist after push")
+    qt_read_file_strip(content "${work_dir}/hello.txt")
+    qt_assert_equal("${content}" "hello world" "hello.txt should have correct content")
+endfunction()
+
+function(qt_scenario_setup_nonexistent_file)
+    qt_begin_test("setup_nonexistent_file")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS setup nonexistent_series)
+    qt_assert_failure("${rc}" "setup with nonexistent file should fail")
+    qt_assert_contains("${err}" "not found" "setup should say file not found")
 endfunction()
 
 function(qt_scenario_stub_shell)
@@ -6405,8 +6553,24 @@ function(qt_run_named_scenario scenario)
         qt_scenario_annotate_subdirectory()
     elseif(scenario STREQUAL "stub_grep")
         qt_scenario_stub_grep()
-    elseif(scenario STREQUAL "stub_setup")
-        qt_scenario_stub_setup()
+    elseif(scenario STREQUAL "setup_no_args")
+        qt_scenario_setup_no_args()
+    elseif(scenario STREQUAL "setup_unsupported_options")
+        qt_scenario_setup_unsupported_options()
+    elseif(scenario STREQUAL "setup_spec_rejected")
+        qt_scenario_setup_spec_rejected()
+    elseif(scenario STREQUAL "setup_basic")
+        qt_scenario_setup_basic()
+    elseif(scenario STREQUAL "setup_with_prefix")
+        qt_scenario_setup_with_prefix()
+    elseif(scenario STREQUAL "setup_with_sourcedir")
+        qt_scenario_setup_with_sourcedir()
+    elseif(scenario STREQUAL "setup_existing_patches_fallback")
+        qt_scenario_setup_existing_patches_fallback()
+    elseif(scenario STREQUAL "setup_then_push")
+        qt_scenario_setup_then_push()
+    elseif(scenario STREQUAL "setup_nonexistent_file")
+        qt_scenario_setup_nonexistent_file()
     elseif(scenario STREQUAL "stub_shell")
         qt_scenario_stub_shell()
     elseif(scenario STREQUAL "annotate_bad_option")
@@ -6543,8 +6707,24 @@ function(qt_run_named_scenario scenario)
         qt_scenario_graph_unapplied_patch()
     elseif(scenario STREQUAL "stub_grep")
         qt_scenario_stub_grep()
-    elseif(scenario STREQUAL "stub_setup")
-        qt_scenario_stub_setup()
+    elseif(scenario STREQUAL "setup_no_args")
+        qt_scenario_setup_no_args()
+    elseif(scenario STREQUAL "setup_unsupported_options")
+        qt_scenario_setup_unsupported_options()
+    elseif(scenario STREQUAL "setup_spec_rejected")
+        qt_scenario_setup_spec_rejected()
+    elseif(scenario STREQUAL "setup_basic")
+        qt_scenario_setup_basic()
+    elseif(scenario STREQUAL "setup_with_prefix")
+        qt_scenario_setup_with_prefix()
+    elseif(scenario STREQUAL "setup_with_sourcedir")
+        qt_scenario_setup_with_sourcedir()
+    elseif(scenario STREQUAL "setup_existing_patches_fallback")
+        qt_scenario_setup_existing_patches_fallback()
+    elseif(scenario STREQUAL "setup_then_push")
+        qt_scenario_setup_then_push()
+    elseif(scenario STREQUAL "setup_nonexistent_file")
+        qt_scenario_setup_nonexistent_file()
     elseif(scenario STREQUAL "stub_shell")
         qt_scenario_stub_shell()
     elseif(scenario STREQUAL "annotate_bad_option")

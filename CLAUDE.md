@@ -87,12 +87,12 @@ All internal strings are UTF-8. Indices and counts use `ptrdiff_t` (signed) with
 - `core.cpp` — `QuiltState` methods, string/path utilities, series/applied-patches file I/O, backup/restore file helpers, `quilt_main()` entry point with command dispatch table.
 - `cmd_stack.cpp` — stack navigation and push/pop: series, applied, unapplied, top, next, previous, push, pop.
 - `cmd_patch.cpp` — patch content commands: new, add, remove, edit, refresh, diff, revert, snapshot, init.
-- `cmd_manage.cpp` — patch management: delete, rename, import, header, files, patches, fold, fork, upgrade.
+- `cmd_manage.cpp` — patch management: delete, rename, import, header, files, patches, fold, fork, upgrade, setup.
 - `cmd_mail.cpp` — mbox generation for emailing patches (`quilt mail`).
 - `cmd_annotate.cpp` — annotated file listing showing which patches modify which lines.
 - `cmd_graph.cpp` — dependency graph generation in dot(1) format.
 - `patch.cpp` — built-in patch engine for applying unified diffs (fuzz, reverse, merge conflicts, reject files).
-- `cmd_stubs.cpp` — unimplemented commands that return "not yet implemented": grep, setup, shell.
+- `cmd_stubs.cpp` — unimplemented commands that return "not yet implemented": grep, shell.
 - `platform_posix.cpp` — POSIX implementation (fork/exec, POSIX file I/O). Contains `main()`.
 - `platform_win32.cpp` — Win32 implementation (`CreateProcess`, wide-char APIs, UTF-16 conversion). Contains `main()`.
 

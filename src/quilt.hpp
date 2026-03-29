@@ -209,6 +209,7 @@ int cmd_init(QuiltState &q, int argc, char **argv);
 
 // Command implementations — cmd_manage.cpp (continued)
 int cmd_upgrade(QuiltState &q, int argc, char **argv);
+int cmd_setup(QuiltState &q, int argc, char **argv);
 
 // Command implementations — cmd_annotate.cpp
 int cmd_annotate(QuiltState &q, int argc, char **argv);
@@ -218,5 +219,4 @@ int cmd_graph(QuiltState &q, int argc, char **argv);
 
 // Command stubs — cmd_stubs.cpp
 int cmd_grep(QuiltState &q, int argc, char **argv);
-int cmd_setup(QuiltState &q, int argc, char **argv);
 int cmd_shell(QuiltState &q, int argc, char **argv);
