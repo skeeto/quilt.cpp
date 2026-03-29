@@ -7570,22 +7570,25 @@ function(qt_scenario_push_new_file_subdir)
     qt_assert_file_text("${QT_WORK_DIR}/newdir/newfile.txt" "brand new" "content should match")
 endfunction()
 
-# builtin_patch_empty_file_content: apply patch to an existing 0-byte file
+# builtin_patch_empty_file_content: apply a non-creation patch to an existing 0-byte file
 # covers patch.cpp lines 251-252 (load_file_lines returns early for empty content)
+# Note: quilt refresh on empty→content generates a /dev/null creation patch, so we
+# craft the patch manually with --- a/f.txt (not /dev/null) targeting a 0-byte file.
 function(qt_scenario_builtin_patch_empty_file_content)
     qt_begin_test("builtin_patch_empty_file_content")
-    # Create a 0-byte file
-    qt_write_file("${QT_WORK_DIR}/empty.txt" "")
+    # Set up an empty patch in the series
     qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
-    qt_quilt_ok(ARGS add empty.txt MESSAGE "add failed")
-    # Add content to trigger a diff from empty to non-empty
-    qt_write_file("${QT_WORK_DIR}/empty.txt" "new content\n")
-    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
     qt_quilt_ok(ARGS pop MESSAGE "pop failed")
-    # After pop, empty.txt is restored to 0 bytes
-    # Push: load_file_lines reads the empty file → hits content.empty() branch (lines 251-252)
+    # Create f.txt as a 0-byte file (exists but empty)
+    qt_write_file("${QT_WORK_DIR}/f.txt" "")
+    # Write a modification patch targeting the 0-byte file (not a creation patch).
+    # @@ -0,0 +1 @@ with only + lines → empty old pattern → matches at position 0 in empty file
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -0,0 +1 @@\n+new content\n")
+    # Push: file_existed=true (0-byte file), load_file_lines reads empty → lines 251-252
+    # empty pattern from all-+ hunk matches position 0 → patch applied
     qt_quilt_ok(ARGS push MESSAGE "push to empty file should succeed")
-    qt_assert_file_text("${QT_WORK_DIR}/empty.txt" "new content" "push should add content to empty file")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "new content" "push should add content to empty file")
 endfunction()
 
 # builtin_patch_stray_minus: patch file with a "--- " line not followed by "+++ "
