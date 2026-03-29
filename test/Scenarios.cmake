@@ -375,6 +375,13 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     quiltrc_export_prefix
     quiltrc_invalid_key
     quiltrc_dquote_backslash
+    fold_quiet
+    fold_strip
+    fold_fail
+    push_count_clamp
+    push_missing_patch
+    push_quilt_patch_opts
+    pop_auto_refresh_fail
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -6965,7 +6972,140 @@ function(qt_run_named_scenario scenario)
         qt_scenario_quiltrc_invalid_key()
     elseif(scenario STREQUAL "quiltrc_dquote_backslash")
         qt_scenario_quiltrc_dquote_backslash()
+    elseif(scenario STREQUAL "fold_quiet")
+        qt_scenario_fold_quiet()
+    elseif(scenario STREQUAL "fold_strip")
+        qt_scenario_fold_strip()
+    elseif(scenario STREQUAL "fold_fail")
+        qt_scenario_fold_fail()
+    elseif(scenario STREQUAL "push_count_clamp")
+        qt_scenario_push_count_clamp()
+    elseif(scenario STREQUAL "push_missing_patch")
+        qt_scenario_push_missing_patch()
+    elseif(scenario STREQUAL "push_quilt_patch_opts")
+        qt_scenario_push_quilt_patch_opts()
+    elseif(scenario STREQUAL "pop_auto_refresh_fail")
+        qt_scenario_pop_auto_refresh_fail()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
+endfunction()
+
+function(qt_scenario_fold_quiet)
+    qt_begin_test("fold_quiet")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
+    qt_quilt_ok(ARGS new target.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_quilt_ok(
+        ARGS fold -q
+        INPUT [=[--- a/f.txt
++++ b/f.txt
+@@ -1 +1 @@
+-base
++quiet
+]=]
+        OUTPUT fold_out ERROR fold_err
+        MESSAGE "fold -q failed"
+    )
+    qt_assert_equal("${fold_out}" "" "fold -q should produce no stdout")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "quiet" "fold -q did not apply patch")
+endfunction()
+
+function(qt_scenario_fold_strip)
+    qt_begin_test("fold_strip")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
+    qt_quilt_ok(ARGS new target.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    # -p 0: no path components stripped; patch uses bare filename
+    qt_quilt_ok(
+        ARGS fold -p 0
+        INPUT "--- f.txt\told\n+++ f.txt\tnew\n@@ -1 +1 @@\n-base\n+stripped\n"
+        MESSAGE "fold -p 0 failed"
+    )
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "stripped" "fold -p 0 did not apply patch")
+endfunction()
+
+function(qt_scenario_fold_fail)
+    qt_begin_test("fold_fail")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
+    qt_quilt_ok(ARGS new target.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    # Patch with wrong context: will fail to apply
+    qt_quilt(
+        RESULT rc OUTPUT out ERROR err
+        ARGS fold
+        INPUT [=[--- a/f.txt
++++ b/f.txt
+@@ -1 +1 @@
+-wrong_context_line
++new_content
+]=]
+    )
+    qt_assert_failure("${rc}" "fold with non-matching patch should fail")
+endfunction()
+
+function(qt_scenario_push_count_clamp)
+    qt_begin_test("push_count_clamp")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "v0\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p1 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "v1\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p2 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "v2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2 failed")
+    qt_quilt_ok(ARGS pop -a MESSAGE "pop all failed")
+    # Push 99 patches, but only 2 exist: should clamp and push all
+    qt_quilt_ok(ARGS push 99 OUTPUT push_out MESSAGE "push 99 failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "v2" "push 99 should apply all patches")
+endfunction()
+
+function(qt_scenario_push_missing_patch)
+    qt_begin_test("push_missing_patch")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "modified\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # Remove the patch file so push will fail
+    file(REMOVE "${QT_WORK_DIR}/patches/p.patch")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_failure("${rc}" "push with missing patch file should fail")
+    qt_assert_contains("${err}" "does not exist" "push should report missing patch")
+endfunction()
+
+function(qt_scenario_push_quilt_patch_opts)
+    qt_begin_test("push_quilt_patch_opts")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "modified\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # QUILT_PATCH_OPTS=-s exercises the options loop in cmd_push
+    qt_quilt_ok(
+        ENV "QUILT_PATCH_OPTS=-s"
+        ARGS push
+        MESSAGE "push with QUILT_PATCH_OPTS=-s failed"
+    )
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "modified" "push with QUILT_PATCH_OPTS=-s should apply patch")
+endfunction()
+
+function(qt_scenario_pop_auto_refresh_fail)
+    qt_begin_test("pop_auto_refresh_fail")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new t.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # Modify file so there is something to refresh
+    qt_write_file("${QT_WORK_DIR}/f.txt" "z\n")
+    # Write quiltrc with an invalid QUILT_REFRESH_ARGS so cmd_refresh returns 1
+    qt_write_file("${QT_TEST_BASE}/badrc" "QUILT_REFRESH_ARGS=\"--invalid-opt\"\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err
+        ARGS --quiltrc "${QT_TEST_BASE}/badrc" pop --refresh)
+    qt_assert_failure("${rc}" "pop --refresh with invalid QUILT_REFRESH_ARGS should fail")
+    qt_assert_contains("${err}" "Refresh of patch" "pop should report refresh failure")
 endfunction()
