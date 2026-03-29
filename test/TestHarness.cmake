@@ -174,7 +174,7 @@ function(qt_quilt)
     set(options)
     set(one_value_args RESULT OUTPUT ERROR WORKING_DIRECTORY INPUT)
     set(multi_value_args ARGS ENV)
-    cmake_parse_arguments(QT "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
+    cmake_parse_arguments(PARSE_ARGV 0 QT "${options}" "${one_value_args}" "${multi_value_args}")
 
     if(NOT DEFINED QT_RESULT OR QT_RESULT STREQUAL "")
         qt_fail("qt_quilt requires RESULT")
