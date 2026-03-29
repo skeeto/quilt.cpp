@@ -433,6 +433,8 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     refresh_creates_patches_dir
     top_index_applied_not_in_series
     push_crlf_patch
+    refresh_diffstat_bare_header
+    refresh_diffstat_bare_false_positive
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -7149,6 +7151,10 @@ function(qt_run_named_scenario scenario)
         qt_scenario_top_index_applied_not_in_series()
     elseif(scenario STREQUAL "push_crlf_patch")
         qt_scenario_push_crlf_patch()
+    elseif(scenario STREQUAL "refresh_diffstat_bare_header")
+        qt_scenario_refresh_diffstat_bare_header()
+    elseif(scenario STREQUAL "refresh_diffstat_bare_false_positive")
+        qt_scenario_refresh_diffstat_bare_false_positive()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -8324,5 +8330,67 @@ function(qt_scenario_top_index_applied_not_in_series)
     qt_quilt_ok(ARGS new fresh.patch MESSAGE "new should succeed even with inconsistent state")
     qt_read_file_raw(series_content "${QT_WORK_DIR}/patches/series")
     qt_assert_contains("${series_content}" "fresh.patch" "new patch should be in series")
+endfunction()
+
+# refresh_diffstat_bare_header: cmd_patch.cpp remove_diffstat_section lines 926,928-936,939,942,944,946-948
+# remove_diffstat_section handles a bare diffstat block in the header (no "---" separator).
+# read_patch_header stops at "---" lines, so a "---"-prefixed diffstat never appears in header.
+# A bare diffstat (lines starting with ' ' containing '|', followed by "N files changed")
+# CAN appear in the header if the patch was manually written or imported with such content.
+# This test prepends a bare diffstat to an existing patch file, then calls refresh --diffstat
+# to trigger remove_diffstat_section's bare-diffstat detection and removal logic.
+function(qt_scenario_refresh_diffstat_bare_header)
+    qt_begin_test("refresh_diffstat_bare_header")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "old\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "new\n")
+    qt_quilt_ok(ENV "QUILT_NO_DIFF_TIMESTAMPS=1" ARGS refresh MESSAGE "initial refresh failed")
+    # Prepend a bare diffstat header (no "---" separator) to the patch file.
+    # remove_diffstat_section detects the " f.txt | 2 +-" pattern (line 926),
+    # looks ahead and finds the summary "1 file changed" (lines 928-936),
+    # then skips the entire block including the trailing blank line (lines 942,944,946-948).
+    file(READ "${QT_WORK_DIR}/patches/p.patch" existing_patch)
+    file(WRITE "${QT_WORK_DIR}/patches/p.patch"
+        "Description\n\n f.txt | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n\n${existing_patch}")
+    qt_quilt_ok(ENV "QUILT_NO_DIFF_TIMESTAMPS=1" ARGS refresh --diffstat
+        MESSAGE "refresh --diffstat with bare diffstat header failed")
+    file(READ "${QT_WORK_DIR}/patches/p.patch" result_patch)
+    # The old bare diffstat should be stripped and replaced with one new diffstat
+    string(REGEX MATCHALL "file changed" count_matches "${result_patch}")
+    list(LENGTH count_matches num_changed)
+    qt_assert_equal("${num_changed}" "1" "should have exactly one diffstat summary")
+    # The description should be preserved
+    qt_assert_contains("${result_patch}" "Description" "description should be preserved")
+endfunction()
+
+# refresh_diffstat_bare_false_positive: cmd_patch.cpp remove_diffstat_section lines 939-940
+# When the header has a diffstat-like block (lines starting with ' ' containing '|')
+# NOT followed by a valid summary line (interrupted by an empty line instead),
+# remove_diffstat_section's look-ahead breaks at the empty line (line 939-940 break taken),
+# found_summary stays false, and the block is preserved (not removed).
+function(qt_scenario_refresh_diffstat_bare_false_positive)
+    qt_begin_test("refresh_diffstat_bare_false_positive")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "old\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "new\n")
+    qt_quilt_ok(ENV "QUILT_NO_DIFF_TIMESTAMPS=1" ARGS refresh MESSAGE "initial refresh failed")
+    # Prepend a "false positive" diffstat: two diffstat-looking lines (start with ' ', have '|')
+    # followed by an EMPTY LINE before any summary → look-ahead breaks, found_summary=false,
+    # the block is NOT stripped (triggers the break at lines 939-940 in remove_diffstat_section).
+    file(READ "${QT_WORK_DIR}/patches/p.patch" existing_patch)
+    file(WRITE "${QT_WORK_DIR}/patches/p.patch"
+        "Description\n\n f.txt | 2 +-\n g.txt | 3 +++\n\n${existing_patch}")
+    qt_quilt_ok(ENV "QUILT_NO_DIFF_TIMESTAMPS=1" ARGS refresh --diffstat
+        MESSAGE "refresh --diffstat with false-positive diffstat header failed")
+    file(READ "${QT_WORK_DIR}/patches/p.patch" result_patch)
+    # The false-positive diffstat should be preserved (not stripped), plus one new real diffstat
+    qt_assert_contains("${result_patch}" "g.txt" "false-positive diffstat lines should be preserved")
+    qt_assert_contains("${result_patch}" "Description" "description should be preserved")
+    # The real diffstat is added (one real "file changed" summary)
+    string(REGEX MATCHALL "file changed" count_matches "${result_patch}")
+    list(LENGTH count_matches num_changed)
+    qt_assert_equal("${num_changed}" "1" "should have exactly one real diffstat summary")
 endfunction()
 
