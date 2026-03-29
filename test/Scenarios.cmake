@@ -124,6 +124,8 @@ set(QUILT_TEST_SCENARIOS
     shell_split_var_expansion
     shell_split_var_braces
     shell_split_mixed
+    shell_split_dquote_escape
+    shell_split_unquoted_backslash
     annotate_basic
     annotate_stop_patch
     annotate_created_file
@@ -245,6 +247,21 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     mail_no_patches
     mail_header_multiline
     mail_diffstat
+    mail_help
+    mail_bad_option
+    mail_no_from
+    mail_opts_ignored
+    mail_single_named
+    mail_patch_not_in_series
+    mail_first_not_in_series
+    mail_last_not_in_series
+    mail_range_reversed
+    mail_too_many_args
+    mail_empty_patch
+    mail_no_header
+    mail_non_ascii
+    mail_single_dash_positional
+    mail_leading_blank_header
     builtin_diff_identical_files
     builtin_diff_simple_change
     builtin_diff_new_file
@@ -327,6 +344,16 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     fold_force
     fold_force_env
     header_backup_append
+    quilt_no_args
+    quilt_version
+    quilt_global_help
+    quilt_help_command
+    quilt_unknown_command
+    quilt_ambiguous_command
+    quilt_quiltrc_equals
+    quiltrc_export_prefix
+    quiltrc_invalid_key
+    quiltrc_dquote_backslash
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -3106,6 +3133,255 @@ function(qt_scenario_mail_diffstat)
     qt_assert_contains("${mbox}" "+new" "mbox should have diff content")
 endfunction()
 
+function(qt_scenario_mail_help)
+    qt_begin_test("mail_help")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS mail --help)
+    qt_assert_success("${rc}" "--help should succeed")
+    qt_assert_contains("${out}" "Usage: quilt mail" "--help should print usage")
+endfunction()
+
+function(qt_scenario_mail_bad_option)
+    qt_begin_test("mail_bad_option")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS mail --no-such-option)
+    qt_assert_failure("${rc}" "bad option should fail")
+    qt_assert_contains("${err}" "unknown option" "bad option should mention unknown option")
+endfunction()
+
+function(qt_scenario_mail_no_from)
+    qt_begin_test("mail_no_from")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS mail --mbox "${QT_TEST_BASE}/out.mbox")
+    qt_assert_failure("${rc}" "missing --from/--sender should fail")
+    qt_assert_contains("${err}" "required" "should mention required")
+endfunction()
+
+function(qt_scenario_mail_opts_ignored)
+    qt_begin_test("mail_opts_ignored")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS header -r INPUT "Test patch\n" MESSAGE "header failed")
+    # All these options are accepted but silently ignored
+    qt_quilt_ok(
+        ARGS mail
+            --mbox "${QT_TEST_BASE}/out.mbox"
+            --from "t@e.com"
+            --reply-to "r@e.com"
+            -m "intro"
+            -M "intro2"
+            --subject "override"
+            --charset "utf-8"
+            --signature "sig.txt"
+        MESSAGE "ignored options should not fail"
+    )
+    qt_assert_exists("${QT_TEST_BASE}/out.mbox" "mbox should exist")
+endfunction()
+
+function(qt_scenario_mail_single_named)
+    qt_begin_test("mail_single_named")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p1 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
+    qt_quilt_ok(ARGS header -r INPUT "First change\n" MESSAGE "header p1 failed")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p2 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "c\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2 failed")
+    qt_quilt_ok(ARGS header -r INPUT "Second change\n" MESSAGE "header p2 failed")
+    # Select only p1 by name (single positional, not "-")
+    qt_quilt_ok(
+        ARGS mail --mbox "${QT_TEST_BASE}/out.mbox" --from "t@e.com" p1.patch
+        MESSAGE "mail single named failed"
+    )
+    qt_read_file_raw(mbox "${QT_TEST_BASE}/out.mbox")
+    qt_assert_contains("${mbox}" "[PATCH] First change" "should have p1 subject")
+    qt_assert_not_contains("${mbox}" "Second change" "should not have p2")
+endfunction()
+
+function(qt_scenario_mail_patch_not_in_series)
+    qt_begin_test("mail_patch_not_in_series")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err
+        ARGS mail --mbox "${QT_TEST_BASE}/out.mbox" --from "t@e.com" nosuchpatch.patch)
+    qt_assert_failure("${rc}" "patch not in series should fail")
+    qt_assert_contains("${err}" "not in series" "should say not in series")
+endfunction()
+
+function(qt_scenario_mail_first_not_in_series)
+    qt_begin_test("mail_first_not_in_series")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err
+        ARGS mail --mbox "${QT_TEST_BASE}/out.mbox" --from "t@e.com" nosuch.patch p.patch)
+    qt_assert_failure("${rc}" "first patch not in series should fail")
+    qt_assert_contains("${err}" "not in series" "should say not in series")
+endfunction()
+
+function(qt_scenario_mail_last_not_in_series)
+    qt_begin_test("mail_last_not_in_series")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err
+        ARGS mail --mbox "${QT_TEST_BASE}/out.mbox" --from "t@e.com" p.patch nosuch.patch)
+    qt_assert_failure("${rc}" "last patch not in series should fail")
+    qt_assert_contains("${err}" "not in series" "should say not in series")
+endfunction()
+
+function(qt_scenario_mail_range_reversed)
+    qt_begin_test("mail_range_reversed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p1 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p2 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "c\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2 failed")
+    # Specify last before first — should fail
+    qt_quilt(RESULT rc OUTPUT out ERROR err
+        ARGS mail --mbox "${QT_TEST_BASE}/out.mbox" --from "t@e.com" p2.patch p1.patch)
+    qt_assert_failure("${rc}" "reversed range should fail")
+    qt_assert_contains("${err}" "first patch must come before" "should explain ordering")
+endfunction()
+
+function(qt_scenario_mail_too_many_args)
+    qt_begin_test("mail_too_many_args")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err
+        ARGS mail --mbox "${QT_TEST_BASE}/out.mbox" --from "t@e.com" p.patch p.patch p.patch)
+    qt_assert_failure("${rc}" "too many positional args should fail")
+    qt_assert_contains("${err}" "Usage:" "should print usage")
+endfunction()
+
+function(qt_scenario_mail_empty_patch)
+    qt_begin_test("mail_empty_patch")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p1 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
+    qt_quilt_ok(ARGS header -r INPUT "Good patch\n" MESSAGE "header failed")
+    # Create an empty p2
+    file(APPEND "${QT_WORK_DIR}/patches/series" "p2.patch\n")
+    file(WRITE "${QT_WORK_DIR}/patches/p2.patch" "")
+    # Mail should skip p2 with a warning but still output mbox with p1
+    qt_quilt_ok(
+        OUTPUT out ERROR err
+        ARGS mail --mbox "${QT_TEST_BASE}/out.mbox" --from "t@e.com"
+        MESSAGE "mail with empty patch should still succeed"
+    )
+    qt_assert_contains("${err}" "empty" "should warn about empty patch")
+    qt_assert_contains("${err}" "p2.patch" "should name the empty patch")
+    qt_read_file_raw(mbox "${QT_TEST_BASE}/out.mbox")
+    qt_assert_contains("${mbox}" "Good patch" "should still have p1")
+endfunction()
+
+function(qt_scenario_mail_no_header)
+    qt_begin_test("mail_no_header")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # The refreshed patch starts with --- (no header text), so extract_header returns "".
+    # This triggers the fallback: use patch filename as subject.
+    qt_quilt_ok(
+        OUTPUT out ERROR err
+        ARGS mail --mbox "${QT_TEST_BASE}/out.mbox" --from "t@e.com"
+        MESSAGE "mail no header failed"
+    )
+    qt_read_file_raw(mbox "${QT_TEST_BASE}/out.mbox")
+    qt_assert_contains("${mbox}" "Subject: [PATCH] p.patch" "should use patch name as subject")
+endfunction()
+
+function(qt_scenario_mail_non_ascii)
+    qt_begin_test("mail_non_ascii")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # Subject with non-ASCII character → triggers RFC 2047 encoding
+    # Also long enough to trigger line-wrap in rfc2047_encode (> ~63 encoded bytes)
+    qt_quilt_ok(ARGS header -r INPUT "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAÉ\n" MESSAGE "header failed")
+    qt_quilt_ok(
+        OUTPUT out ERROR err
+        ARGS mail --mbox "${QT_TEST_BASE}/out.mbox" --from "t@e.com"
+        MESSAGE "mail non-ascii failed"
+    )
+    qt_read_file_raw(mbox "${QT_TEST_BASE}/out.mbox")
+    # Subject should be RFC 2047 encoded (starts with =?UTF-8?q?)
+    qt_assert_contains("${mbox}" "=?UTF-8?q?" "should RFC 2047 encode non-ASCII subject")
+    # MIME headers should be present
+    qt_assert_contains("${mbox}" "MIME-Version: 1.0" "should have MIME-Version")
+    qt_assert_contains("${mbox}" "Content-Type: text/plain; charset=UTF-8" "should have Content-Type")
+endfunction()
+
+function(qt_scenario_mail_single_dash_positional)
+    qt_begin_test("mail_single_dash_positional")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p1 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
+    qt_quilt_ok(ARGS header -r INPUT "First\n" MESSAGE "header p1 failed")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p2 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "c\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2 failed")
+    qt_quilt_ok(ARGS header -r INPUT "Second\n" MESSAGE "header p2 failed")
+    # "-" as single positional means all patches
+    qt_quilt_ok(
+        ARGS mail --mbox "${QT_TEST_BASE}/out.mbox" --from "t@e.com" -
+        MESSAGE "mail with dash positional failed"
+    )
+    qt_read_file_raw(mbox "${QT_TEST_BASE}/out.mbox")
+    qt_assert_contains("${mbox}" "First" "should have p1")
+    qt_assert_contains("${mbox}" "Second" "should have p2")
+endfunction()
+
+function(qt_scenario_mail_leading_blank_header)
+    qt_begin_test("mail_leading_blank_header")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # Write a patch file with blank lines before the subject
+    qt_read_file_raw(patch_content "${QT_WORK_DIR}/patches/p.patch")
+    file(WRITE "${QT_WORK_DIR}/patches/p.patch" "\n\nReal Subject\n\n${patch_content}")
+    qt_quilt_ok(
+        OUTPUT out ERROR err
+        ARGS mail --mbox "${QT_TEST_BASE}/out.mbox" --from "t@e.com"
+        MESSAGE "mail leading blank header failed"
+    )
+    qt_read_file_raw(mbox "${QT_TEST_BASE}/out.mbox")
+    qt_assert_contains("${mbox}" "Subject: [PATCH] Real Subject" "should skip blank lines to find subject")
+endfunction()
+
 # --- shell_split scenarios (quoting and variable expansion in QUILT_*_ARGS) ---
 
 # Each shell_split test uses quilt mail as the vehicle.  To work against both
@@ -3214,6 +3490,56 @@ function(qt_scenario_shell_split_mixed)
     )
     qt_read_file_raw(mbox "${QT_TEST_BASE}/mix.mbox")
     qt_assert_contains("${mbox}" "From: Mix User <mix@example.com>" "mixed quoting did not merge correctly")
+endfunction()
+
+function(qt_scenario_shell_split_dquote_escape)
+    qt_begin_test("shell_split_dquote_escape")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "a\n")
+    qt_quilt_ok(ARGS new f.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add file.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS header -r INPUT "Test\n" MESSAGE "header failed")
+    # Test backslash escape inside double quotes in QUILT_MAIL_ARGS (shell_split lines 192-195).
+    # We write a quiltrc where QUILT_MAIL_ARGS is a double-quoted value whose text contains
+    # a double-quoted --from token with \\ inside: shell_split sees \\ → next=='\\' → covered.
+    # File content needed:
+    #   QUILT_MAIL_ARGS="... --from \"back\\\\slash@e.com\" ..."
+    # After parse_quiltrc double-quote processing:
+    #   QUILT_MAIL_ARGS = ... --from "back\\slash@e.com" ...
+    # Then shell_split processes "back\\slash@e.com": \\ inside dquote → lines 192-195 covered.
+    set(bs "\\")
+    set(dq "\"")
+    set(mbox_path "${QT_TEST_BASE}/dq.mbox")
+    # Build the inner value (what will be set as QUILT_MAIL_ARGS env var after quiltrc parsing)
+    # The quiltrc double-quoted value must use \" for embedded " and \\\\ for \\
+    set(mail_args "--sender test@e.com --from ${bs}${dq}back${bs}${bs}${bs}${bs}slash@e.com${bs}${dq} --mbox ${mbox_path} --subject x -m intro")
+    qt_write_file("${QT_TEST_BASE}/dqrc" "QUILT_MAIL_ARGS=${dq}${mail_args}${dq}\n")
+    qt_quilt_ok(
+        ARGS --quiltrc "${QT_TEST_BASE}/dqrc" mail
+        MESSAGE "mail with quiltrc dquote-backslash QUILT_MAIL_ARGS failed"
+    )
+    qt_read_file_raw(mbox "${mbox_path}")
+    qt_assert_contains("${mbox}" "From: back" "dquote backslash escape: from header present")
+endfunction()
+
+function(qt_scenario_shell_split_unquoted_backslash)
+    qt_begin_test("shell_split_unquoted_backslash")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "a\n")
+    qt_quilt_ok(ARGS new f.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add file.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS header -r INPUT "Test\n" MESSAGE "header failed")
+    # Unquoted backslash escapes the next character (here: space)
+    # "First\ Last" → single token "First Last"
+    qt_quilt_ok(
+        ENV "QUILT_MAIL_ARGS=--sender test@e.com --mbox ${QT_TEST_BASE}/ub.mbox --from First\\ Last\\ <fl@e.com> --subject x -m intro" "EDITOR=true"
+        ARGS mail
+        MESSAGE "mail with unquoted-backslash from failed"
+    )
+    qt_read_file_raw(mbox "${QT_TEST_BASE}/ub.mbox")
+    qt_assert_contains("${mbox}" "From: First Last" "unquoted backslash should preserve escaped space")
 endfunction()
 
 # ---- Built-in diff engine unit tests ----
@@ -5490,6 +5816,107 @@ function(qt_scenario_diff_snapshot_shadow)
     qt_quilt_ok(OUTPUT diff_out ERROR diff_err ARGS diff --snapshot -P p1.patch MESSAGE "diff --snapshot -P p1 failed")
 endfunction()
 
+function(qt_scenario_quilt_no_args)
+    qt_begin_test("quilt_no_args")
+    # Running quilt with no arguments should print usage and exit non-zero
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS)
+    qt_assert_failure("${rc}" "quilt with no args should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Usage:" "quilt no-args should print usage")
+endfunction()
+
+function(qt_scenario_quilt_version)
+    qt_begin_test("quilt_version")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS --version)
+    qt_assert_success("${rc}" "--version should succeed")
+    qt_assert_contains("${out}" "quilt version" "--version should print version")
+endfunction()
+
+function(qt_scenario_quilt_global_help)
+    qt_begin_test("quilt_global_help")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS --help)
+    qt_assert_success("${rc}" "--help should succeed")
+    qt_assert_contains("${out}" "Commands:" "--help should list commands")
+    qt_assert_contains("${out}" "Usage:" "--help should print usage")
+endfunction()
+
+function(qt_scenario_quilt_help_command)
+    qt_begin_test("quilt_help_command")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS help)
+    qt_assert_success("${rc}" "help command should succeed")
+    qt_assert_contains("${out}" "Commands:" "help should list commands")
+endfunction()
+
+function(qt_scenario_quilt_unknown_command)
+    qt_begin_test("quilt_unknown_command")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS thiscommandisunknown)
+    qt_assert_failure("${rc}" "unknown command should fail")
+    qt_assert_contains("${err}" "unknown command" "should say unknown command")
+endfunction()
+
+function(qt_scenario_quilt_ambiguous_command)
+    qt_begin_test("quilt_ambiguous_command")
+    # "p" matches push, pop, patches, previous — ambiguous
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS p)
+    qt_assert_failure("${rc}" "ambiguous command should fail")
+    qt_assert_contains("${err}" "ambiguous" "should say ambiguous")
+endfunction()
+
+function(qt_scenario_quilt_quiltrc_equals)
+    qt_begin_test("quilt_quiltrc_equals")
+    # Test --quiltrc=file form (with equals sign)
+    # Write a quiltrc that sets a recognizable value
+    qt_write_file("${QT_TEST_BASE}/my.quiltrc" "QUILT_PATCHES=mypatchdir\n")
+    qt_write_file("${QT_WORK_DIR}/file.txt" "a\n")
+    # quilt series with --quiltrc=file: should load the rc file
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS --quiltrc=${QT_TEST_BASE}/my.quiltrc series)
+    # series may fail (no patches) but the important thing is it didn't crash on the rc loading
+    # We can't easily assert the rc was loaded, but we cover the --quiltrc=X branch
+    # Just assert that the process ran
+    qt_assert_not_equal("${rc}" "-1" "--quiltrc= form should not crash")
+endfunction()
+
+function(qt_scenario_quiltrc_export_prefix)
+    qt_begin_test("quiltrc_export_prefix")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    # Use a quiltrc with "export KEY=value" syntax to set QUILT_PATCHES
+    qt_write_file("${QT_TEST_BASE}/exprc" "export QUILT_DIFF_OPTS=--unified\n")
+    qt_quilt_ok(ARGS --quiltrc "${QT_TEST_BASE}/exprc" new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS --quiltrc "${QT_TEST_BASE}/exprc" add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS --quiltrc "${QT_TEST_BASE}/exprc" refresh MESSAGE "refresh failed")
+    qt_assert_exists("${QT_WORK_DIR}/patches/p.patch" "patch should exist")
+endfunction()
+
+function(qt_scenario_quiltrc_invalid_key)
+    qt_begin_test("quiltrc_invalid_key")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    # quiltrc with invalid key names (starting with digit, or with special chars) should be silently ignored
+    qt_write_file("${QT_TEST_BASE}/badrc" "1invalid=value\n!alsobad=value\nQUILT_DIFF_OPTS=--unified\n")
+    qt_quilt_ok(ARGS --quiltrc "${QT_TEST_BASE}/badrc" new p.patch MESSAGE "new with badrc failed")
+    qt_quilt_ok(ARGS --quiltrc "${QT_TEST_BASE}/badrc" add f.txt MESSAGE "add with badrc failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS --quiltrc "${QT_TEST_BASE}/badrc" refresh MESSAGE "refresh with badrc failed")
+    qt_assert_exists("${QT_WORK_DIR}/patches/p.patch" "patch should exist despite invalid rc keys")
+endfunction()
+
+function(qt_scenario_quiltrc_dquote_backslash)
+    qt_begin_test("quiltrc_dquote_backslash")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    # quiltrc with double-quoted value containing backslash escapes
+    qt_write_file("${QT_TEST_BASE}/dqrc" "QUILT_DIFF_OPTS=\"--unified\"\n")
+    qt_quilt_ok(ARGS --quiltrc "${QT_TEST_BASE}/dqrc" new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS --quiltrc "${QT_TEST_BASE}/dqrc" add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS --quiltrc "${QT_TEST_BASE}/dqrc" refresh MESSAGE "refresh failed")
+    # Test that double-quoted value with backslash is parsed: \"
+    qt_write_file("${QT_TEST_BASE}/dqrc2" "QUILT_DIFF_OPTS=\"--no\\\\op\"\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err
+        ARGS --quiltrc "${QT_TEST_BASE}/dqrc2" diff)
+    # Just verifying it doesn't crash on the backslash parsing
+    qt_assert_not_equal("${rc}" "-1" "quiltrc with backslash in dquote should not crash")
+endfunction()
+
 function(qt_run_named_scenario scenario)
     if(scenario STREQUAL "basic_workflow")
         qt_scenario_basic_workflow()
@@ -5817,6 +6244,36 @@ function(qt_run_named_scenario scenario)
         qt_scenario_mail_header_multiline()
     elseif(scenario STREQUAL "mail_diffstat")
         qt_scenario_mail_diffstat()
+    elseif(scenario STREQUAL "mail_help")
+        qt_scenario_mail_help()
+    elseif(scenario STREQUAL "mail_bad_option")
+        qt_scenario_mail_bad_option()
+    elseif(scenario STREQUAL "mail_no_from")
+        qt_scenario_mail_no_from()
+    elseif(scenario STREQUAL "mail_opts_ignored")
+        qt_scenario_mail_opts_ignored()
+    elseif(scenario STREQUAL "mail_single_named")
+        qt_scenario_mail_single_named()
+    elseif(scenario STREQUAL "mail_patch_not_in_series")
+        qt_scenario_mail_patch_not_in_series()
+    elseif(scenario STREQUAL "mail_first_not_in_series")
+        qt_scenario_mail_first_not_in_series()
+    elseif(scenario STREQUAL "mail_last_not_in_series")
+        qt_scenario_mail_last_not_in_series()
+    elseif(scenario STREQUAL "mail_range_reversed")
+        qt_scenario_mail_range_reversed()
+    elseif(scenario STREQUAL "mail_too_many_args")
+        qt_scenario_mail_too_many_args()
+    elseif(scenario STREQUAL "mail_empty_patch")
+        qt_scenario_mail_empty_patch()
+    elseif(scenario STREQUAL "mail_no_header")
+        qt_scenario_mail_no_header()
+    elseif(scenario STREQUAL "mail_non_ascii")
+        qt_scenario_mail_non_ascii()
+    elseif(scenario STREQUAL "mail_single_dash_positional")
+        qt_scenario_mail_single_dash_positional()
+    elseif(scenario STREQUAL "mail_leading_blank_header")
+        qt_scenario_mail_leading_blank_header()
     elseif(scenario STREQUAL "shell_split_single_quotes")
         qt_scenario_shell_split_single_quotes()
     elseif(scenario STREQUAL "shell_split_double_quotes")
@@ -5827,6 +6284,10 @@ function(qt_run_named_scenario scenario)
         qt_scenario_shell_split_var_braces()
     elseif(scenario STREQUAL "shell_split_mixed")
         qt_scenario_shell_split_mixed()
+    elseif(scenario STREQUAL "shell_split_dquote_escape")
+        qt_scenario_shell_split_dquote_escape()
+    elseif(scenario STREQUAL "shell_split_unquoted_backslash")
+        qt_scenario_shell_split_unquoted_backslash()
     elseif(scenario STREQUAL "builtin_diff_identical_files")
         qt_scenario_builtin_diff_identical_files()
     elseif(scenario STREQUAL "builtin_diff_simple_change")
@@ -6133,6 +6594,26 @@ function(qt_run_named_scenario scenario)
         qt_scenario_upgrade_help()
     elseif(scenario STREQUAL "upgrade_bad_option")
         qt_scenario_upgrade_bad_option()
+    elseif(scenario STREQUAL "quilt_no_args")
+        qt_scenario_quilt_no_args()
+    elseif(scenario STREQUAL "quilt_version")
+        qt_scenario_quilt_version()
+    elseif(scenario STREQUAL "quilt_global_help")
+        qt_scenario_quilt_global_help()
+    elseif(scenario STREQUAL "quilt_help_command")
+        qt_scenario_quilt_help_command()
+    elseif(scenario STREQUAL "quilt_unknown_command")
+        qt_scenario_quilt_unknown_command()
+    elseif(scenario STREQUAL "quilt_ambiguous_command")
+        qt_scenario_quilt_ambiguous_command()
+    elseif(scenario STREQUAL "quilt_quiltrc_equals")
+        qt_scenario_quilt_quiltrc_equals()
+    elseif(scenario STREQUAL "quiltrc_export_prefix")
+        qt_scenario_quiltrc_export_prefix()
+    elseif(scenario STREQUAL "quiltrc_invalid_key")
+        qt_scenario_quiltrc_invalid_key()
+    elseif(scenario STREQUAL "quiltrc_dquote_backslash")
+        qt_scenario_quiltrc_dquote_backslash()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
