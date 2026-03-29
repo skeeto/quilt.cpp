@@ -170,22 +170,15 @@ static std::vector<PatchFile> parse_patch(std::string_view text, int strip_level
                     ln.starts_with("\\ no newline at end of file")) {
                     // Applies to the preceding line
                     if (!hunk.lines.empty()) {
+                        // Prefixes are already swapped if reverse=true, so
+                        // '-' is always the old side and '+' the new side.
                         char prev_prefix = hunk.lines.back()[0];
-                        if (reverse) {
-                            if (prev_prefix == '-')
-                                hunk.new_no_newline = true;
-                            else if (prev_prefix == '+')
-                                hunk.old_no_newline = true;
-                            else
-                                hunk.old_no_newline = hunk.new_no_newline = true;
-                        } else {
-                            if (prev_prefix == '-')
-                                hunk.old_no_newline = true;
-                            else if (prev_prefix == '+')
-                                hunk.new_no_newline = true;
-                            else
-                                hunk.old_no_newline = hunk.new_no_newline = true;
-                        }
+                        if (prev_prefix == '-')
+                            hunk.old_no_newline = true;
+                        else if (prev_prefix == '+')
+                            hunk.new_no_newline = true;
+                        else
+                            hunk.old_no_newline = hunk.new_no_newline = true;
                     }
                     ++i;
                     continue;

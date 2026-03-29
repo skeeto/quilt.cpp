@@ -151,6 +151,12 @@ set(QUILT_TEST_SCENARIOS
     next_none_applied
     series_verbose
     previous_with_target
+    applied_with_target
+    pop_target_already_top
+    push_unknown_target
+    delete_backup_option
+    delete_next_no_next
+    patches_no_file_arg
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -227,6 +233,10 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     color_option_accepted
     color_option_invalid
     trace_option_accepted
+    builtin_patch_trailing_lines
+    builtin_patch_merge_conflict_partial
+    builtin_patch_merge_diff3
+    fold_reverse_no_newline
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -4016,6 +4026,198 @@ function(qt_scenario_trace_option_accepted)
     qt_quilt_ok(ARGS --trace series MESSAGE "--trace series should succeed")
 endfunction()
 
+# ── New coverage-search scenarios ──────────────────────────────────────────
+
+# applied_with_target: quilt applied <patchname> lists up to and including target
+function(qt_scenario_applied_with_target)
+    qt_begin_test("applied_with_target")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p1 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "1\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p2 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2 failed")
+    qt_quilt_ok(ARGS new p3.patch MESSAGE "new p3 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p3 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "3\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p3 failed")
+    # applied p1.patch should list only p1.patch (stops at target)
+    qt_quilt_ok(OUTPUT out ERROR err ARGS applied p1.patch MESSAGE "applied p1 failed")
+    qt_assert_contains("${out}" "p1.patch" "p1 should be listed")
+    qt_assert_not_contains("${out}" "p2.patch" "p2 should not be listed when stopping at p1")
+    qt_assert_not_contains("${out}" "p3.patch" "p3 should not be listed when stopping at p1")
+    # applied with unknown patch should fail
+    qt_quilt(RESULT rc OUTPUT out2 ERROR err2 ARGS applied nonexistent.patch)
+    qt_assert_failure("${rc}" "applied with unknown patch should fail")
+    qt_combine_output(combined "${out2}" "${err2}")
+    qt_assert_contains("${combined}" "not in series" "applied with unknown patch should mention not in series")
+endfunction()
+
+# pop_target_already_top: quilt pop <top-patch> should fail (already on top)
+function(qt_scenario_pop_target_already_top)
+    qt_begin_test("pop_target_already_top")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p1 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "1\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p2 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2 failed")
+    # Trying to pop to the topmost patch is a no-op error
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS pop p2.patch)
+    qt_assert_failure("${rc}" "pop to already-top patch should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "currently on top" "should explain it is already the top patch")
+endfunction()
+
+# push_unknown_target: quilt push <nonexistent-patch> should fail
+function(qt_scenario_push_unknown_target)
+    qt_begin_test("push_unknown_target")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push nonexistent.patch)
+    qt_assert_failure("${rc}" "push with unknown target should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "not in series" "should explain patch is not in series")
+endfunction()
+
+# delete_backup_option: quilt delete --backup -r moves patch file to <name>~
+function(qt_scenario_delete_backup_option)
+    qt_begin_test("delete_backup_option")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_assert_exists("${QT_WORK_DIR}/patches/p.patch" "patch file should exist before delete")
+    qt_quilt_ok(ARGS delete --backup -r p.patch MESSAGE "delete --backup -r failed")
+    qt_assert_not_exists("${QT_WORK_DIR}/patches/p.patch" "patch file should be gone")
+    qt_assert_exists("${QT_WORK_DIR}/patches/p.patch~" "backup file p.patch~ should exist")
+endfunction()
+
+# delete_next_no_next: quilt delete -n when all patches are applied has no next
+function(qt_scenario_delete_next_no_next)
+    qt_begin_test("delete_next_no_next")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # All patches applied, so -n (next unapplied) has nothing to delete
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS delete -n)
+    qt_assert_failure("${rc}" "delete -n with no next patch should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "No next patch" "should report no next patch")
+endfunction()
+
+# patches_no_file_arg: quilt patches without a file argument should fail
+function(qt_scenario_patches_no_file_arg)
+    qt_begin_test("patches_no_file_arg")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS patches)
+    qt_assert_failure("${rc}" "patches with no file arg should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Usage" "should show usage when no file arg")
+endfunction()
+
+# builtin_patch_trailing_lines: patch modifies middle of longer file, leaving
+# multiple trailing lines — exercises the non-last-line branch in build_output
+function(qt_scenario_builtin_patch_trailing_lines)
+    qt_begin_test("builtin_patch_trailing_lines")
+    # 9-line file; patch modifies line 3, hunk covers lines 1-6 (3 context each
+    # side), leaving lines 7-9 as trailing content copied after the hunk
+    qt_write_file("${QT_WORK_DIR}/f.txt" "1\n2\ntarget\n4\n5\n6\n7\n8\n9\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "1\n2\nMODIFIED\n4\n5\n6\n7\n8\n9\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "1\n2\ntarget\n4\n5\n6\n7\n8\n9" "pop should restore all 9 lines")
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "1\n2\nMODIFIED\n4\n5\n6\n7\n8\n9" "push should modify line 3, preserve trailing lines")
+endfunction()
+
+# builtin_patch_merge_conflict_partial: multi-hunk push with --merge where
+# some hunks succeed (pos>=0 branch) and some fail (pos<0 branch)
+function(qt_scenario_builtin_patch_merge_conflict_partial)
+    qt_begin_test("builtin_patch_merge_conflict_partial")
+    qt_write_file("${QT_WORK_DIR}/f.txt"
+        "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt"
+        "1\nTWO\n3\n4\n5\n6\n7\n8\n9\n10\n11\nTWELVE\n13\n14\n15\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # Corrupt line 12 so hunk 2 fails but keep line 2 as "2" so hunk 1 succeeds
+    qt_write_file("${QT_WORK_DIR}/f.txt"
+        "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\nCHANGED\n13\n14\n15\n")
+    # Push with --merge -f: hunk 1 (line 2→TWO) succeeds, hunk 2 (12→TWELVE) fails
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --merge -f)
+    # File should have both applied change and conflict markers
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "TWO" "successful hunk should be applied")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "<<<<<<< current" "failed hunk should produce conflict marker")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" ">>>>>>> patch" "failed hunk should produce end marker")
+endfunction()
+
+# builtin_patch_merge_diff3: push --merge=diff3 with conflict produces diff3-style
+# markers including the ||||||| expected section
+function(qt_scenario_builtin_patch_merge_diff3)
+    qt_begin_test("builtin_patch_merge_diff3")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nbbb\nccc\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nBBB\nccc\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # Completely change file so patch conflict occurs
+    qt_write_file("${QT_WORK_DIR}/f.txt" "xxx\nyyy\nzzz\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --merge=diff3 -f)
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "<<<<<<< current" "should have conflict open")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "||||||| expected" "diff3 style should have expected section")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "=======" "should have separator")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" ">>>>>>> patch" "should have conflict end")
+endfunction()
+
+# fold_reverse_no_newline: fold -R a patch that removes trailing newline;
+# the restored file should have the trailing newline back
+function(qt_scenario_fold_reverse_no_newline)
+    qt_begin_test("fold_reverse_no_newline")
+    # Start with file "modified" (no trailing newline) — this is the patched state
+    file(WRITE "${QT_WORK_DIR}/f.txt" "modified")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    # fold -R the forward patch (which changes original→modified with no newline)
+    # The reversed patch should produce "original\n" (with trailing newline)
+    qt_quilt_ok(
+        ARGS fold -R
+        INPUT [=[--- a/f.txt
++++ b/f.txt
+@@ -1 +1 @@
+-original
++modified
+\ No newline at end of file
+]=]
+        MESSAGE "fold -R with no-newline patch failed"
+    )
+    qt_read_file_raw(result "${QT_WORK_DIR}/f.txt")
+    qt_assert_equal("${result}" "original\n" "fold -R should restore trailing newline")
+endfunction()
+
 function(qt_run_named_scenario scenario)
     if(scenario STREQUAL "basic_workflow")
         qt_scenario_basic_workflow()
@@ -4459,6 +4661,26 @@ function(qt_run_named_scenario scenario)
         qt_scenario_color_option_invalid()
     elseif(scenario STREQUAL "trace_option_accepted")
         qt_scenario_trace_option_accepted()
+    elseif(scenario STREQUAL "applied_with_target")
+        qt_scenario_applied_with_target()
+    elseif(scenario STREQUAL "pop_target_already_top")
+        qt_scenario_pop_target_already_top()
+    elseif(scenario STREQUAL "push_unknown_target")
+        qt_scenario_push_unknown_target()
+    elseif(scenario STREQUAL "delete_backup_option")
+        qt_scenario_delete_backup_option()
+    elseif(scenario STREQUAL "delete_next_no_next")
+        qt_scenario_delete_next_no_next()
+    elseif(scenario STREQUAL "patches_no_file_arg")
+        qt_scenario_patches_no_file_arg()
+    elseif(scenario STREQUAL "builtin_patch_trailing_lines")
+        qt_scenario_builtin_patch_trailing_lines()
+    elseif(scenario STREQUAL "builtin_patch_merge_conflict_partial")
+        qt_scenario_builtin_patch_merge_conflict_partial()
+    elseif(scenario STREQUAL "builtin_patch_merge_diff3")
+        qt_scenario_builtin_patch_merge_diff3()
+    elseif(scenario STREQUAL "fold_reverse_no_newline")
+        qt_scenario_fold_reverse_no_newline()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
