@@ -302,6 +302,11 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
     ptrdiff_t top = q.top_index();
     ptrdiff_t start_idx = top + 1;
 
+    if (q.series.empty()) {
+        err_line("No series file found");
+        return 1;
+    }
+
     if (start_idx >= std::ssize(q.series)) {
         err_line("File series fully applied, ends at patch " +
                  patch_path_display(q, q.applied.back()));
