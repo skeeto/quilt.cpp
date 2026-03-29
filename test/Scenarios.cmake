@@ -370,6 +370,21 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     builtin_patch_merge_copy_lines
     builtin_patch_no_newline_context
     builtin_patch_empty_context_line
+    push_missing_file
+    refresh_diffstat_scale
+    diff_combine_shadowing
+    fold_patch_opts_fuzz
+    rename_subdirectory
+    header_edit_backup
+    header_strip_diffstat_false_positive
+    files_combine_dash_patch_no_applied
+    files_unapplied_duplicate
+    push_fuzz_offset
+    header_edit_fail
+    push_backward_offset
+    push_new_file_subdir
+    builtin_patch_empty_file_content
+    builtin_patch_stray_minus
     shell_split_single_quotes
     shell_split_double_quotes
     shell_split_var_expansion
@@ -7010,6 +7025,36 @@ function(qt_run_named_scenario scenario)
         qt_scenario_builtin_patch_no_newline_context()
     elseif(scenario STREQUAL "builtin_patch_empty_context_line")
         qt_scenario_builtin_patch_empty_context_line()
+    elseif(scenario STREQUAL "push_missing_file")
+        qt_scenario_push_missing_file()
+    elseif(scenario STREQUAL "refresh_diffstat_scale")
+        qt_scenario_refresh_diffstat_scale()
+    elseif(scenario STREQUAL "diff_combine_shadowing")
+        qt_scenario_diff_combine_shadowing()
+    elseif(scenario STREQUAL "fold_patch_opts_fuzz")
+        qt_scenario_fold_patch_opts_fuzz()
+    elseif(scenario STREQUAL "rename_subdirectory")
+        qt_scenario_rename_subdirectory()
+    elseif(scenario STREQUAL "header_edit_backup")
+        qt_scenario_header_edit_backup()
+    elseif(scenario STREQUAL "header_strip_diffstat_false_positive")
+        qt_scenario_header_strip_diffstat_false_positive()
+    elseif(scenario STREQUAL "files_combine_dash_patch_no_applied")
+        qt_scenario_files_combine_dash_patch_no_applied()
+    elseif(scenario STREQUAL "files_unapplied_duplicate")
+        qt_scenario_files_unapplied_duplicate()
+    elseif(scenario STREQUAL "push_fuzz_offset")
+        qt_scenario_push_fuzz_offset()
+    elseif(scenario STREQUAL "header_edit_fail")
+        qt_scenario_header_edit_fail()
+    elseif(scenario STREQUAL "push_backward_offset")
+        qt_scenario_push_backward_offset()
+    elseif(scenario STREQUAL "push_new_file_subdir")
+        qt_scenario_push_new_file_subdir()
+    elseif(scenario STREQUAL "builtin_patch_empty_file_content")
+        qt_scenario_builtin_patch_empty_file_content()
+    elseif(scenario STREQUAL "builtin_patch_stray_minus")
+        qt_scenario_builtin_patch_stray_minus()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -7251,4 +7296,313 @@ function(qt_scenario_builtin_patch_empty_context_line)
     qt_quilt_ok(ARGS pop MESSAGE "pop failed")
     qt_quilt_ok(ARGS push MESSAGE "push with stripped empty context should succeed")
     qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "AFTER" "patch with stripped empty context should apply")
+endfunction()
+
+# push_missing_file: push a patch when the target file was deleted
+# covers patch.cpp lines 677-681 (can't find file to patch, error handling)
+function(qt_scenario_push_missing_file)
+    qt_begin_test("push_missing_file")
+    # Create a file and make a modification patch
+    qt_write_file("${QT_WORK_DIR}/f.txt" "original\ncontent\nhere\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "original\nMODIFIED\nhere\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # Delete the file so push will fail: patch expects to modify it (not create it)
+    file(REMOVE "${QT_WORK_DIR}/f.txt")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_failure("${rc}" "push with deleted file should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "can't find file" "should report missing file")
+endfunction()
+
+# refresh_diffstat_scale: large patch triggers diffstat bar-graph capping
+# covers cmd_patch.cpp lines 869-870 (plus_bars > minus_bars branch) and
+# line 872 (else branch) inside the bar scaling/capping code
+function(qt_scenario_refresh_diffstat_scale)
+    qt_begin_test("refresh_diffstat_scale")
+    # a.txt: created from scratch with 200 lines (max_changes = 200, scale = 59/200)
+    # b.txt: 2 original lines replaced by 6 new lines (6 adds + 2 removes = 8 total)
+    # c.txt: 6 original lines replaced by 2 new lines (2 adds + 6 removes = 8 total)
+    # With scale = 0.295, b.txt gets plus_bars=2, minus_bars=1, total=3 > limit=2 (line 870)
+    # and c.txt gets plus_bars=1, minus_bars=2, total=3 > limit=2 (line 872)
+    qt_write_file("${QT_WORK_DIR}/b.txt" "orig1\norig2\n")
+    qt_write_file("${QT_WORK_DIR}/c.txt" "old1\nold2\nold3\nold4\nold5\nold6\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add a.txt b.txt c.txt MESSAGE "add failed")
+    # Generate 200 lines for a.txt using foreach
+    set(big_content "")
+    foreach(i RANGE 1 200)
+        string(APPEND big_content "line${i}\n")
+    endforeach()
+    qt_write_file("${QT_WORK_DIR}/a.txt" "${big_content}")
+    qt_write_file("${QT_WORK_DIR}/b.txt" "new1\nnew2\nnew3\nnew4\nnew5\nnew6\n")
+    qt_write_file("${QT_WORK_DIR}/c.txt" "newer1\nnewer2\n")
+    qt_quilt_ok(ARGS refresh --diffstat MESSAGE "refresh --diffstat failed")
+    qt_read_file_raw(patch_text "${QT_WORK_DIR}/patches/p.patch")
+    qt_assert_contains("${patch_text}" "file" "diffstat should appear in patch header")
+    qt_assert_contains("${patch_text}" "changed" "diffstat summary line should appear")
+endfunction()
+
+# diff_combine_shadowing: quilt diff --combine -P patch2 when patch3 (above) also tracks the file
+# covers cmd_patch.cpp lines 1703-1705 (shadowing patch found, new_path = shadowing backup)
+function(qt_scenario_diff_combine_shadowing)
+    qt_begin_test("diff_combine_shadowing")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add f to p1 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "v1\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add f to p2 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "v2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2 failed")
+    qt_quilt_ok(ARGS new p3.patch MESSAGE "new p3 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add f to p3 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "v3\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p3 failed")
+    # diff -P p2.patch --combine p1.patch: combine range [p1,p2], p3 shadows f.txt
+    # next_patch_for_file(q, p2, f.txt) = p3 → lines 1703-1705 triggered
+    qt_quilt_ok(OUTPUT diff_out ERROR diff_err ARGS diff -P p2.patch --combine p1.patch MESSAGE "diff --combine shadowing failed")
+    # Combined diff should show base→v2 (p3's backup is v2, from before p3 was applied)
+    qt_assert_contains("${diff_out}" "-base" "combine should show original base removed")
+    qt_assert_contains("${diff_out}" "+v2" "combine should show v2 added (p3's backup)")
+endfunction()
+
+# fold_patch_opts_fuzz: quilt fold with QUILT_PATCH_OPTS=--fuzz= and -s and -E
+# covers cmd_manage.cpp lines 938 (-s → quiet), 939 (-E → remove_empty), 940-941 (--fuzz=)
+function(qt_scenario_fold_patch_opts_fuzz)
+    qt_begin_test("fold_patch_opts_fuzz")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "line1\nline2\nline3\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    # --fuzz=2: fold with fuzz covers lines 940-941; -s covers line 938
+    qt_quilt_ok(
+        ENV "QUILT_PATCH_OPTS=--fuzz=2 -s"
+        ARGS fold
+        INPUT [=[--- a/f.txt
++++ b/f.txt
+@@ -1,3 +1,3 @@
+ line1
+-line2
++LINE2
+ line3
+]=]
+        OUTPUT fold_out
+        MESSAGE "fold with --fuzz=2 -s failed"
+    )
+    # -s suppresses output (quiet mode)
+    qt_assert_equal("${fold_out}" "" "fold -s should suppress output")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "LINE2" "fold should apply patch")
+endfunction()
+
+# rename_subdirectory: rename an unapplied patch to a path with a new subdirectory
+# covers cmd_manage.cpp lines 271-276 (make_dirs for new subdirectory path)
+function(qt_scenario_rename_subdirectory)
+    qt_begin_test("rename_subdirectory")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "a\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add f failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
+    qt_quilt_ok(ARGS new old.patch MESSAGE "new old failed")
+    qt_quilt_ok(ARGS add g.txt MESSAGE "add g failed")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh old failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop to p1 failed")
+    # old.patch is unapplied with a real patch file; rename to subdir/ which doesn't exist
+    # → triggers make_dirs at lines 271-276 in cmd_rename
+    qt_quilt_ok(OUTPUT out ERROR err ARGS rename -P old.patch subdir/new.patch MESSAGE "rename to subdirectory failed")
+    qt_assert_contains("${out}" "old.patch renamed to" "rename should report success")
+    qt_assert_contains("${out}" "subdir/new.patch" "rename output should show new name")
+    qt_assert_exists("${QT_WORK_DIR}/patches/subdir/new.patch" "renamed patch file should exist in subdirectory")
+    qt_assert_not_exists("${QT_WORK_DIR}/patches/old.patch" "old patch file should be gone")
+endfunction()
+
+# header_edit_backup: quilt header -e --backup calls copy_file for backup
+# covers cmd_manage.cpp line 675 (copy_file in EDIT mode with --backup)
+function(qt_scenario_header_edit_backup)
+    qt_begin_test("header_edit_backup")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # Set header via -r (replace) so patch has some content
+    qt_quilt_ok(ARGS header -r INPUT "My patch header\n" MESSAGE "header -r failed")
+    # header -e --backup: editor is "true" (no-op); triggers line 675 (backup copy)
+    qt_quilt_ok(ENV "EDITOR=true" ARGS header -e --backup MESSAGE "header -e --backup failed")
+    qt_assert_exists("${QT_WORK_DIR}/patches/p.patch~" "backup patch file should exist")
+endfunction()
+
+# header_strip_diffstat_false_positive: header --strip-diffstat on header with pipe line
+# followed by empty line (not a real diffstat): triggers the break at line 518 in
+# strip_diffstat() when the lookahead exits early (found_summary stays false)
+function(qt_scenario_header_strip_diffstat_false_positive)
+    qt_begin_test("header_strip_diffstat_false_positive")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # Write header with a line that looks like diffstat (starts with space, has |)
+    # but is followed by an empty line before the summary → strip_diffstat won't strip it
+    qt_quilt_ok(ARGS header -r INPUT " changelog.txt | 5 +++++\n\nMore description here.\n" MESSAGE "header -r failed")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS header --strip-diffstat MESSAGE "header --strip-diffstat failed")
+    # The "fake diffstat" should be preserved (it's not a real diffstat block)
+    qt_assert_contains("${out}" "changelog.txt" "false-positive diffstat line should be preserved")
+    qt_assert_contains("${out}" "More description" "text after fake diffstat should be preserved")
+endfunction()
+
+# files_combine_dash_patch_no_applied: quilt files --combine - <patch> with no applied patches
+# covers cmd_manage.cpp lines 730-731 (combine_patch=="-" with q.applied.empty())
+function(qt_scenario_files_combine_dash_patch_no_applied)
+    qt_begin_test("files_combine_dash_patch_no_applied")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # files --combine - p.patch: target patch specified + combine="-" + no applied patches
+    # → hits the q.applied.empty() check at lines 730-731
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS files --combine - p.patch)
+    qt_assert_failure("${rc}" "files --combine - with patch arg and nothing applied should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "No patches applied" "should report no patches applied")
+endfunction()
+
+# files_unapplied_duplicate: quilt files on an unapplied patch with the same file twice
+# covers cmd_manage.cpp line 52 (deduplication break in parse_patch_files)
+function(qt_scenario_files_unapplied_duplicate)
+    qt_begin_test("files_unapplied_duplicate")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # Write a patch that mentions f.txt twice in +++ lines (two separate hunks for same file)
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+y\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+z\n")
+    # quilt files on the unapplied patch: parse_patch_files deduplicates f.txt (line 52)
+    qt_quilt_ok(OUTPUT out ERROR err ARGS files p.patch MESSAGE "files on unapplied patch failed")
+    # f.txt should appear exactly once despite two +++ entries
+    string(REGEX MATCHALL "f\\.txt" matches "${out}")
+    list(LENGTH matches cnt)
+    if(NOT cnt EQUAL 1)
+        qt_fail("Expected f.txt to appear exactly once, got ${cnt} times: ${out}")
+    endif()
+endfunction()
+
+# push_fuzz_offset: push a patch that requires both fuzz AND offset
+# covers patch.cpp lines 726-728 ("Hunk #N succeeded at X with fuzz Y (offset Z lines).")
+# The hunk needs to match with fuzz > 0 AND at a position other than the recorded one.
+function(qt_scenario_push_fuzz_offset)
+    qt_begin_test("push_fuzz_offset")
+    # Create a file with context lines around the target line
+    qt_write_file("${QT_WORK_DIR}/f.txt" "context1_original\ntarget\ncontext2_original\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    # Modify the target line to create the patch
+    qt_write_file("${QT_WORK_DIR}/f.txt" "context1_original\nNEWTARGET\ncontext2_original\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # Now change both: add an extra line at top (causes offset) and
+    # change the context lines (requires fuzz to match)
+    qt_write_file("${QT_WORK_DIR}/f.txt" "extraline\ncontext1_DIFFERENT\ntarget\ncontext2_DIFFERENT\n")
+    # Push with fuzz=2 so the hunk applies with offset 1 and fuzz 1
+    qt_quilt(RESULT rc OUTPUT push_out ERROR push_err ARGS push --fuzz=2)
+    qt_assert_success("${rc}" "push --fuzz=2 should succeed")
+    qt_combine_output(combined "${push_out}" "${push_err}")
+    qt_assert_contains("${combined}" "fuzz" "should report fuzz used")
+    qt_assert_contains("${combined}" "offset" "should report offset")
+endfunction()
+
+# header_edit_fail: quilt header -e with editor that exits with error
+# covers cmd_manage.cpp lines 666-668 ("Editor exited with error")
+function(qt_scenario_header_edit_fail)
+    qt_begin_test("header_edit_fail")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # Run header -e with EDITOR=false: false exits with code 1 → error path
+    qt_quilt(RESULT rc OUTPUT out ERROR err ENV "EDITOR=false" ARGS header -e)
+    qt_assert_failure("${rc}" "header -e with failing editor should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Editor exited with error" "should report editor error")
+endfunction()
+
+# push_backward_offset: push a patch when content has moved backward (earlier in file)
+# covers patch.cpp line 413 (backward search in locate_hunk spiral)
+function(qt_scenario_push_backward_offset)
+    qt_begin_test("push_backward_offset")
+    # Target at line 3 (1-indexed) with no context so patch records @@ -3,1 +3,1 @@
+    qt_write_file("${QT_WORK_DIR}/f.txt" "line1\nline2\ntarget\nline4\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "line1\nline2\nMODIFIED\nline4\n")
+    # Use -U 0 so the patch has no context (first_guess=2, pattern=just "target")
+    qt_quilt_ok(ARGS refresh -U 0 MESSAGE "refresh -U 0 failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # Remove line1 so "target" is now at line 2 (0-indexed=1), backward from first_guess=2
+    qt_write_file("${QT_WORK_DIR}/f.txt" "line2\ntarget\nline4\n")
+    # Push: locate_hunk tries first_guess=2 (fails: "line4"), then spiral: forward pos=3
+    # (out of range), backward pos=1 (matches "target") → line 413 executes
+    qt_quilt_ok(OUTPUT push_out ERROR push_err ARGS push MESSAGE "push should succeed with backward offset")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "line2\nMODIFIED\nline4" "push should apply modification")
+    qt_combine_output(combined "${push_out}" "${push_err}")
+    qt_assert_contains("${combined}" "offset" "should report offset")
+endfunction()
+
+# push_new_file_subdir: push a creation patch for a file in a new subdirectory
+# covers patch.cpp line 790 (make_dirs for new file's parent directory)
+function(qt_scenario_push_new_file_subdir)
+    qt_begin_test("push_new_file_subdir")
+    # Create an empty patch in the series, then replace it with a creation patch
+    # for a file in a new subdirectory (the subdirectory doesn't exist yet)
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # Write a creation patch manually: old==/dev/null → is_creation=true
+    # target path = "newdir/newfile.txt" (strip-1 of "b/newdir/newfile.txt")
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch"
+        "--- /dev/null\n+++ b/newdir/newfile.txt\n@@ -0,0 +1 @@\n+brand new\n")
+    qt_assert_not_exists("${QT_WORK_DIR}/newdir" "newdir should not exist before push")
+    # Push: is_creation patch → make_dirs("newdir") called (line 790) before writing the file
+    qt_quilt_ok(ARGS push MESSAGE "push should create subdirectory and file")
+    qt_assert_exists("${QT_WORK_DIR}/newdir/newfile.txt" "new file in subdir should exist")
+    qt_assert_file_text("${QT_WORK_DIR}/newdir/newfile.txt" "brand new" "content should match")
+endfunction()
+
+# builtin_patch_empty_file_content: apply patch to an existing 0-byte file
+# covers patch.cpp lines 251-252 (load_file_lines returns early for empty content)
+function(qt_scenario_builtin_patch_empty_file_content)
+    qt_begin_test("builtin_patch_empty_file_content")
+    # Create a 0-byte file
+    qt_write_file("${QT_WORK_DIR}/empty.txt" "")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add empty.txt MESSAGE "add failed")
+    # Add content to trigger a diff from empty to non-empty
+    qt_write_file("${QT_WORK_DIR}/empty.txt" "new content\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # After pop, empty.txt is restored to 0 bytes
+    # Push: load_file_lines reads the empty file → hits content.empty() branch (lines 251-252)
+    qt_quilt_ok(ARGS push MESSAGE "push to empty file should succeed")
+    qt_assert_file_text("${QT_WORK_DIR}/empty.txt" "new content" "push should add content to empty file")
+endfunction()
+
+# builtin_patch_stray_minus: patch file with a "--- " line not followed by "+++ "
+# covers patch.cpp lines 94-95 (skip non-header --- line in parse_patch)
+function(qt_scenario_builtin_patch_stray_minus)
+    qt_begin_test("builtin_patch_stray_minus")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "old\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "new\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # Rewrite the patch with a stray "--- " line not followed by "+++ "
+    # parse_patch sees "--- not-a-header", peeks at next line "some text" (not "+++"),
+    # and executes lines 94-95 (++i; continue) to skip it.
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch"
+        "--- not-a-header\nsome text\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-old\n+new\n")
+    qt_quilt_ok(ARGS push MESSAGE "push should succeed despite stray --- line")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "new" "file should be modified after push")
 endfunction()
