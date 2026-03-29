@@ -7909,6 +7909,11 @@ endfunction()
 # cannot pass " or \ in arguments due to shell escaping limitations.
 function(qt_scenario_graph_dot_escape)
     qt_begin_test("graph_dot_escape")
+    if(CMAKE_HOST_WIN32)
+        # Windows does not allow " in filenames.
+        message(STATUS "Skipping graph_dot_escape on Windows")
+        return()
+    endif()
     # Manually create quilt state with a patch name containing " (double-quote).
     # dot_escape("pa\"tch.diff") hits lines 50-51: escaped += '\\'; escaped += '"'
     set(patchname "pa\"tch.diff")
