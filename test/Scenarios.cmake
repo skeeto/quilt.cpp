@@ -426,6 +426,12 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     series_in_pc_dir
     series_leading_space_no_newline
     header_replace_no_newline
+    annotate_no_series_file
+    push_reject_no_newline
+    fork_applied_not_in_series
+    refresh_diffstat_double_newline
+    refresh_creates_patches_dir
+    top_index_applied_not_in_series
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -7121,6 +7127,18 @@ function(qt_run_named_scenario scenario)
         qt_scenario_series_leading_space_no_newline()
     elseif(scenario STREQUAL "header_replace_no_newline")
         qt_scenario_header_replace_no_newline()
+    elseif(scenario STREQUAL "annotate_no_series_file")
+        qt_scenario_annotate_no_series_file()
+    elseif(scenario STREQUAL "push_reject_no_newline")
+        qt_scenario_push_reject_no_newline()
+    elseif(scenario STREQUAL "fork_applied_not_in_series")
+        qt_scenario_fork_applied_not_in_series()
+    elseif(scenario STREQUAL "refresh_diffstat_double_newline")
+        qt_scenario_refresh_diffstat_double_newline()
+    elseif(scenario STREQUAL "refresh_creates_patches_dir")
+        qt_scenario_refresh_creates_patches_dir()
+    elseif(scenario STREQUAL "top_index_applied_not_in_series")
+        qt_scenario_top_index_applied_not_in_series()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -8141,4 +8159,139 @@ function(qt_scenario_header_replace_no_newline)
     qt_quilt_ok(OUTPUT hdr_out ARGS header MESSAGE "header read failed")
     qt_assert_contains("${hdr_out}" "my description without newline"
         "header should contain the replacement text")
+endfunction()
+
+# annotate_no_series_file: cmd_annotate.cpp line 112 (no_applied_patches_error)
+# When annotate is called with no quilt state at all (no .pc/, no series file),
+# it hits the "No series file found" error path.
+function(qt_scenario_annotate_no_series_file)
+    qt_begin_test("annotate_no_series_file")
+    # Fresh directory with no quilt state
+    qt_write_file("${QT_WORK_DIR}/f.txt" "content\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS annotate f.txt)
+    qt_assert_failure("${rc}" "annotate with no series file should fail")
+    qt_assert_contains("${err}" "No series file found" "should say no series file found")
+endfunction()
+
+# push_reject_no_newline: patch.cpp line 636
+# format_rejects adds "\ No newline at end of file" when the rejected hunk's
+# old side had no trailing newline (old_no_newline=true). Requires a patch
+# that (1) fails to apply and (2) has "\ No newline at end of file" after
+# a '-' line.
+function(qt_scenario_push_reject_no_newline)
+    qt_begin_test("push_reject_no_newline")
+    # Create a file without trailing newline
+    file(WRITE "${QT_WORK_DIR}/f.txt" "original")
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/patches")
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/.pc")
+    # Create a patch that tries to remove "wrong" (not "original"), so it fails.
+    # The patch includes "\ No newline at end of file" after the '-' line,
+    # which sets old_no_newline=true on the hunk.
+    file(WRITE "${QT_WORK_DIR}/patches/bad.patch"
+"--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-wrong\n\\ No newline at end of file\n+patched\n")
+    file(WRITE "${QT_WORK_DIR}/patches/series" "bad.patch\n")
+    file(WRITE "${QT_WORK_DIR}/.pc/applied-patches" "")
+    file(WRITE "${QT_WORK_DIR}/.pc/.version" "2\n")
+    file(WRITE "${QT_WORK_DIR}/.pc/.quilt_patches" "patches\n")
+    file(WRITE "${QT_WORK_DIR}/.pc/.quilt_series" "series\n")
+    # Push with --leave-rejects to keep the .rej file
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --leave-rejects)
+    qt_assert_failure("${rc}" "push should fail when patch doesn't apply")
+    # The .rej file should contain the "No newline" marker
+    qt_assert_exists("${QT_WORK_DIR}/f.txt.rej" "f.txt.rej should exist")
+    file(READ "${QT_WORK_DIR}/f.txt.rej" rej_content)
+    qt_assert_contains("${rej_content}" "No newline" "rej file should contain no-newline marker")
+endfunction()
+
+# fork_applied_not_in_series: cmd_manage.cpp lines 996-997
+# cmd_fork checks if the top applied patch is in the series. If it isn't,
+# it returns "is not in series" error. Achievable by crafting a state where
+# applied-patches lists a patch that is absent from the series file.
+function(qt_scenario_fork_applied_not_in_series)
+    qt_begin_test("fork_applied_not_in_series")
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/patches")
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/.pc")
+    # Series has "other.patch" only; applied-patches has "ghost.patch" (not in series)
+    file(WRITE "${QT_WORK_DIR}/patches/series" "other.patch\n")
+    file(WRITE "${QT_WORK_DIR}/.pc/applied-patches" "ghost.patch\n")
+    file(WRITE "${QT_WORK_DIR}/.pc/.version" "2\n")
+    file(WRITE "${QT_WORK_DIR}/.pc/.quilt_patches" "patches\n")
+    file(WRITE "${QT_WORK_DIR}/.pc/.quilt_series" "series\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS fork)
+    qt_assert_failure("${rc}" "fork should fail when applied patch not in series")
+    qt_assert_contains("${err}" "is not in series" "should report patch not in series")
+endfunction()
+
+# refresh_diffstat_double_newline: cmd_patch.cpp line 1239
+# When a patch header ends with two consecutive newlines and --diffstat is requested,
+# the while loop in cmd_refresh removes the extra trailing newline (line 1239).
+# The header is set to "Description\n\n" (trailing blank line) via quilt header -r.
+function(qt_scenario_refresh_diffstat_double_newline)
+    qt_begin_test("refresh_diffstat_double_newline")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "old\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "new\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # Set a header that ends with a blank line (double trailing newline).
+    # INPUT "Description\n\n" gives "Description" + LF + LF → header ends with \n\n.
+    qt_quilt_ok(ARGS header -r INPUT "Description\n\n" MESSAGE "header -r failed")
+    # refresh --diffstat removes the extra trailing blank line from the header
+    # before inserting the diffstat block (line 1239 is hit).
+    qt_quilt_ok(ARGS refresh --diffstat MESSAGE "refresh --diffstat failed")
+    qt_read_file_raw(patch_content "${QT_WORK_DIR}/patches/p.patch")
+    qt_assert_contains("${patch_content}" "Description" "patch should still have description")
+    qt_assert_contains("${patch_content}" "1 file changed" "patch should contain diffstat")
+endfunction()
+
+# refresh_creates_patches_dir: cmd_patch.cpp line 1256
+# When quilt refresh is run and the patches directory does not yet exist,
+# cmd_refresh calls make_dirs to create it (line 1256). Triggered by crafting
+# a state where the series lives in .pc/series (the fallback location used
+# when .pc/.quilt_series is absent) and patches/ has never been created.
+function(qt_scenario_refresh_creates_patches_dir)
+    qt_begin_test("refresh_creates_patches_dir")
+    # Create the working file (current state)
+    file(WRITE "${QT_WORK_DIR}/f.txt" "hello\n")
+    # Set up .pc/ structure manually (no patches/ directory)
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/.pc")
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/.pc/p.patch")
+    # Backup shows the "before" state
+    file(WRITE "${QT_WORK_DIR}/.pc/p.patch/f.txt" "original\n")
+    # Metadata: version, patches dir, applied list
+    file(WRITE "${QT_WORK_DIR}/.pc/.version" "2\n")
+    file(WRITE "${QT_WORK_DIR}/.pc/.quilt_patches" "patches\n")
+    # No .pc/.quilt_series → fallback search finds .pc/series
+    file(WRITE "${QT_WORK_DIR}/.pc/series" "p.patch\n")
+    file(WRITE "${QT_WORK_DIR}/.pc/applied-patches" "p.patch\n")
+    # patches/ directory intentionally absent
+    qt_assert_not_exists("${QT_WORK_DIR}/patches" "patches/ must not exist before refresh")
+    # refresh should create patches/ and write patches/p.patch
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh should succeed and create patches/")
+    qt_assert_dir_exists("${QT_WORK_DIR}/patches" "refresh should have created patches/")
+    qt_assert_exists("${QT_WORK_DIR}/patches/p.patch" "refresh should have written patch file")
+endfunction()
+
+# top_index_applied_not_in_series: core.cpp line 11
+# QuiltState::top_index() loops through the series looking for the top applied
+# patch. If the top applied patch is NOT in the series (inconsistent state),
+# it falls through to "return -1" at line 11.
+# Triggered by running "quilt new" in a state where applied-patches contains a
+# patch name that is absent from the series file.
+function(qt_scenario_top_index_applied_not_in_series)
+    qt_begin_test("top_index_applied_not_in_series")
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/patches")
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/.pc")
+    # Series: "other.patch" only. Applied: "ghost.patch" (not in series).
+    file(WRITE "${QT_WORK_DIR}/patches/series" "other.patch\n")
+    file(WRITE "${QT_WORK_DIR}/.pc/applied-patches" "ghost.patch\n")
+    file(WRITE "${QT_WORK_DIR}/.pc/.version" "2\n")
+    file(WRITE "${QT_WORK_DIR}/.pc/.quilt_patches" "patches\n")
+    file(WRITE "${QT_WORK_DIR}/.pc/.quilt_series" "series\n")
+    # "quilt new" calls top_index() to find the insertion point.
+    # top_index() searches series for "ghost.patch" and fails → returns -1.
+    # With top_idx == -1, new inserts at the beginning of the series.
+    qt_quilt_ok(ARGS new fresh.patch MESSAGE "new should succeed even with inconsistent state")
+    qt_read_file_raw(series_content "${QT_WORK_DIR}/patches/series")
+    qt_assert_contains("${series_content}" "fresh.patch" "new patch should be in series")
 endfunction()
