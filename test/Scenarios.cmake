@@ -435,6 +435,8 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     push_crlf_patch
     refresh_diffstat_bare_header
     refresh_diffstat_bare_false_positive
+    graph_prune_unreachable_edge
+    graph_empty_backup_files
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -7155,6 +7157,10 @@ function(qt_run_named_scenario scenario)
         qt_scenario_refresh_diffstat_bare_header()
     elseif(scenario STREQUAL "refresh_diffstat_bare_false_positive")
         qt_scenario_refresh_diffstat_bare_false_positive()
+    elseif(scenario STREQUAL "graph_prune_unreachable_edge")
+        qt_scenario_graph_prune_unreachable_edge()
+    elseif(scenario STREQUAL "graph_empty_backup_files")
+        qt_scenario_graph_empty_backup_files()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -8394,3 +8400,73 @@ function(qt_scenario_refresh_diffstat_bare_false_positive)
     qt_assert_equal("${num_changed}" "1" "should have exactly one real diffstat summary")
 endfunction()
 
+# graph_prune_unreachable_edge: cmd_graph.cpp line 504
+# When a specific patch is selected in "quilt graph", the code prunes edges whose
+# source or target is not reachable from the selected patch (line 504: it = edges.erase(it)).
+# This requires two independent conflict groups sharing the same file but at different
+# line regions, so that one group's edge is unreachable from the selected patch.
+# Without the pre-filtering at lines 441-454 (which removes unrelated FILES from nodes),
+# an unreachable edge can only appear when patches share the same file but have
+# non-overlapping changes at different line ranges (requires --lines=N).
+function(qt_scenario_graph_prune_unreachable_edge)
+    qt_begin_test("graph_prune_unreachable_edge")
+    # Create a 15-line file where lines 1 and 10 are in separate regions
+    qt_write_file("${QT_WORK_DIR}/f1.txt"
+        "line01\nline02\nline03\nline04\nline05\nline06\nline07\nline08\nline09\nline10\nline11\nline12\nline13\nline14\nline15\n")
+    # Group 1: patchA and patchB both change line 1 (conflict at line 1)
+    qt_quilt_ok(ARGS new patchA.diff MESSAGE "new patchA failed")
+    qt_quilt_ok(ARGS add f1.txt MESSAGE "add f1 to patchA failed")
+    qt_write_file("${QT_WORK_DIR}/f1.txt"
+        "line01-A\nline02\nline03\nline04\nline05\nline06\nline07\nline08\nline09\nline10\nline11\nline12\nline13\nline14\nline15\n")
+    qt_quilt_ok(ENV "QUILT_NO_DIFF_TIMESTAMPS=1" ARGS refresh MESSAGE "refresh patchA failed")
+    qt_quilt_ok(ARGS new patchB.diff MESSAGE "new patchB failed")
+    qt_quilt_ok(ARGS add f1.txt MESSAGE "add f1 to patchB failed")
+    qt_write_file("${QT_WORK_DIR}/f1.txt"
+        "line01-AB\nline02\nline03\nline04\nline05\nline06\nline07\nline08\nline09\nline10\nline11\nline12\nline13\nline14\nline15\n")
+    qt_quilt_ok(ENV "QUILT_NO_DIFF_TIMESTAMPS=1" ARGS refresh MESSAGE "refresh patchB failed")
+    # Group 2: patchC and patchD both change line 10 (conflict at line 10, no overlap with group 1)
+    qt_quilt_ok(ARGS new patchC.diff MESSAGE "new patchC failed")
+    qt_quilt_ok(ARGS add f1.txt MESSAGE "add f1 to patchC failed")
+    qt_write_file("${QT_WORK_DIR}/f1.txt"
+        "line01-AB\nline02\nline03\nline04\nline05\nline06\nline07\nline08\nline09\nline10-C\nline11\nline12\nline13\nline14\nline15\n")
+    qt_quilt_ok(ENV "QUILT_NO_DIFF_TIMESTAMPS=1" ARGS refresh MESSAGE "refresh patchC failed")
+    qt_quilt_ok(ARGS new patchD.diff MESSAGE "new patchD failed")
+    qt_quilt_ok(ARGS add f1.txt MESSAGE "add f1 to patchD failed")
+    qt_write_file("${QT_WORK_DIR}/f1.txt"
+        "line01-AB\nline02\nline03\nline04\nline05\nline06\nline07\nline08\nline09\nline10-CD\nline11\nline12\nline13\nline14\nline15\n")
+    qt_quilt_ok(ENV "QUILT_NO_DIFF_TIMESTAMPS=1" ARGS refresh MESSAGE "refresh patchD failed")
+    # graph --lines=0 patchB: selects patchB.
+    # With 0 context lines, patchA→patchB conflict at line 1 and patchC→patchD conflict at line 10.
+    # reachable from patchB = {patchA, patchB}. patchC→patchD edge is unreachable → LINE 504.
+    qt_quilt_ok(OUTPUT graph_out ARGS graph --lines=0 patchB.diff
+        MESSAGE "graph --lines=0 patchB failed")
+    qt_assert_contains("${graph_out}" "patchA" "patchA should be in graph (backward-reachable)")
+    qt_assert_contains("${graph_out}" "patchB" "patchB should be in graph (selected)")
+    qt_assert_not_contains("${graph_out}" "patchC" "patchC should be pruned (unreachable edge at line 504)")
+    qt_assert_not_contains("${graph_out}" "patchD" "patchD should be pruned (unreachable edge at line 504)")
+endfunction()
+
+# graph_empty_backup_files: cmd_graph.cpp line 125
+# When compute_ranges is called for a file that is zero-length both before and after
+# a patch (old_path and new_path are both zero-byte files), the function returns early
+# at line 125 without computing a diff. This happens when two patches both tracked an
+# empty file but neither changed its content.
+function(qt_scenario_graph_empty_backup_files)
+    qt_begin_test("graph_empty_backup_files")
+    # Create an empty file
+    qt_write_file("${QT_WORK_DIR}/empty.txt" "")
+    # patchA: add the empty file but make no changes -> backup .pc/patchA/empty.txt = 0 bytes
+    qt_quilt_ok(ARGS new patchA.diff MESSAGE "new patchA failed")
+    qt_quilt_ok(ARGS add empty.txt MESSAGE "add empty.txt to patchA failed")
+    qt_quilt_ok(ENV "QUILT_NO_DIFF_TIMESTAMPS=1" ARGS refresh MESSAGE "refresh patchA failed")
+    # patchB: add the same empty file, still no changes -> backup .pc/patchB/empty.txt = 0 bytes
+    qt_quilt_ok(ARGS new patchB.diff MESSAGE "new patchB failed")
+    qt_quilt_ok(ARGS add empty.txt MESSAGE "add empty.txt to patchB failed")
+    qt_quilt_ok(ENV "QUILT_NO_DIFF_TIMESTAMPS=1" ARGS refresh MESSAGE "refresh patchB failed")
+    # graph --lines patchB.diff: compute_ranges is called for patchA with file=empty.txt.
+    # old_path = .pc/patchA/empty.txt (0 bytes), new_path = .pc/patchB/empty.txt (0 bytes).
+    # Both is_zero_length_file() return true -> line 125 executed (early return).
+    qt_quilt_ok(OUTPUT graph_out ARGS graph --lines patchB.diff
+        MESSAGE "graph --lines patchB failed")
+    qt_assert_contains("${graph_out}" "patchB" "patchB should appear in graph output")
+endfunction()
