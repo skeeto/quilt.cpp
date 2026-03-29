@@ -386,6 +386,9 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     header_strip_ws_empty_line
     files_combine_dash_no_applied
     push_quilt_patch_opts_fuzz
+    builtin_patch_merge_copy_lines
+    builtin_patch_no_newline_context
+    builtin_patch_empty_context_line
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -6998,6 +7001,12 @@ function(qt_run_named_scenario scenario)
         qt_scenario_files_combine_dash_no_applied()
     elseif(scenario STREQUAL "push_quilt_patch_opts_fuzz")
         qt_scenario_push_quilt_patch_opts_fuzz()
+    elseif(scenario STREQUAL "builtin_patch_merge_copy_lines")
+        qt_scenario_builtin_patch_merge_copy_lines()
+    elseif(scenario STREQUAL "builtin_patch_no_newline_context")
+        qt_scenario_builtin_patch_no_newline_context()
+    elseif(scenario STREQUAL "builtin_patch_empty_context_line")
+        qt_scenario_builtin_patch_empty_context_line()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -7179,4 +7188,64 @@ function(qt_scenario_push_quilt_patch_opts_fuzz)
         MESSAGE "push with QUILT_PATCH_OPTS=--fuzz=2 failed"
     )
     qt_assert_file_text("${QT_WORK_DIR}/f.txt" "line1\nMODIFIED\nline3" "push should apply patch with fuzz")
+endfunction()
+
+# builtin_patch_merge_copy_lines: merge mode where successful hunk has file lines
+# before it (last_copied < pos) and remaining lines after all hunks.
+# Covers patch.cpp build_merge_output lines 522-523 and 590-594.
+function(qt_scenario_builtin_patch_merge_copy_lines)
+    qt_begin_test("builtin_patch_merge_copy_lines")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nb\nc\nd\ne\nf\ng\nh\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    # Change lines b and f, then refresh with zero context
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nB\nc\nd\ne\nF\ng\nh\n")
+    qt_quilt_ok(ARGS refresh -U 0 MESSAGE "refresh -U 0 failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # Corrupt line b so hunk1 fails, keep line f so hunk2 succeeds
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nX\nc\nd\ne\nf\ng\nh\n")
+    # push --merge -f: hunk1 (b->B) fails, hunk2 (f->F) succeeds
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --merge -f)
+    # Hunk2 succeeded: F should be in result
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "F" "successful hunk should be applied")
+    # Hunk1 failed: conflict markers should be present
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "<<<<<<< current" "rejected hunk should produce conflict")
+    # Trailing lines g, h should still be present
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "g" "trailing lines should be preserved")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "h" "trailing lines should be preserved")
+endfunction()
+
+# builtin_patch_no_newline_context: "\ No newline" marker after a context line
+# covers patch.cpp line 181 (hunk.old_no_newline = hunk.new_no_newline = true)
+# When both old and new sides of a file lack trailing newline and the last hunk
+# line is a context (' ') line, diff puts "\ No newline" after it.
+function(qt_scenario_builtin_patch_no_newline_context)
+    qt_begin_test("builtin_patch_no_newline_context")
+    # Write file without trailing newline so diff produces "\ No newline" after
+    # the final context line (covers patch.cpp:181)
+    file(WRITE "${QT_WORK_DIR}/f.txt" "line1\nline2")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    # Change first line; keep no trailing newline; last context line is "line2"
+    file(WRITE "${QT_WORK_DIR}/f.txt" "LINE1\nline2")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_quilt_ok(ARGS push MESSAGE "push with no-newline context patch should succeed")
+    qt_read_file_raw(content "${QT_WORK_DIR}/f.txt")
+    qt_assert_contains("${content}" "LINE1" "push should apply the change")
+endfunction()
+
+# builtin_patch_empty_context_line: empty line in diff body treated as context line
+# covers patch.cpp lines 189-196
+function(qt_scenario_builtin_patch_empty_context_line)
+    qt_begin_test("builtin_patch_empty_context_line")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "before\n\nafter\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    # Write a patch where the empty context line has its space stripped (bare empty line)
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n before\n\n-after\n+AFTER\n")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_quilt_ok(ARGS push MESSAGE "push with stripped empty context should succeed")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "AFTER" "patch with stripped empty context should apply")
 endfunction()
