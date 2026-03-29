@@ -388,6 +388,12 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     diff_external_context_no_newline
     diff_external_quilt_diff_opts
     revert_subdir
+    builtin_diff_both_empty
+    builtin_diff_trailing_newline_only
+    quiltrc_leading_whitespace
+    series_comment_inline
+    series_p_space
+    init_from_subdir
     shell_split_single_quotes
     shell_split_double_quotes
     shell_split_var_expansion
@@ -7064,6 +7070,18 @@ function(qt_run_named_scenario scenario)
         qt_scenario_diff_external_quilt_diff_opts()
     elseif(scenario STREQUAL "revert_subdir")
         qt_scenario_revert_subdir()
+    elseif(scenario STREQUAL "builtin_diff_both_empty")
+        qt_scenario_builtin_diff_both_empty()
+    elseif(scenario STREQUAL "builtin_diff_trailing_newline_only")
+        qt_scenario_builtin_diff_trailing_newline_only()
+    elseif(scenario STREQUAL "quiltrc_leading_whitespace")
+        qt_scenario_quiltrc_leading_whitespace()
+    elseif(scenario STREQUAL "series_comment_inline")
+        qt_scenario_series_comment_inline()
+    elseif(scenario STREQUAL "series_p_space")
+        qt_scenario_series_p_space()
+    elseif(scenario STREQUAL "init_from_subdir")
+        qt_scenario_init_from_subdir()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -7675,4 +7693,113 @@ function(qt_scenario_revert_subdir)
     # → make_dirs("subdir") called (line 1788) before writing the restored file
     qt_quilt_ok(ARGS revert subdir/f.txt MESSAGE "revert should create parent directory")
     qt_assert_file_text("${QT_WORK_DIR}/subdir/f.txt" "original" "revert should restore original content")
+endfunction()
+
+# builtin_diff_both_empty: diff.cpp line 66 (myers_diff n==0, m==0 trivial case)
+# Triggered when both old and new files have zero lines (0-byte files).
+function(qt_scenario_builtin_diff_both_empty)
+    qt_begin_test("builtin_diff_both_empty")
+    # Create 0-byte file and add to patch
+    qt_write_file("${QT_WORK_DIR}/empty.txt" "")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add empty.txt MESSAGE "add failed")
+    # Do NOT modify empty.txt — backup=0 bytes, working=0 bytes
+    # quilt diff calls builtin_diff(backup, current) → myers_diff([], []) → line 66
+    qt_quilt(RESULT rc OUTPUT diff_out ERROR diff_err ARGS diff)
+    qt_assert_success("${rc}" "diff of two empty files should succeed")
+    qt_assert_equal("${diff_out}" "" "two empty files should produce no diff output")
+endfunction()
+
+# builtin_diff_trailing_newline_only: diff.cpp line 482
+# Triggered when content is identical but trailing-newline status differs.
+function(qt_scenario_builtin_diff_trailing_newline_only)
+    qt_begin_test("builtin_diff_trailing_newline_only")
+    # Create file with trailing newline
+    qt_write_file("${QT_WORK_DIR}/f.txt" "content\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    # Change to same content but WITHOUT trailing newline
+    # backup="content\n", working="content" (no newline)
+    # myers_diff produces all 'E' ops (same content), but has_trailing_newline differs
+    # → line 482 sets has_diff=true
+    qt_write_file("${QT_WORK_DIR}/f.txt" "content")
+    qt_quilt(RESULT rc OUTPUT diff_out ERROR diff_err ARGS diff)
+    qt_assert_success("${rc}" "trailing-newline-only diff should succeed")
+    # Output has file headers (--- and +++) but no hunk body (content is identical)
+    # The Index: line confirms the diff was generated (has_diff=true from line 482)
+    qt_assert_contains("${diff_out}" "---" "diff should show old-file header")
+    qt_assert_contains("${diff_out}" "+++" "diff should show new-file header")
+endfunction()
+
+# quiltrc_leading_whitespace: core.cpp line 358 (trim leading whitespace in quiltrc lines)
+# Triggered when a quiltrc line has leading whitespace before KEY=value.
+function(qt_scenario_quiltrc_leading_whitespace)
+    qt_begin_test("quiltrc_leading_whitespace")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "old\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "new\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # Write quiltrc with leading whitespace before QUILT_PATCHES_PREFIX=1
+    # parse_quiltrc strips leading whitespace (line 358) before parsing the assignment
+    qt_write_file("${QT_TEST_BASE}/.quiltrc" "  QUILT_PATCHES_PREFIX=1\n")
+    # Run quilt series: reads quiltrc, parses "  QUILT_PATCHES_PREFIX=1"
+    # → strips leading spaces (line 358) → sets QUILT_PATCHES_PREFIX=1
+    qt_quilt_ok(OUTPUT series_out ARGS series MESSAGE "series failed")
+    qt_assert_contains("${series_out}" "patches/" "QUILT_PATCHES_PREFIX=1 should prefix series output")
+endfunction()
+
+# series_comment_inline: core.cpp line 239 (trim inline comment from series entry)
+# Triggered when a series file line has " #comment" after the patch name.
+function(qt_scenario_series_comment_inline)
+    qt_begin_test("series_comment_inline")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # Rewrite series with inline comment: "p.patch # this is a comment"
+    # read_series parses this: finds " #" at position after name → line 239 strips comment
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.patch # this is a comment\n")
+    qt_quilt_ok(OUTPUT series_out ARGS series MESSAGE "series with comment failed")
+    qt_assert_contains("${series_out}" "p.patch" "series should contain patch name")
+    qt_assert_not_contains("${series_out}" "#" "series output should not contain comment")
+    qt_quilt_ok(ARGS push MESSAGE "push after series with comment failed")
+endfunction()
+
+# series_p_space: core.cpp lines 250-251 (-p <space> num in series file, space-separated)
+# Triggered when series entry has "-p 0" with space between flag and value.
+function(qt_scenario_series_p_space)
+    qt_begin_test("series_p_space")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # Rewrite series with "-p 0" (space between -p and strip level)
+    # This triggers the split-token case at core.cpp lines 250-251
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.patch -p 0\n")
+    # Rewrite the patch with p0 paths (no "a/" prefix)
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch"
+        "--- f.txt\n+++ f.txt\n@@ -1 +1 @@\n-x\n+y\n")
+    qt_quilt_ok(ARGS push MESSAGE "push with -p 0 in series should work")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "y" "patch with -p 0 should apply")
+endfunction()
+
+# init_from_subdir: core.cpp line 1129 (set_cwd back after init when load_state changed cwd)
+# Triggered when quilt init is run from a subdirectory of an existing quilt project.
+function(qt_scenario_init_from_subdir)
+    qt_begin_test("init_from_subdir")
+    # Set up an existing project (creates .pc/ and patches/)
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # Create a subdirectory
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/subdir")
+    # Run quilt init from the subdirectory:
+    # load_state() finds .pc/ in parent → changes cwd to parent
+    # cmd_init runs → line 1129: restores cwd back to subdir
+    qt_quilt_ok(WORKING_DIRECTORY "${QT_WORK_DIR}/subdir"
+        ARGS init MESSAGE "init from subdir should succeed")
 endfunction()
