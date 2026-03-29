@@ -432,6 +432,7 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     refresh_diffstat_double_newline
     refresh_creates_patches_dir
     top_index_applied_not_in_series
+    push_crlf_patch
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -7139,6 +7140,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_refresh_creates_patches_dir()
     elseif(scenario STREQUAL "top_index_applied_not_in_series")
         qt_scenario_top_index_applied_not_in_series()
+    elseif(scenario STREQUAL "push_crlf_patch")
+        qt_scenario_push_crlf_patch()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -8270,6 +8273,26 @@ function(qt_scenario_refresh_creates_patches_dir)
     qt_quilt_ok(ARGS refresh MESSAGE "refresh should succeed and create patches/")
     qt_assert_dir_exists("${QT_WORK_DIR}/patches" "refresh should have created patches/")
     qt_assert_exists("${QT_WORK_DIR}/patches/p.patch" "refresh should have written patch file")
+endfunction()
+
+# push_crlf_patch: patch.cpp line 69
+# parse_filename strips trailing \r from file paths, enabling CRLF-format patches
+# (Windows line endings) to apply correctly on Linux.
+# Triggered when the +++ line in a patch has \r before \n (CRLF line endings).
+function(qt_scenario_push_crlf_patch)
+    qt_begin_test("push_crlf_patch")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "old\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # Write a patch where the --- and +++ header lines have CRLF endings (\r\n).
+    # parse_filename in patch.cpp strips the \r from the filename via the while loop
+    # at line 68-70: while (!rest.empty() && rest.back() == '\r') rest = rest.substr(...)
+    # Content lines use normal LF so they match the file content.
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch"
+        "--- a/f.txt\r\n+++ b/f.txt\r\n@@ -1 +1 @@\n-old\n+new\n")
+    qt_quilt_ok(ARGS push MESSAGE "push with CRLF patch should succeed")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "new" "CRLF patch should apply correctly")
 endfunction()
 
 # top_index_applied_not_in_series: core.cpp line 11
