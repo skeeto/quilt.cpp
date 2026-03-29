@@ -219,6 +219,9 @@ set(QUILT_TEST_SCENARIOS
     import_after_applied
     delete_bad_option
     delete_no_patch
+    delete_topmost
+    upgrade_help
+    upgrade_bad_option
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -321,6 +324,9 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     diff_z_subdir
     diff_snapshot_shadow
     fold_patch_opts
+    fold_force
+    fold_force_env
+    header_backup_append
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -5246,6 +5252,35 @@ function(qt_scenario_delete_no_patch)
     qt_assert_contains("${combined}" "No patch applied" "should report no patch applied")
 endfunction()
 
+function(qt_scenario_delete_topmost)
+    qt_begin_test("delete_topmost")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    # delete with no args while p.patch is applied: uses q.applied.back() (line 176)
+    qt_quilt_ok(OUTPUT out ERROR err ARGS delete MESSAGE "delete topmost failed")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Removed" "delete topmost should confirm removal")
+endfunction()
+
+function(qt_scenario_upgrade_help)
+    qt_begin_test("upgrade_help")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS upgrade --help MESSAGE "upgrade --help failed")
+    qt_assert_contains("${out}" "Usage" "upgrade --help should show usage")
+endfunction()
+
+function(qt_scenario_upgrade_bad_option)
+    qt_begin_test("upgrade_bad_option")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS upgrade --bad-opt)
+    qt_assert_failure("${rc}" "upgrade with bad option should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "--bad-opt" "upgrade should mention bad option")
+endfunction()
+
 function(qt_scenario_fold_patch_opts)
     qt_begin_test("fold_patch_opts")
     qt_write_file("${QT_WORK_DIR}/f.txt" "new\n")
@@ -5355,6 +5390,57 @@ function(qt_scenario_diff_z_external)
     # diff -z --diff=diff uses the external diff path in since_refresh (lines 1621-1633)
     qt_quilt_ok(OUTPUT diff_out ERROR diff_err ARGS diff -z "--diff=diff" MESSAGE "diff -z --diff=diff failed")
     qt_assert_contains("${diff_out}" "v3" "diff -z external should show current changes")
+endfunction()
+
+function(qt_scenario_fold_force)
+    qt_begin_test("fold_force")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    # -f flag in fold: covers line 890 (opt_force = true)
+    qt_quilt_ok(
+        ARGS fold -f
+        INPUT [=[--- a/f.txt
++++ b/f.txt
+@@ -1 +1 @@
+-x
++y
+]=]
+        MESSAGE "fold -f failed"
+    )
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "y" "fold -f should apply")
+endfunction()
+
+function(qt_scenario_fold_force_env)
+    qt_begin_test("fold_force_env")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    # QUILT_PATCH_OPTS=-f: covers fold env parsing branch for -f (line 937)
+    qt_quilt_ok(
+        ENV "QUILT_PATCH_OPTS=-f"
+        ARGS fold
+        INPUT [=[--- a/f.txt
++++ b/f.txt
+@@ -1 +1 @@
+-x
++y
+]=]
+        MESSAGE "fold with QUILT_PATCH_OPTS=-f failed"
+    )
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "y" "fold with QUILT_PATCH_OPTS=-f should apply")
+endfunction()
+
+function(qt_scenario_header_backup_append)
+    qt_begin_test("header_backup_append")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # Append header with backup: covers line 634 (copy_file in APPEND mode with --backup)
+    qt_quilt_ok(ARGS header -a --backup INPUT "Appended header\n" MESSAGE "header -a --backup failed")
+    qt_assert_exists("${QT_WORK_DIR}/patches/p.patch~" "backup file should exist after -a --backup")
 endfunction()
 
 function(qt_scenario_diff_z_reverse)
@@ -6015,6 +6101,12 @@ function(qt_run_named_scenario scenario)
         qt_scenario_diff_snapshot_shadow()
     elseif(scenario STREQUAL "fold_patch_opts")
         qt_scenario_fold_patch_opts()
+    elseif(scenario STREQUAL "fold_force")
+        qt_scenario_fold_force()
+    elseif(scenario STREQUAL "fold_force_env")
+        qt_scenario_fold_force_env()
+    elseif(scenario STREQUAL "header_backup_append")
+        qt_scenario_header_backup_append()
     elseif(scenario STREQUAL "header_no_patch_applied")
         qt_scenario_header_no_patch_applied()
     elseif(scenario STREQUAL "header_empty_series")
@@ -6035,6 +6127,12 @@ function(qt_run_named_scenario scenario)
         qt_scenario_delete_bad_option()
     elseif(scenario STREQUAL "delete_no_patch")
         qt_scenario_delete_no_patch()
+    elseif(scenario STREQUAL "delete_topmost")
+        qt_scenario_delete_topmost()
+    elseif(scenario STREQUAL "upgrade_help")
+        qt_scenario_upgrade_help()
+    elseif(scenario STREQUAL "upgrade_bad_option")
+        qt_scenario_upgrade_bad_option()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
