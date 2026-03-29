@@ -209,7 +209,7 @@ function(qt_quilt)
     list(APPEND wrapped_command ${command})
 
     set(input_file)
-    if(DEFINED QT_INPUT AND NOT QT_INPUT STREQUAL "")
+    if(DEFINED QT_INPUT)
         string(RANDOM LENGTH 8 ALPHABET 0123456789abcdef input_suffix)
         get_property(test_base GLOBAL PROPERTY QT_TEST_BASE)
         if(NOT DEFINED test_base OR test_base STREQUAL "")
