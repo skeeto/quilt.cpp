@@ -413,6 +413,19 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     header_no_patch_applied
     header_empty_series
     pop_target_already_top
+    diff_builtin_context_no_newline
+    mail_ten_patches
+    graph_dot_escape
+    graph_lines_identical_content
+    graph_patch_prunes_unrelated
+    graph_empty_series
+    quiltrc_export_extra_space
+    quiltrc_explicit_empty
+    refresh_diffstat_twice
+    refresh_diffstat_header_replace
+    series_in_pc_dir
+    series_leading_space_no_newline
+    header_replace_no_newline
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -7082,6 +7095,32 @@ function(qt_run_named_scenario scenario)
         qt_scenario_series_p_space()
     elseif(scenario STREQUAL "init_from_subdir")
         qt_scenario_init_from_subdir()
+    elseif(scenario STREQUAL "diff_builtin_context_no_newline")
+        qt_scenario_diff_builtin_context_no_newline()
+    elseif(scenario STREQUAL "mail_ten_patches")
+        qt_scenario_mail_ten_patches()
+    elseif(scenario STREQUAL "graph_dot_escape")
+        qt_scenario_graph_dot_escape()
+    elseif(scenario STREQUAL "graph_lines_identical_content")
+        qt_scenario_graph_lines_identical_content()
+    elseif(scenario STREQUAL "graph_patch_prunes_unrelated")
+        qt_scenario_graph_patch_prunes_unrelated()
+    elseif(scenario STREQUAL "graph_empty_series")
+        qt_scenario_graph_empty_series()
+    elseif(scenario STREQUAL "quiltrc_export_extra_space")
+        qt_scenario_quiltrc_export_extra_space()
+    elseif(scenario STREQUAL "quiltrc_explicit_empty")
+        qt_scenario_quiltrc_explicit_empty()
+    elseif(scenario STREQUAL "refresh_diffstat_twice")
+        qt_scenario_refresh_diffstat_twice()
+    elseif(scenario STREQUAL "refresh_diffstat_header_replace")
+        qt_scenario_refresh_diffstat_header_replace()
+    elseif(scenario STREQUAL "series_in_pc_dir")
+        qt_scenario_series_in_pc_dir()
+    elseif(scenario STREQUAL "series_leading_space_no_newline")
+        qt_scenario_series_leading_space_no_newline()
+    elseif(scenario STREQUAL "header_replace_no_newline")
+        qt_scenario_header_replace_no_newline()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -7802,4 +7841,304 @@ function(qt_scenario_init_from_subdir)
     # cmd_init runs → line 1129: restores cwd back to subdir
     qt_quilt_ok(WORKING_DIRECTORY "${QT_WORK_DIR}/subdir"
         ARGS init MESSAGE "init from subdir should succeed")
+endfunction()
+
+# diff_builtin_context_no_newline: diff.cpp lines 419 and 440
+# format_context outputs "\ No newline at end of file" when old or new file lacks trailing newline.
+# Triggered by quilt diff -c (builtin context format, NOT --diff=diff external).
+function(qt_scenario_diff_builtin_context_no_newline)
+    qt_begin_test("diff_builtin_context_no_newline")
+    # Create file without trailing newline
+    qt_write_file("${QT_WORK_DIR}/f.txt" "old")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    # Also change to content without trailing newline
+    qt_write_file("${QT_WORK_DIR}/f.txt" "new")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # -c uses builtin context diff (format_context in diff.cpp)
+    # Both old ("old") and new ("new") lack trailing newline →
+    # lines 419 and 440 both append "\ No newline at end of file"
+    qt_quilt_ok(OUTPUT diff_out ERROR diff_err ARGS diff -c MESSAGE "diff -c failed")
+    qt_assert_contains("${diff_out}" "***" "context diff should have *** markers")
+    qt_assert_contains("${diff_out}" "No newline" "context diff should note missing newline")
+endfunction()
+
+# graph_dot_escape: cmd_graph.cpp lines 50-51 (dot_escape handles \ and " characters)
+# Triggered when a patch name contains " which must be escaped in dot(1) output.
+# The quilt state is created manually (bypassing quilt new) because cmake -E chdir
+# cannot pass " or \ in arguments due to shell escaping limitations.
+function(qt_scenario_graph_dot_escape)
+    qt_begin_test("graph_dot_escape")
+    # Manually create quilt state with a patch name containing " (double-quote).
+    # dot_escape("pa\"tch.diff") hits lines 50-51: escaped += '\\'; escaped += '"'
+    set(patchname "pa\"tch.diff")
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/patches")
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/.pc")
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/.pc/${patchname}")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "${patchname}\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/applied-patches" "${patchname}\n")
+    # Back up f.txt (original state before patch was applied)
+    qt_write_file("${QT_WORK_DIR}/.pc/${patchname}/f.txt" "original\n")
+    # Write the patch file (simple modification)
+    qt_write_file("${QT_WORK_DIR}/patches/${patchname}"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-original\n+modified\n")
+    # f.txt reflects the applied state
+    qt_write_file("${QT_WORK_DIR}/f.txt" "modified\n")
+    qt_quilt_ok(OUTPUT graph_out ARGS graph MESSAGE "graph failed")
+    # dot output should escape the " in the label as \"
+    # needle: pa\"tch.diff (the patch name with " escaped to \")
+    qt_assert_contains("${graph_out}" "pa\\\"tch.diff" "dot label should escape double-quote")
+endfunction()
+
+# graph_lines_identical_content: cmd_graph.cpp line 133 (compute_ranges: diff exit_code==0)
+# Triggered when two patches share a file but patchA makes no actual change to it,
+# so the backup before patchB is identical to the backup before patchA → diff returns 0.
+function(qt_scenario_graph_lines_identical_content)
+    qt_begin_test("graph_lines_identical_content")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "original\n")
+    # patchA: track f.txt but refresh with NO changes (empty patch body for f.txt)
+    qt_quilt_ok(ARGS new patchA.diff MESSAGE "new patchA failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add patchA failed")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh patchA (no changes) failed")
+    # patchB: actually modify f.txt
+    qt_quilt_ok(ARGS new patchB.diff MESSAGE "new patchB failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add patchB failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "modified\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh patchB failed")
+    # graph --lines: calls compute_ranges for both patches.
+    # patchA's backup = "original\n", patchB's backup (next node) = "original\n" (patchA didn't change it).
+    # builtin_diff("original\n", "original\n") returns exit_code=0 → line 133: return early.
+    qt_quilt_ok(OUTPUT graph_out ARGS graph --lines 2 MESSAGE "graph --lines failed")
+    qt_assert_contains("${graph_out}" "digraph" "should produce dot output")
+endfunction()
+
+# graph_patch_prunes_unrelated: cmd_graph.cpp line 504 (edge erased for non-reachable nodes)
+# Triggered when quilt graph <patch> is run and there are independent patches (not connected
+# to the selected patch via shared files) — their edges get pruned from the output.
+function(qt_scenario_graph_patch_prunes_unrelated)
+    qt_begin_test("graph_patch_prunes_unrelated")
+    # Group 1: patchA and patchB share f1.txt
+    qt_write_file("${QT_WORK_DIR}/f1.txt" "f1-original\n")
+    qt_quilt_ok(ARGS new patchA.diff MESSAGE "new patchA failed")
+    qt_quilt_ok(ARGS add f1.txt MESSAGE "add patchA failed")
+    qt_write_file("${QT_WORK_DIR}/f1.txt" "f1-after-A\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh patchA failed")
+    qt_quilt_ok(ARGS new patchB.diff MESSAGE "new patchB failed")
+    qt_quilt_ok(ARGS add f1.txt MESSAGE "add patchB failed")
+    qt_write_file("${QT_WORK_DIR}/f1.txt" "f1-after-B\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh patchB failed")
+    # Group 2: patchC and patchD share f2.txt (completely independent of f1.txt)
+    qt_write_file("${QT_WORK_DIR}/f2.txt" "f2-original\n")
+    qt_quilt_ok(ARGS new patchC.diff MESSAGE "new patchC failed")
+    qt_quilt_ok(ARGS add f2.txt MESSAGE "add patchC failed")
+    qt_write_file("${QT_WORK_DIR}/f2.txt" "f2-after-C\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh patchC failed")
+    qt_quilt_ok(ARGS new patchD.diff MESSAGE "new patchD failed")
+    qt_quilt_ok(ARGS add f2.txt MESSAGE "add patchD failed")
+    qt_write_file("${QT_WORK_DIR}/f2.txt" "f2-after-D\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh patchD failed")
+    # Run graph for patchB: only patchA→patchB edge is reachable.
+    # patchC→patchD edge is NOT reachable from patchB → it is erased (line 504).
+    qt_quilt_ok(OUTPUT graph_out ARGS graph patchB.diff MESSAGE "graph patchB failed")
+    qt_assert_contains("${graph_out}" "patchA" "patchA should be in output (reachable)")
+    qt_assert_contains("${graph_out}" "patchB" "patchB should be in output (selected)")
+    qt_assert_not_contains("${graph_out}" "patchC" "patchC should not be in output (unrelated)")
+    qt_assert_not_contains("${graph_out}" "patchD" "patchD should not be in output (unrelated)")
+endfunction()
+
+# graph_empty_series: cmd_graph.cpp line 391 (No patches in series)
+# Triggered when graph is run and the series file exists but has no patches.
+function(qt_scenario_graph_empty_series)
+    qt_begin_test("graph_empty_series")
+    # quilt init creates an empty series file and .pc/ directory
+    qt_quilt_ok(ARGS init MESSAGE "init failed")
+    # Series file exists but no patches → q.series.empty() → line 391
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS graph)
+    qt_assert_failure("${rc}" "graph with empty series should fail")
+    qt_assert_contains("${err}" "No patches in series" "should say no patches in series")
+endfunction()
+
+# mail_ten_patches: cmd_mail.cpp lines 119 (num_width returns 2 for 10-99 patches)
+# Triggered when there are >= 10 patches, causing zero-padded numbers like [PATCH 01/10].
+function(qt_scenario_mail_ten_patches)
+    qt_begin_test("mail_ten_patches")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "line0\n")
+    # Create 10 patches so num_width(10) hits line 119: n < 100 → return 2
+    foreach(n 1 2 3 4 5 6 7 8 9 10)
+        qt_quilt_ok(ARGS new "p${n}.patch" MESSAGE "new p${n} failed")
+        qt_quilt_ok(ARGS add f.txt MESSAGE "add p${n} failed")
+        qt_write_file("${QT_WORK_DIR}/f.txt" "line${n}\n")
+        qt_quilt_ok(ARGS refresh MESSAGE "refresh p${n} failed")
+    endforeach()
+    set(mbox_path "${QT_TEST_BASE}/out.mbox")
+    qt_quilt_ok(ARGS mail --mbox "${mbox_path}" --from "user@example.com"
+        MESSAGE "mail failed")
+    qt_assert_exists("${mbox_path}" "mbox should be created")
+    file(READ "${mbox_path}" mbox_content)
+    # With 10 patches, subject format uses 2-digit numbering (num_width returns 2)
+    qt_assert_contains("${mbox_content}" "01/10" "should have 2-digit patch numbering")
+endfunction()
+
+# quiltrc_export_extra_space: core.cpp lines 364-365
+# parse_quiltrc with "export  KEY=VALUE" (two spaces after "export") hits the
+# inner while loop that strips extra whitespace after "export ".
+function(qt_scenario_quiltrc_export_extra_space)
+    qt_begin_test("quiltrc_export_extra_space")
+    # Set up a minimal quilt state
+    qt_write_file("${QT_WORK_DIR}/f.txt" "hello\n")
+    qt_quilt_ok(ARGS new test.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # Write a quiltrc with "export  QUILT_PATCHES_PREFIX=1" (extra space after "export")
+    # parse_quiltrc: finds sv.substr(0,7)=="export ", removes prefix 7,
+    # then the inner while (!sv.empty() && sv.front()==' ') hits line 365.
+    get_property(test_base GLOBAL PROPERTY QT_TEST_BASE)
+    qt_write_file("${test_base}/.quiltrc" "export  QUILT_PATCHES_PREFIX=1\n")
+    # Run series; the quiltrc is loaded from HOME/.quiltrc and sets prefix
+    qt_quilt_ok(OUTPUT series_out ARGS series MESSAGE "series failed")
+    qt_assert_contains("${series_out}" "patches/" "prefix should be applied when QUILT_PATCHES_PREFIX=1")
+endfunction()
+
+# quiltrc_explicit_empty: core.cpp line 428
+# load_quiltrc with an explicit non-empty path that points to an empty/nonexistent file
+# hits the "return {}" on line 428 rather than calling parse_quiltrc.
+function(qt_scenario_quiltrc_explicit_empty)
+    qt_begin_test("quiltrc_explicit_empty")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "hello\n")
+    qt_quilt_ok(ARGS new test.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # Write an empty quiltrc file and pass it explicitly via --quiltrc
+    get_property(test_base GLOBAL PROPERTY QT_TEST_BASE)
+    set(empty_rc "${test_base}/empty.quiltrc")
+    qt_write_file("${empty_rc}" "")
+    # --quiltrc with an empty file → read_file returns "" → line 428: return {}
+    qt_quilt_ok(OUTPUT series_out ARGS --quiltrc "${empty_rc}" series
+        MESSAGE "series with empty quiltrc failed")
+    # No QUILT_PATCHES_PREFIX set → bare patch name (no patches/ prefix)
+    qt_assert_not_contains("${series_out}" "patches/" "empty quiltrc should not set prefix")
+    qt_assert_contains("${series_out}" "test.patch" "series output should list patch")
+endfunction()
+
+# refresh_diffstat_twice: cmd_patch.cpp remove_diffstat_section lines 921,926,928-936,942,944,946-948
+# Running quilt refresh --diffstat twice causes the second call to remove the
+# existing diffstat from the header before regenerating it, covering the
+# remove_diffstat_section code path.
+function(qt_scenario_refresh_diffstat_twice)
+    qt_begin_test("refresh_diffstat_twice")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "original\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "first change\n")
+    # First --diffstat refresh: generates ---\n<diffstat>\n\n in header
+    qt_quilt_ok(ARGS refresh --diffstat MESSAGE "first refresh --diffstat failed")
+    # Verify diffstat was added
+    qt_assert_exists("${QT_WORK_DIR}/patches/p.patch" "patch file should exist")
+    file(READ "${QT_WORK_DIR}/patches/p.patch" patch1)
+    qt_assert_contains("${patch1}" "---" "first refresh should add diffstat separator")
+    qt_assert_contains("${patch1}" "changed" "first refresh should add diffstat summary")
+    # Modify file and run --diffstat refresh again
+    # This triggers remove_diffstat_section to strip the old ---/diffstat block
+    qt_write_file("${QT_WORK_DIR}/f.txt" "second change\n")
+    qt_quilt_ok(ARGS refresh --diffstat MESSAGE "second refresh --diffstat failed")
+    file(READ "${QT_WORK_DIR}/patches/p.patch" patch2)
+    qt_assert_contains("${patch2}" "changed" "second refresh should have updated diffstat")
+    # Should only have one diffstat block (old one removed, new one added)
+    string(REGEX MATCHALL "file changed" count_matches "${patch2}")
+    list(LENGTH count_matches num_changed)
+    qt_assert_equal("${num_changed}" "1" "should have exactly one diffstat summary line")
+endfunction()
+
+# refresh_diffstat_header_replace: cmd_patch.cpp line 1239 (clean_header.pop_back)
+# When the patch has a description before the diffstat, remove_diffstat_section
+# returns the description with a trailing blank line. The pop_back loop strips it.
+function(qt_scenario_refresh_diffstat_header_replace)
+    qt_begin_test("refresh_diffstat_header_replace")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "original\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "changed\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "initial refresh failed")
+    # Add a description to the patch header via quilt header -a
+    qt_quilt_ok(ARGS header -a INPUT "This patch changes stuff.\n"
+        MESSAGE "header -a failed")
+    # Verify header was set
+    qt_quilt_ok(OUTPUT hdr_out ARGS header MESSAGE "header read failed")
+    qt_assert_contains("${hdr_out}" "This patch changes stuff" "header should have description")
+    # First --diffstat: creates ---\ndiffstat\n\n appended after description
+    qt_quilt_ok(ARGS refresh --diffstat MESSAGE "first refresh --diffstat failed")
+    # Modify file and do second --diffstat refresh
+    # remove_diffstat_section returns "This patch changes stuff.\n\n"
+    # The pop_back loop (line 1239) strips the trailing blank line
+    qt_write_file("${QT_WORK_DIR}/f.txt" "changed again\n")
+    qt_quilt_ok(ARGS refresh --diffstat MESSAGE "second refresh --diffstat failed")
+    file(READ "${QT_WORK_DIR}/patches/p.patch" patch_content)
+    qt_assert_contains("${patch_content}" "This patch changes stuff" "description should be preserved")
+    qt_assert_contains("${patch_content}" "changed" "diffstat should be present")
+    # Only one diffstat summary
+    string(REGEX MATCHALL "file changed" count_matches "${patch_content}")
+    list(LENGTH count_matches num_changed)
+    qt_assert_equal("${num_changed}" "1" "should have exactly one diffstat summary line")
+endfunction()
+
+# series_in_pc_dir: core.cpp line 509
+# When no patches/series file exists but .pc/series does, the series file
+# search order sets series_file to ".pc/series" (quilt v1 legacy layout).
+function(qt_scenario_series_in_pc_dir)
+    qt_begin_test("series_in_pc_dir")
+    # Manually create a quilt state with the series file at .pc/series
+    # (no patches/series and no .pc/.quilt_series override)
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/.pc")
+    qt_write_file("${QT_WORK_DIR}/.pc/series" "p.patch\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/applied-patches" "")
+    # Do NOT create patches/series or .pc/.quilt_patches or .pc/.quilt_series
+    # When quilt loads state:
+    #   s1 = <work_dir>/series          (doesn't exist)
+    #   s2 = <work_dir>/patches/series  (doesn't exist)
+    #   s3 = <work_dir>/.pc/series      (exists!) → line 509
+    qt_quilt_ok(OUTPUT series_out ARGS series MESSAGE "series failed")
+    qt_assert_contains("${series_out}" "p.patch" "series should list patch from .pc/series")
+endfunction()
+
+# series_leading_space_no_newline: core.cpp lines 105, 117-118
+# A series file with a leading-space patch entry triggers trim()'s
+# leading-whitespace strip (line 105). A file without a trailing newline
+# triggers split_lines()'s no-newline path (lines 117-118).
+function(qt_scenario_series_leading_space_no_newline)
+    qt_begin_test("series_leading_space_no_newline")
+    # Create minimal quilt state with a series file that:
+    #  - Has a patch entry with leading whitespace → trim() line 105
+    #  - Has NO trailing newline → split_lines() lines 117-118
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/patches")
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/.pc")
+    # Write "  p.patch" with no trailing newline (FILE() appends nothing)
+    file(WRITE "${QT_WORK_DIR}/patches/series" "  p.patch")
+    file(WRITE "${QT_WORK_DIR}/.pc/applied-patches" "")
+    # Create a dummy patch file so series command can find it
+    file(WRITE "${QT_WORK_DIR}/patches/p.patch" "")
+    # Run series — it reads the series file which has leading-space + no-newline
+    qt_quilt_ok(OUTPUT series_out ARGS series MESSAGE "series failed")
+    qt_assert_contains("${series_out}" "p.patch" "series should list p.patch (trim leading space)")
+endfunction()
+
+# header_replace_no_newline: cmd_manage.cpp line 97
+# replace_header() adds a trailing '\n' when new_header doesn't end with one.
+# Triggered by "quilt header -r" with stdin that lacks a trailing newline.
+function(qt_scenario_header_replace_no_newline)
+    qt_begin_test("header_replace_no_newline")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "original\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "changed\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # Replace the header with a string that does NOT end with a newline.
+    # replace_header() checks: if (!result.empty() && result.back() != '\n')
+    #   result += '\n';    (line 97 in cmd_manage.cpp)
+    qt_quilt_ok(ARGS header -r INPUT "my description without newline"
+        MESSAGE "header -r failed")
+    qt_quilt_ok(OUTPUT hdr_out ARGS header MESSAGE "header read failed")
+    qt_assert_contains("${hdr_out}" "my description without newline"
+        "header should contain the replacement text")
 endfunction()
