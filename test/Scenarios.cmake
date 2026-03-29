@@ -8295,3 +8295,4 @@ function(qt_scenario_top_index_applied_not_in_series)
     qt_read_file_raw(series_content "${QT_WORK_DIR}/patches/series")
     qt_assert_contains("${series_content}" "fresh.patch" "new patch should be in series")
 endfunction()
+
