@@ -137,7 +137,7 @@ inline std::string_view strip_patches_prefix(const QuiltState &q, std::string_vi
 std::string format_patch(const QuiltState &q, std::string_view name);
 
 inline std::string patch_path_display(const QuiltState &q, std::string_view name) {
-    return q.patches_dir + "/" + std::string(name);
+    return format_patch(q, name);
 }
 
 // Resolve a user-provided file path relative to the current subdirectory.

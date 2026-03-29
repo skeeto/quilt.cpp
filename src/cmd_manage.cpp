@@ -170,7 +170,7 @@ int cmd_delete(QuiltState &q, int argc, char **argv) {
     } else {
         // Topmost applied patch
         if (q.applied.empty()) {
-            err_line("No patch applied");
+            err_line("No patches applied");
             return 1;
         }
         patch = q.applied.back();
@@ -235,7 +235,7 @@ int cmd_rename(QuiltState &q, int argc, char **argv) {
     // Default to top patch
     if (old_patch.empty()) {
         if (q.applied.empty()) {
-            err_line("No patch applied");
+            err_line("No patches applied");
             return 1;
         }
         old_patch = q.applied.back();
@@ -714,7 +714,7 @@ int cmd_files(QuiltState &q, int argc, char **argv) {
     } else if (!q.applied.empty()) {
         target_patch = q.applied.back();
     } else if (!opt_all) {
-        err_line("No patch applied");
+        err_line("No patches applied");
         return 1;
     }
 
@@ -727,7 +727,7 @@ int cmd_files(QuiltState &q, int argc, char **argv) {
         std::string start = combine_patch;
         if (start == "-") {
             if (q.applied.empty()) {
-                err_line("No patch applied");
+                err_line("No patches applied");
                 return 1;
             }
             start = q.applied.front();
@@ -897,7 +897,7 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
     }
 
     if (q.applied.empty()) {
-        err_line("No patch applied");
+        err_line("No patches applied");
         return 1;
     }
 
@@ -958,7 +958,7 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
 
 int cmd_fork(QuiltState &q, int argc, char **argv) {
     if (q.applied.empty()) {
-        err_line("No patch applied");
+        err_line("No patches applied");
         return 1;
     }
 
