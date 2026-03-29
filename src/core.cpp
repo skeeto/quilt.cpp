@@ -114,10 +114,15 @@ std::vector<std::string> split_lines(std::string_view s) {
     while (!s.empty()) {
         auto pos = str_find(s, '\n');
         if (pos < 0) {
+            if (!s.empty() && s.back() == '\r')
+                s.remove_suffix(1);
             lines.emplace_back(s);
             break;
         }
-        lines.emplace_back(s.substr(0, checked_cast<size_t>(pos)));
+        auto end = checked_cast<size_t>(pos);
+        if (end > 0 && s[end - 1] == '\r')
+            --end;
+        lines.emplace_back(s.substr(0, end));
         s.remove_prefix(checked_cast<size_t>(pos + 1));
     }
     return lines;

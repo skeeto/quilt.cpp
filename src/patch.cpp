@@ -258,12 +258,18 @@ static FileContent load_file_lines(std::string_view path)
     ptrdiff_t len = std::ssize(content);
     for (ptrdiff_t i = 0; i < len; ++i) {
         if (content[checked_cast<size_t>(i)] == '\n') {
-            fc.lines.push_back(content.substr(checked_cast<size_t>(start), checked_cast<size_t>(i - start)));
+            ptrdiff_t end = i;
+            if (end > start && content[checked_cast<size_t>(end - 1)] == '\r')
+                --end;
+            fc.lines.push_back(content.substr(checked_cast<size_t>(start), checked_cast<size_t>(end - start)));
             start = i + 1;
         }
     }
     if (start < len) {
-        fc.lines.push_back(content.substr(checked_cast<size_t>(start), checked_cast<size_t>(len - start)));
+        auto tail = content.substr(checked_cast<size_t>(start), checked_cast<size_t>(len - start));
+        if (!tail.empty() && tail.back() == '\r')
+            tail.pop_back();
+        fc.lines.push_back(std::move(tail));
     }
 
     return fc;
