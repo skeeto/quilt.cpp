@@ -385,6 +385,9 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     push_new_file_subdir
     builtin_patch_empty_file_content
     builtin_patch_stray_minus
+    diff_external_context_no_newline
+    diff_external_quilt_diff_opts
+    revert_subdir
     shell_split_single_quotes
     shell_split_double_quotes
     shell_split_var_expansion
@@ -7055,6 +7058,12 @@ function(qt_run_named_scenario scenario)
         qt_scenario_builtin_patch_empty_file_content()
     elseif(scenario STREQUAL "builtin_patch_stray_minus")
         qt_scenario_builtin_patch_stray_minus()
+    elseif(scenario STREQUAL "diff_external_context_no_newline")
+        qt_scenario_diff_external_context_no_newline()
+    elseif(scenario STREQUAL "diff_external_quilt_diff_opts")
+        qt_scenario_diff_external_quilt_diff_opts()
+    elseif(scenario STREQUAL "revert_subdir")
+        qt_scenario_revert_subdir()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -7608,4 +7617,62 @@ function(qt_scenario_builtin_patch_stray_minus)
         "--- not-a-header\nsome text\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-old\n+new\n")
     qt_quilt_ok(ARGS push MESSAGE "push should succeed despite stray --- line")
     qt_assert_file_text("${QT_WORK_DIR}/f.txt" "new" "file should be modified after push")
+endfunction()
+
+# diff_external_context_no_newline: context diff via external tool on file without trailing newline
+# covers cmd_patch.cpp line 423 (unified_to_context skips "\ No newline" lines)
+function(qt_scenario_diff_external_context_no_newline)
+    qt_begin_test("diff_external_context_no_newline")
+    # Create file WITHOUT trailing newline
+    qt_write_file("${QT_WORK_DIR}/f.txt" "old")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    # Modify (also no trailing newline)
+    qt_write_file("${QT_WORK_DIR}/f.txt" "new")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # External diff + context format: external diff outputs "\ No newline at end of file"
+    # unified_to_context hits the else branch (line 423) to skip these \ lines
+    qt_quilt_ok(OUTPUT diff_out ERROR diff_err ARGS diff "--diff=diff" -c MESSAGE "diff --diff=diff -c failed")
+    qt_assert_contains("${diff_out}" "***" "context diff should have *** markers")
+    # The \ No newline lines in the unified diff are skipped by unified_to_context (line 423)
+    # so they don't appear in the output, but the changed lines still show
+    qt_assert_contains("${diff_out}" "old" "context diff should show old content")
+    qt_assert_contains("${diff_out}" "new" "context diff should show new content")
+endfunction()
+
+# diff_external_quilt_diff_opts: QUILT_DIFF_OPTS appends extra options to external diff command
+# covers cmd_patch.cpp line 556 (appending QUILT_DIFF_OPTS to cmd_argv in external diff path)
+function(qt_scenario_diff_external_quilt_diff_opts)
+    qt_begin_test("diff_external_quilt_diff_opts")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "old\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "new\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # QUILT_DIFF_OPTS=-u passes an extra -u flag to the external diff tool
+    # cmd_patch.cpp iterates over shell_split(QUILT_DIFF_OPTS) at line 556
+    qt_quilt_ok(OUTPUT diff_out ERROR diff_err ENV "QUILT_DIFF_OPTS=-u"
+        ARGS diff "--diff=diff" MESSAGE "diff with QUILT_DIFF_OPTS failed")
+    qt_assert_contains("${diff_out}" "---" "diff output should have --- header")
+    qt_assert_contains("${diff_out}" "old" "diff output should show old content")
+    qt_assert_contains("${diff_out}" "new" "diff output should show new content")
+endfunction()
+
+# revert_subdir: revert a file in a subdirectory when the directory doesn't exist
+# covers cmd_patch.cpp line 1788 (make_dirs for revert target's parent directory)
+function(qt_scenario_revert_subdir)
+    qt_begin_test("revert_subdir")
+    # Create a file in a subdirectory, add to patch, and modify it
+    qt_write_file("${QT_WORK_DIR}/subdir/f.txt" "original\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add subdir/f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/subdir/f.txt" "modified\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # Delete subdir/ entirely so the target directory is missing when reverting
+    file(REMOVE_RECURSE "${QT_WORK_DIR}/subdir")
+    qt_assert_not_exists("${QT_WORK_DIR}/subdir" "subdir should be removed before revert")
+    # quilt revert: backup is "original\n" (non-empty), dirname="subdir" doesn't exist
+    # → make_dirs("subdir") called (line 1788) before writing the restored file
+    qt_quilt_ok(ARGS revert subdir/f.txt MESSAGE "revert should create parent directory")
+    qt_assert_file_text("${QT_WORK_DIR}/subdir/f.txt" "original" "revert should restore original content")
 endfunction()
