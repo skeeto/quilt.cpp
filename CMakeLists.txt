@@ -33,8 +33,17 @@ target_compile_options(quilt PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wconversion>
 )
 
+option(ENABLE_COVERAGE "Build with gcov code-coverage instrumentation" OFF)
+
 include(cmake/sanitizers.cmake)
-target_sanitizers(quilt)
+if(NOT ENABLE_COVERAGE)
+    target_sanitizers(quilt)
+endif()
+
+include(cmake/coverage.cmake)
+if(ENABLE_COVERAGE)
+    target_coverage(quilt)
+endif()
 
 include(CheckCXXSourceCompiles)
 check_cxx_source_compiles("
@@ -45,7 +54,7 @@ check_cxx_source_compiles("
     int main() {}
 " USING_LIBSTDCXX)
 
-if(USING_LIBSTDCXX)
+if(USING_LIBSTDCXX AND NOT ENABLE_COVERAGE)
     target_compile_definitions(quilt PRIVATE
         $<$<CONFIG:Debug>:_GLIBCXX_DEBUG>
     )
