@@ -305,13 +305,33 @@ static std::string format_unified(
         // Hunk body
         for (const auto &op : hunk.ops) {
             if (op.type == 'E') {
-                result += ' ';
-                result += old_lines[checked_cast<size_t>(op.old_idx)];
-                result += '\n';
-                // "No newline" on last line of both files
-                if (op.old_idx == old_total - 1 && !old_has_trailing_nl &&
-                    op.new_idx == new_total - 1 && !new_has_trailing_nl) {
-                    result += "\\ No newline at end of file\n";
+                bool last_old = (op.old_idx == old_total - 1);
+                bool last_new = (op.new_idx == new_total - 1);
+                bool old_need_annot = last_old && !old_has_trailing_nl;
+                bool new_need_annot = last_new && !new_has_trailing_nl;
+                // When the trailing-newline annotation differs between
+                // sides, emit as D+I so each gets its own marker.
+                if (old_need_annot != new_need_annot) {
+                    result += '-';
+                    result += old_lines[checked_cast<size_t>(op.old_idx)];
+                    result += '\n';
+                    if (!old_has_trailing_nl) {
+                        result += "\\ No newline at end of file\n";
+                    }
+                    result += '+';
+                    result += new_lines[checked_cast<size_t>(op.new_idx)];
+                    result += '\n';
+                    if (!new_has_trailing_nl) {
+                        result += "\\ No newline at end of file\n";
+                    }
+                } else {
+                    result += ' ';
+                    result += old_lines[checked_cast<size_t>(op.old_idx)];
+                    result += '\n';
+                    if (last_old && !old_has_trailing_nl &&
+                        last_new && !new_has_trailing_nl) {
+                        result += "\\ No newline at end of file\n";
+                    }
                 }
             } else if (op.type == 'D') {
                 result += '-';
@@ -484,6 +504,29 @@ DiffResult builtin_diff(std::string_view old_path, std::string_view new_path,
 
     if (!has_diff) {
         return {0, ""};
+    }
+
+    // When trailing newlines differ the last line must appear as a D+I
+    // pair (not a context 'E') so each side gets the right "\ No newline"
+    // annotation.  Replace the trailing 'E' with D+I before building hunks
+    // so that build_hunks sees a real change and includes it in a hunk.
+    if (!old_fl.lines.empty() &&
+        old_fl.has_trailing_newline != new_fl.has_trailing_newline) {
+        // Find the last 'E' op that covers the final line of both files
+        for (ptrdiff_t i = std::ssize(ops) - 1; i >= 0; --i) {
+            auto &op = ops[checked_cast<size_t>(i)];
+            if (op.type == 'E' &&
+                op.old_idx == std::ssize(old_fl.lines) - 1 &&
+                op.new_idx == std::ssize(new_fl.lines) - 1) {
+                // Replace with D then I
+                EditOp d_op{'D', op.old_idx, -1};
+                EditOp i_op{'I', -1, op.new_idx};
+                ops[checked_cast<size_t>(i)] = d_op;
+                ops.insert(ops.begin() + i + 1, i_op);
+                break;
+            }
+            if (op.type == 'E') break;  // only check the last equal op
+        }
     }
 
     // Use labels or default to paths
