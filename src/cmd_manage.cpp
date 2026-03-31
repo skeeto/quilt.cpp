@@ -305,9 +305,33 @@ int cmd_rename(QuiltState &q, int argc, char **argv) {
         }
     }
 
+    // Migrate per-patch metadata before writing series
+    std::string old_key(old_patch);
+    auto sl_it = q.patch_strip_level.find(old_key);
+    int saved_strip = -1;
+    bool saved_reversed = false;
+    if (sl_it != q.patch_strip_level.end()) {
+        saved_strip = sl_it->second;
+        q.patch_strip_level[new_name] = sl_it->second;
+        q.patch_strip_level.erase(sl_it);
+    }
+    if (q.patch_reversed.erase(old_key)) {
+        saved_reversed = true;
+        q.patch_reversed.insert(new_name);
+    }
+
     auto new_series = q.series;
     new_series[checked_cast<size_t>(*idx)] = new_name;
     if (!write_series_checked(q, new_series)) {
+        // Undo metadata migration
+        if (saved_strip >= 0) {
+            q.patch_strip_level[old_key] = saved_strip;
+            q.patch_strip_level.erase(new_name);
+        }
+        if (saved_reversed) {
+            q.patch_reversed.erase(new_name);
+            q.patch_reversed.insert(old_key);
+        }
         if (renamed_pc_dir) {
             rename_path(pc_patch_dir(q, new_name), pc_patch_dir(q, old_patch));
         }
@@ -319,6 +343,14 @@ int cmd_rename(QuiltState &q, int argc, char **argv) {
 
     if (q.is_applied(old_patch) && !write_applied_checked(q, new_applied)) {
         write_series_checked(q, q.series);
+        if (saved_strip >= 0) {
+            q.patch_strip_level[old_key] = saved_strip;
+            q.patch_strip_level.erase(new_name);
+        }
+        if (saved_reversed) {
+            q.patch_reversed.erase(new_name);
+            q.patch_reversed.insert(old_key);
+        }
         if (renamed_pc_dir) {
             rename_path(pc_patch_dir(q, new_name), pc_patch_dir(q, old_patch));
         }
@@ -1036,9 +1068,31 @@ int cmd_fork(QuiltState &q, int argc, char **argv) {
         renamed_pc_dir = true;
     }
 
+    // Migrate per-patch metadata before writing series
+    auto sl_it = q.patch_strip_level.find(old_name);
+    int saved_strip = -1;
+    bool saved_reversed = false;
+    if (sl_it != q.patch_strip_level.end()) {
+        saved_strip = sl_it->second;
+        q.patch_strip_level[new_name] = sl_it->second;
+        q.patch_strip_level.erase(sl_it);
+    }
+    if (q.patch_reversed.erase(old_name)) {
+        saved_reversed = true;
+        q.patch_reversed.insert(new_name);
+    }
+
     auto new_series = q.series;
     new_series[checked_cast<size_t>(*idx)] = new_name;
     if (!write_series_checked(q, new_series)) {
+        if (saved_strip >= 0) {
+            q.patch_strip_level[old_name] = saved_strip;
+            q.patch_strip_level.erase(new_name);
+        }
+        if (saved_reversed) {
+            q.patch_reversed.erase(new_name);
+            q.patch_reversed.insert(old_name);
+        }
         if (renamed_pc_dir) {
             rename_path(new_pc, old_pc);
         }
@@ -1057,6 +1111,14 @@ int cmd_fork(QuiltState &q, int argc, char **argv) {
     }
     if (!write_applied_checked(q, new_applied)) {
         write_series_checked(q, q.series);
+        if (saved_strip >= 0) {
+            q.patch_strip_level[old_name] = saved_strip;
+            q.patch_strip_level.erase(new_name);
+        }
+        if (saved_reversed) {
+            q.patch_reversed.erase(new_name);
+            q.patch_reversed.insert(old_name);
+        }
         if (renamed_pc_dir) {
             rename_path(new_pc, old_pc);
         }

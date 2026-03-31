@@ -210,6 +210,9 @@ set(QUILT_TEST_SCENARIOS
     fold_strip_level
     diff_U0_pure_insert
     import_P_multiple
+    pop_deletes_empty_file
+    pc_quilt_patches_overrides_env
+    rename_drops_strip_level
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -7182,6 +7185,12 @@ function(qt_run_named_scenario scenario)
         qt_scenario_refresh_shadow_deletion()
     elseif(scenario STREQUAL "import_P_multiple")
         qt_scenario_import_P_multiple()
+    elseif(scenario STREQUAL "pop_deletes_empty_file")
+        qt_scenario_pop_deletes_empty_file()
+    elseif(scenario STREQUAL "pc_quilt_patches_overrides_env")
+        qt_scenario_pc_quilt_patches_overrides_env()
+    elseif(scenario STREQUAL "rename_drops_strip_level")
+        qt_scenario_rename_drops_strip_level()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -8684,4 +8693,62 @@ function(qt_scenario_import_P_multiple)
     # Series should be empty — no partial import
     qt_assert_not_exists("${QT_WORK_DIR}/patches/series"
         "series should not exist after rejected import")
+endfunction()
+
+# pop_deletes_empty_file: an empty file that existed before a patch is
+# deleted on pop (empty backup = "didn't exist" placeholder).  This
+# matches original quilt behavior — the backup mechanism cannot
+# distinguish between "file was empty" and "file didn't exist".
+function(qt_scenario_pop_deletes_empty_file)
+    qt_begin_test("pop_deletes_empty_file")
+    # Create an empty file (0 bytes)
+    qt_write_file("${QT_WORK_DIR}/empty.txt" "")
+    qt_quilt_ok(ARGS new test.patch MESSAGE "new")
+    qt_quilt_ok(ARGS add empty.txt MESSAGE "add")
+    qt_write_file("${QT_WORK_DIR}/empty.txt" "content\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh")
+    # Pop should delete the file (it was empty, so the backup is a
+    # zero-length placeholder indistinguishable from "didn't exist")
+    qt_quilt_ok(ARGS pop MESSAGE "pop")
+    qt_assert_not_exists("${QT_WORK_DIR}/empty.txt"
+        "empty file should be deleted on pop (matches quilt behavior)")
+endfunction()
+
+# pc_quilt_patches_overrides_env: once .pc/.quilt_patches is written,
+# it takes precedence over QUILT_PATCHES.  This matches original quilt.
+function(qt_scenario_pc_quilt_patches_overrides_env)
+    qt_begin_test("pc_quilt_patches_overrides_env")
+    # Set up a normal patch stack in "patches/"
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new test.patch MESSAGE "new")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh")
+    # .pc/.quilt_patches should now contain "patches"
+    qt_assert_file_text("${QT_WORK_DIR}/.pc/.quilt_patches" "patches"
+        "quilt_patches should say patches")
+    # Create a different patches dir with a different series
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/other-patches")
+    qt_write_file("${QT_WORK_DIR}/other-patches/series" "other.patch\n")
+    # Even with QUILT_PATCHES=other-patches, series should come from
+    # "patches/" because .pc/.quilt_patches takes precedence
+    qt_quilt_ok(OUTPUT out ERROR err
+        ENV "QUILT_PATCHES=other-patches"
+        ARGS series MESSAGE "series with env override")
+    qt_assert_contains("${out}" "test.patch"
+        "should use patches/ dir despite QUILT_PATCHES env")
+    qt_assert_not_contains("${out}" "other.patch"
+        "should not use other-patches/ dir")
+endfunction()
+
+# rename_drops_strip_level: renaming a -p0 patch must preserve -p0
+function(qt_scenario_rename_drops_strip_level)
+    qt_begin_test("rename_drops_strip_level")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new -p0 foo.patch MESSAGE "new -p0")
+    qt_quilt_ok(ARGS rename -P foo.patch bar.patch MESSAGE "rename")
+    # After rename, the -p0 annotation must be preserved
+    qt_read_file_strip(series "${QT_WORK_DIR}/patches/series")
+    qt_assert_equal("${series}" "bar.patch -p0"
+        "renamed patch should keep -p0 annotation")
 endfunction()
