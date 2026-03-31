@@ -74,20 +74,26 @@ shell. This applies to all `QUILT_*_ARGS` and `QUILT_*_OPTS` variables.
 
 ## Fuzz Testing
 
-The built-in patch engine has a [libFuzzer][] harness. Build it with a
-non-Apple Clang that includes the fuzzer runtime:
+There are [libFuzzer][] harnesses for the patch engine and the
+shell-like argument splitter. Build them with a non-Apple Clang that
+includes the fuzzer runtime:
 
     $ cmake -B build-fuzz -DENABLE_FUZZ=ON \
           -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug
-    $ cmake --build build-fuzz -t fuzz_patch
+    $ cmake --build build-fuzz -t fuzz_patch -t fuzz_shell_split
     $ ASAN_OPTIONS=detect_container_overflow=0 \
           ./build-fuzz/fuzz_patch fuzz/corpus/ -max_len=65536
+    $ ASAN_OPTIONS=detect_container_overflow=0 \
+          ./build-fuzz/fuzz_shell_split fuzz/corpus_shell_split/ -max_len=4096
 
-The fuzz target exercises patch parsing, hunk matching, output building,
+`fuzz_patch` exercises patch parsing, hunk matching, output building,
 merge conflict markers, and reject generation. An in-memory filesystem
 (`PatchOptions::fs`) prevents the fuzzer from touching the real
-filesystem despite arbitrary filenames in fuzz-generated patches. Seed
-inputs are in `fuzz/corpus/`.
+filesystem despite arbitrary filenames in fuzz-generated patches.
+
+`fuzz_shell_split` exercises the `shell_split()` parser used for
+`QUILT_*_ARGS` environment variables, covering single/double quoting,
+backslash escapes, and `$VAR`/`${VAR}` expansion.
 
 [libFuzzer]: https://llvm.org/docs/LibFuzzer.html
 

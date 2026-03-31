@@ -110,6 +110,16 @@ if(ENABLE_FUZZ)
         -fsanitize=fuzzer,address,undefined)
     target_link_options(fuzz_patch PRIVATE
         -fsanitize=fuzzer,address,undefined)
+
+    add_executable(fuzz_shell_split fuzz/fuzz_shell_split.cpp ${FUZZ_SOURCES})
+    target_include_directories(fuzz_shell_split PRIVATE src)
+    target_precompile_headers(fuzz_shell_split PRIVATE src/quilt.hpp)
+    target_compile_definitions(fuzz_shell_split PRIVATE
+        FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
+    target_compile_options(fuzz_shell_split PRIVATE
+        -fsanitize=fuzzer,address,undefined)
+    target_link_options(fuzz_shell_split PRIVATE
+        -fsanitize=fuzzer,address,undefined)
 endif()
 
 enable_testing()
