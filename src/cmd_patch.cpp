@@ -131,6 +131,10 @@ int cmd_new(QuiltState &q, int argc, char **argv) {
 
     // Insert patch name into series (after current top, or at beginning)
     ptrdiff_t top_idx = q.top_index();
+    if (!q.applied.empty() && top_idx < 0) {
+        err_line("The series file no longer matches the applied patches. Please run 'quilt pop -a'.");
+        return 1;
+    }
     if (top_idx < 0) {
         // No applied patches — insert at beginning
         q.series.insert(q.series.begin(), patch_name);

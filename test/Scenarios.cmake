@@ -214,6 +214,7 @@ set(QUILT_TEST_SCENARIOS
     pc_quilt_patches_overrides_env
     pc_quilt_series_is_filename
     series_pc_precedes_root
+    top_index_applied_not_in_series
     rename_drops_strip_level
     refresh_shadow_rediff
 )
@@ -442,7 +443,6 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     fork_applied_not_in_series
     refresh_diffstat_double_newline
     refresh_creates_patches_dir
-    top_index_applied_not_in_series
     push_crlf_patch
     refresh_diffstat_bare_header
     refresh_diffstat_bare_false_positive
@@ -8370,12 +8370,9 @@ function(qt_scenario_push_crlf_patch)
     qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "new" "CRLF patch should apply correctly")
 endfunction()
 
-# top_index_applied_not_in_series: core.cpp line 11
-# QuiltState::top_index() loops through the series looking for the top applied
-# patch. If the top applied patch is NOT in the series (inconsistent state),
-# it falls through to "return -1" at line 11.
-# Triggered by running "quilt new" in a state where applied-patches contains a
-# patch name that is absent from the series file.
+# top_index_applied_not_in_series: original quilt rejects "new" when
+# applied-patches and the series file are inconsistent. The command should
+# fail and leave the series file unchanged instead of inserting a new patch.
 function(qt_scenario_top_index_applied_not_in_series)
     qt_begin_test("top_index_applied_not_in_series")
     file(MAKE_DIRECTORY "${QT_WORK_DIR}/patches")
@@ -8386,12 +8383,15 @@ function(qt_scenario_top_index_applied_not_in_series)
     file(WRITE "${QT_WORK_DIR}/.pc/.version" "2\n")
     file(WRITE "${QT_WORK_DIR}/.pc/.quilt_patches" "patches\n")
     file(WRITE "${QT_WORK_DIR}/.pc/.quilt_series" "series\n")
-    # "quilt new" calls top_index() to find the insertion point.
-    # top_index() searches series for "ghost.patch" and fails → returns -1.
-    # With top_idx == -1, new inserts at the beginning of the series.
-    qt_quilt_ok(ARGS new fresh.patch MESSAGE "new should succeed even with inconsistent state")
-    qt_read_file_raw(series_content "${QT_WORK_DIR}/patches/series")
-    qt_assert_contains("${series_content}" "fresh.patch" "new patch should be in series")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS new fresh.patch)
+    qt_assert_failure("${rc}" "new should fail when applied-patches disagrees with the series")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "no longer matches the applied patches"
+        "new should report the inconsistent series state")
+    qt_assert_contains("${combined}" "pop -a"
+        "new should tell the user how to repair the stack")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "other.patch"
+        "series should remain unchanged after the failed new")
 endfunction()
 
 # refresh_diffstat_bare_header: cmd_patch.cpp remove_diffstat_section lines 926,928-936,939,942,944,946-948
