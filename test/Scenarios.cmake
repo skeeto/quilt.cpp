@@ -213,6 +213,7 @@ set(QUILT_TEST_SCENARIOS
     pop_deletes_empty_file
     pc_quilt_patches_overrides_env
     rename_drops_strip_level
+    refresh_shadow_rediff
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -446,7 +447,6 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     graph_prune_unreachable_edge
     graph_empty_backup_files
     push_fuzz_preserves_lines
-    refresh_shadow_deletion
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -7181,8 +7181,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_fold_strip_level()
     elseif(scenario STREQUAL "diff_U0_pure_insert")
         qt_scenario_diff_U0_pure_insert()
-    elseif(scenario STREQUAL "refresh_shadow_deletion")
-        qt_scenario_refresh_shadow_deletion()
+    elseif(scenario STREQUAL "refresh_shadow_rediff")
+        qt_scenario_refresh_shadow_rediff()
     elseif(scenario STREQUAL "import_P_multiple")
         qt_scenario_import_P_multiple()
     elseif(scenario STREQUAL "pop_deletes_empty_file")
@@ -8652,9 +8652,12 @@ function(qt_scenario_diff_U0_pure_insert)
     qt_assert_not_contains("${out2}" "+0,0" "new_start should not be 0")
 endfunction()
 
-# refresh_shadow_deletion: refresh -f preserves file-deletion sections for shadowed files
-function(qt_scenario_refresh_shadow_deletion)
-    qt_begin_test("refresh_shadow_deletion")
+# refresh_shadow_rediff: refresh -f re-diffs shadowed files against the
+# next patch's backup instead of the working tree.  When patch A deletes
+# f.txt and patch B re-creates it, refresh -f a.patch should produce a
+# diff of content→new (A's backup vs B's backup), not content→/dev/null.
+function(qt_scenario_refresh_shadow_rediff)
+    qt_begin_test("refresh_shadow_rediff")
     qt_write_file("${QT_WORK_DIR}/f.txt" "content\n")
     qt_write_file("${QT_WORK_DIR}/g.txt" "other\n")
     # Patch A: deletes f.txt, modifies g.txt
@@ -8664,19 +8667,26 @@ function(qt_scenario_refresh_shadow_deletion)
     qt_quilt_ok(ARGS add g.txt MESSAGE "add g to a")
     qt_write_file("${QT_WORK_DIR}/g.txt" "changed\n")
     qt_quilt_ok(ARGS refresh MESSAGE "refresh a")
-    # Verify a.patch has file-deletion section
+    # Verify a.patch initially has file-deletion section
     qt_assert_file_contains("${QT_WORK_DIR}/patches/a.patch" "/dev/null"
-        "a.patch should contain file deletion")
-    # Patch B: modifies f.txt (creates it back and modifies)
+        "a.patch should initially contain file deletion")
+    # Patch B: re-creates f.txt with new content
     qt_quilt_ok(ARGS new b.patch MESSAGE "new b")
     qt_write_file("${QT_WORK_DIR}/f.txt" "new\n")
     qt_quilt_ok(ARGS add f.txt MESSAGE "add f to b")
-    qt_write_file("${QT_WORK_DIR}/f.txt" "modified\n")
     qt_quilt_ok(ARGS refresh MESSAGE "refresh b")
-    # refresh -f a.patch should preserve the file-deletion section
+    # refresh -f a.patch: f.txt is shadowed by b.patch, so the diff
+    # should be a.patch's backup (content) vs b.patch's backup (new),
+    # NOT content→/dev/null.
     qt_quilt_ok(ARGS refresh -f a.patch MESSAGE "refresh -f a")
-    qt_assert_file_contains("${QT_WORK_DIR}/patches/a.patch" "/dev/null"
-        "a.patch should still contain file deletion after refresh -f")
+    # After re-diff, a.patch should show content→new (a modification),
+    # not a deletion to /dev/null
+    qt_assert_file_not_contains("${QT_WORK_DIR}/patches/a.patch" "/dev/null"
+        "a.patch should not contain /dev/null after refresh -f (re-diffed)")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/a.patch" "-content"
+        "a.patch should show removal of old content")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/a.patch" "+new"
+        "a.patch should show addition of new content")
 endfunction()
 
 # import_P_multiple: import -P with multiple files should fail upfront

@@ -1174,13 +1174,19 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     }
 
     // Compute shadowed files (files modified by patches above this one)
+    // For each shadowed file, record the first patch above that tracks it
+    // (needed to find its backup as the "new" side of the diff).
     std::set<std::string> shadowed;
+    std::map<std::string, std::string> shadow_next_patch;
     if (patch != q.applied.back()) {
         bool above = false;
         for (const auto &a : q.applied) {
             if (above) {
                 auto above_files = files_in_patch(q, a);
                 for (const auto &f : above_files) {
+                    if (!shadowed.contains(f)) {
+                        shadow_next_patch[f] = a;
+                    }
                     shadowed.insert(f);
                 }
             }
@@ -1200,17 +1206,13 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         std::ranges::sort(tracked);
     }
 
-    // Read existing patch file for header and shadowed file preservation
+    // Read existing patch file for header
     std::string patch_file = path_join(q.work_dir, q.patches_dir, patch);
     std::string old_content;
     std::string header;
-    std::map<std::string, std::string> old_sections;
     if (file_exists(patch_file)) {
         old_content = read_file(patch_file);
         header = read_patch_header(patch_file);
-        if (!shadowed.empty()) {
-            old_sections = split_patch_by_file(old_content);
-        }
     }
 
     // Backup old patch file if requested
@@ -1224,10 +1226,25 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
 
     for (const auto &file : tracked) {
         if (shadowed.contains(file)) {
-            // Preserve existing hunks for shadowed files
-            auto it = old_sections.find(file);
-            if (it != old_sections.end()) {
-                patch_content += it->second;
+            // Diff this patch's backup against the next patch's backup
+            auto it = shadow_next_patch.find(file);
+            if (it != shadow_next_patch.end()) {
+                std::string this_backup = path_join(pc_patch_dir(q, patch), file);
+                std::string next_backup = path_join(pc_patch_dir(q, it->second), file);
+                std::string diff_out = generate_path_diff(q, file,
+                    this_backup, true, next_backup, true,
+                    p_format, false, {}, ctx_lines, diff_format, no_timestamps);
+                if (!diff_out.empty()) {
+                    if (!no_index) {
+                        std::string work_base = basename(q.work_dir);
+                        patch_content += "Index: " + work_base + "/" + file + "\n";
+                        patch_content += "===================================================================\n";
+                    }
+                    patch_content += diff_out;
+                    if (!patch_content.empty() && patch_content.back() != '\n') {
+                        patch_content += '\n';
+                    }
+                }
             }
             continue;
         }
