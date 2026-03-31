@@ -487,6 +487,7 @@ QuiltState load_state() {
 
     // Check if .pc/ exists and read overrides
     std::string pc_abs = path_join(q.work_dir, q.pc_dir);
+    std::string series_name_override;
     if (is_directory(pc_abs)) {
         // Read .quilt_patches override
         std::string qp = trim(read_file(path_join(pc_abs, ".quilt_patches")));
@@ -496,13 +497,15 @@ QuiltState load_state() {
         // Read .quilt_series override
         std::string qs = trim(read_file(path_join(pc_abs, ".quilt_series")));
         if (!qs.empty()) {
-            q.series_file = qs;
+            series_name_override = qs;
         }
     }
 
     // Series file search order (when not overridden by .quilt_series)
     if (q.series_file.empty()) {
-        std::string series_name = env_series.empty() ? "series" : env_series;
+        std::string series_name = !series_name_override.empty()
+            ? series_name_override
+            : (env_series.empty() ? "series" : env_series);
         std::string s1 = path_join(q.work_dir, series_name);
         std::string s2 = path_join(q.work_dir, q.patches_dir, series_name);
         std::string s3 = path_join(q.work_dir, q.pc_dir, series_name);
