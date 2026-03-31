@@ -111,6 +111,17 @@ content to simulate source drift before applying the patch with fuzz
 matching (fuzz 1–3). This exercises the offset-search and
 context-trimming logic on well-formed patches without crashing.
 
+`fuzz_differential` is a standalone differential tester (not
+libFuzzer). It generates random sequences of quilt operations and runs
+them against both quilt.cpp and the system-installed `quilt`, comparing
+exit codes and final filesystem state. Requires `quilt` to be
+installed:
+
+    $ cmake --build build-fuzz -t fuzz_differential
+    $ ./build-fuzz/fuzz_differential \
+          --quilt-cpp ./build/quilt --quilt-system quilt \
+          --iterations 1000 --seed 1
+
 [libFuzzer]: https://llvm.org/docs/LibFuzzer.html
 
 ### Deliberately omitted features

@@ -140,6 +140,11 @@ if(ENABLE_FUZZ)
         -fsanitize=fuzzer,address,undefined)
     target_link_options(fuzz_roundtrip_fuzz PRIVATE
         -fsanitize=fuzzer,address,undefined)
+
+    # Differential fuzzer — standalone binary, no sanitizers needed.
+    # Compares quilt.cpp against system quilt via fork/exec.
+    add_executable(fuzz_differential fuzz/fuzz_differential.cpp)
+    target_compile_features(fuzz_differential PRIVATE cxx_std_20)
 endif()
 
 enable_testing()
