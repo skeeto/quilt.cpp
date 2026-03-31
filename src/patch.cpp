@@ -132,12 +132,17 @@ static std::vector<PatchFile> parse_patch(std::string_view text, int strip_level
             ptrdiff_t space = str_find(hdr, ' ', pos);
             ptrdiff_t plus_pos = str_find(hdr, '+', pos);
 
-            if (comma >= 0 && comma < plus_pos) {
+            // Need '+' marker and a space or comma delimiter before it
+            if (plus_pos < 0) { ++i; continue; }
+
+            if (comma >= 0 && comma < plus_pos && plus_pos - comma >= 2) {
                 hunk.old_start = parse_int(hdr.substr(checked_cast<size_t>(pos), checked_cast<size_t>(comma - pos)));
                 hunk.old_count = parse_int(hdr.substr(checked_cast<size_t>(comma + 1), checked_cast<size_t>(plus_pos - comma - 2)));
-            } else {
+            } else if (space >= 0 && space < plus_pos) {
                 hunk.old_start = parse_int(hdr.substr(checked_cast<size_t>(pos), checked_cast<size_t>(space - pos)));
                 hunk.old_count = 1;
+            } else {
+                ++i; continue;
             }
 
             // Parse new range
@@ -145,6 +150,8 @@ static std::vector<PatchFile> parse_patch(std::string_view text, int strip_level
             comma = str_find(hdr, ',', pos);
             ptrdiff_t end_at = str_find(hdr, ' ', pos);
             if (end_at < 0) end_at = std::ssize(hdr);
+
+            if (end_at <= pos) { ++i; continue; }
 
             if (comma >= 0 && comma < end_at) {
                 hunk.new_start = parse_int(hdr.substr(checked_cast<size_t>(pos), checked_cast<size_t>(comma - pos)));
@@ -465,6 +472,9 @@ static std::string build_output(std::span<const std::string> file_lines,
         ptrdiff_t pat_len = std::ssize(pattern);
         auto new_lines = get_new_lines(hunk);
 
+        // Clamp to file bounds
+        if (pos > file_len) pos = file_len;
+
         // Copy unchanged lines from last_copied to pos
         for (ptrdiff_t j = last_copied; j < pos; ++j) {
             output += file_lines[checked_cast<size_t>(j)];
@@ -483,6 +493,7 @@ static std::string build_output(std::span<const std::string> file_lines,
         }
 
         last_copied = pos + pat_len;
+        if (last_copied > file_len) last_copied = file_len;
     }
 
     // Copy remaining lines
@@ -525,6 +536,7 @@ static std::string build_merge_output(std::span<const std::string> file_lines,
 
         if (pos >= 0) {
             // Successfully matched — apply normally
+            if (pos > file_len) pos = file_len;
             auto pattern = get_old_pattern(hunk);
             ptrdiff_t pat_len = std::ssize(pattern);
             auto new_lines = get_new_lines(hunk);
@@ -543,6 +555,7 @@ static std::string build_merge_output(std::span<const std::string> file_lines,
                 }
             }
             last_copied = pos + pat_len;
+            if (last_copied > file_len) last_copied = file_len;
         } else {
             // Rejected — insert conflict markers at expected position
             ptrdiff_t expected = hunk.old_start - 1;
