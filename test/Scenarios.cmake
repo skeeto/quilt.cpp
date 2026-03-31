@@ -437,6 +437,7 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     refresh_diffstat_bare_false_positive
     graph_prune_unreachable_edge
     graph_empty_backup_files
+    push_fuzz_preserves_lines
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -7161,6 +7162,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_graph_prune_unreachable_edge()
     elseif(scenario STREQUAL "graph_empty_backup_files")
         qt_scenario_graph_empty_backup_files()
+    elseif(scenario STREQUAL "push_fuzz_preserves_lines")
+        qt_scenario_push_fuzz_preserves_lines()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -8474,4 +8477,55 @@ function(qt_scenario_graph_empty_backup_files)
     qt_quilt_ok(OUTPUT graph_out ARGS graph --lines patchB.diff
         MESSAGE "graph --lines patchB failed")
     qt_assert_contains("${graph_out}" "patchB" "patchB should appear in graph output")
+endfunction()
+
+# push_fuzz_preserves_lines: when a patch requires fuzz, lines that don't match
+# the fuzzed-out context must be preserved (not silently deleted).
+function(qt_scenario_push_fuzz_preserves_lines)
+    qt_begin_test("push_fuzz_preserves_lines")
+    # File has extra lines the patch doesn't know about
+    qt_write_file("${QT_WORK_DIR}/main.cpp" [=[#include <iostream>
+#include <ctime>
+
+int main() {
+    std::cout << "Hello, World!" << std::endl;
+    std::time_t now = std::time(nullptr);
+    std::cout << "Current time: " << std::ctime(&now);
+    return 0;
+}
+]=])
+    # Patch context expects just "#include <iostream>" then blank line (no #include <ctime>),
+    # and expects "return 0;" + "}" right after the changed lines (no time code).
+    # This requires fuzz=2 to apply.
+    qt_write_file("${QT_WORK_DIR}/patches/a.patch" [=[--- a/main.cpp
++++ b/main.cpp
+@@ -1,6 +1,10 @@
+ #include <iostream>
+
+-int main() {
+-    std::cout << "Hello, World!" << std::endl;
++int main(int argc, char **argv) {
++    if (argc > 1) {
++        std::cout << "Hello, " << argv[1] << "!" << std::endl;
++    } else {
++        std::cout << "Hello, World!" << std::endl;
++    }
+     return 0;
+ }
+]=])
+    qt_write_file("${QT_WORK_DIR}/patches/series" "a.patch\n")
+    qt_quilt(RESULT rc OUTPUT push_out ERROR push_err ARGS push --fuzz=2)
+    qt_assert_success("${rc}" "push --fuzz=2 should succeed")
+    # The critical check: #include <ctime> and time-related code must survive
+    qt_assert_file_contains("${QT_WORK_DIR}/main.cpp" "#include <ctime>"
+        "fuzz must not delete lines outside the matched region")
+    qt_assert_file_contains("${QT_WORK_DIR}/main.cpp" "std::time_t"
+        "fuzz must not delete time_t line")
+    qt_assert_file_contains("${QT_WORK_DIR}/main.cpp" "std::ctime"
+        "fuzz must not delete ctime line")
+    # Also verify the patch changes were actually applied
+    qt_assert_file_contains("${QT_WORK_DIR}/main.cpp" "int main(int argc, char **argv)"
+        "patch changes should be applied")
+    qt_assert_file_contains("${QT_WORK_DIR}/main.cpp" "argv[1]"
+        "patch changes should be applied")
 endfunction()
