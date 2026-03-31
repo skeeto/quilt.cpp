@@ -74,17 +74,20 @@ shell. This applies to all `QUILT_*_ARGS` and `QUILT_*_OPTS` variables.
 
 ## Fuzz Testing
 
-There are [libFuzzer][] harnesses for the patch engine and the
-shell-like argument splitter. Build them with a non-Apple Clang that
-includes the fuzzer runtime:
+There are [libFuzzer][] harnesses for the patch engine, the
+shell-like argument splitter, and a round-trip diff-patch correctness
+test. Build them with a non-Apple Clang that includes the fuzzer
+runtime:
 
     $ cmake -B build-fuzz -DENABLE_FUZZ=ON \
           -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug
-    $ cmake --build build-fuzz -t fuzz_patch -t fuzz_shell_split
+    $ cmake --build build-fuzz -t fuzz_patch -t fuzz_shell_split -t fuzz_roundtrip
     $ ASAN_OPTIONS=detect_container_overflow=0 \
           ./build-fuzz/fuzz_patch fuzz/corpus/ -max_len=65536
     $ ASAN_OPTIONS=detect_container_overflow=0 \
           ./build-fuzz/fuzz_shell_split fuzz/corpus_shell_split/ -max_len=4096
+    $ ASAN_OPTIONS=detect_container_overflow=0 \
+          ./build-fuzz/fuzz_roundtrip fuzz/corpus_roundtrip/ -max_len=2048
 
 `fuzz_patch` exercises patch parsing, hunk matching, output building,
 merge conflict markers, and reject generation. An in-memory filesystem
@@ -94,6 +97,11 @@ filesystem despite arbitrary filenames in fuzz-generated patches.
 `fuzz_shell_split` exercises the `shell_split()` parser used for
 `QUILT_*_ARGS` environment variables, covering single/double quoting,
 backslash escapes, and `$VAR`/`${VAR}` expansion.
+
+`fuzz_roundtrip` generates a diff between two fuzzed strings, applies
+the resulting patch to the first string, and asserts the result matches
+the second. This catches semantic correctness bugs that crash-only
+fuzzing misses.
 
 [libFuzzer]: https://llvm.org/docs/LibFuzzer.html
 

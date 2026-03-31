@@ -469,18 +469,31 @@ static std::string format_context(
 DiffResult builtin_diff(std::string_view old_path, std::string_view new_path,
                          int context_lines,
                          std::string_view old_label, std::string_view new_label,
-                         DiffFormat format)
+                         DiffFormat format,
+                         std::map<std::string, std::string> *fs)
 {
     // Read files — treat /dev/null or non-existent as empty
     std::string old_content, new_content;
     bool old_is_null = (old_path == "/dev/null" || old_path.empty());
     bool new_is_null = (new_path == "/dev/null" || new_path.empty());
 
-    if (!old_is_null && file_exists(old_path)) {
-        old_content = read_file(old_path);
+    auto fs_exists = [&](std::string_view p) -> bool {
+        if (fs) return fs->contains(std::string(p));
+        return file_exists(p);
+    };
+    auto fs_read = [&](std::string_view p) -> std::string {
+        if (fs) {
+            auto it = fs->find(std::string(p));
+            return it != fs->end() ? it->second : std::string{};
+        }
+        return read_file(p);
+    };
+
+    if (!old_is_null && fs_exists(old_path)) {
+        old_content = fs_read(old_path);
     }
-    if (!new_is_null && file_exists(new_path)) {
-        new_content = read_file(new_path);
+    if (!new_is_null && fs_exists(new_path)) {
+        new_content = fs_read(new_path);
     }
 
     // Split into lines

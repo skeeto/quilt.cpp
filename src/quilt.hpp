@@ -126,7 +126,8 @@ DiffResult builtin_diff(std::string_view old_path, std::string_view new_path,
                          int context_lines = 3,
                          std::string_view old_label = {},
                          std::string_view new_label = {},
-                         DiffFormat format = DiffFormat::unified);
+                         DiffFormat format = DiffFormat::unified,
+                         std::map<std::string, std::string> *fs = nullptr);
 
 // Patch name helpers — shared across command files
 inline std::string_view strip_patches_prefix(const QuiltState &q, std::string_view name) {
