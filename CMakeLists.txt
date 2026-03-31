@@ -84,6 +84,34 @@ add_custom_command(
 )
 add_custom_target(amalgam DEPENDS ${CMAKE_BINARY_DIR}/quilt.cpp)
 
+# Fuzz targets (requires clang with libFuzzer support)
+option(ENABLE_FUZZ "Build fuzz testing targets" OFF)
+if(ENABLE_FUZZ)
+    set(FUZZ_SOURCES
+        src/core.cpp
+        src/diff.cpp
+        src/patch.cpp
+        src/cmd_stack.cpp
+        src/cmd_annotate.cpp
+        src/cmd_patch.cpp
+        src/cmd_manage.cpp
+        src/cmd_graph.cpp
+        src/cmd_mail.cpp
+        src/cmd_stubs.cpp
+        src/platform_posix.cpp
+    )
+
+    add_executable(fuzz_patch fuzz/fuzz_patch.cpp ${FUZZ_SOURCES})
+    target_include_directories(fuzz_patch PRIVATE src)
+    target_precompile_headers(fuzz_patch PRIVATE src/quilt.hpp)
+    target_compile_definitions(fuzz_patch PRIVATE
+        FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
+    target_compile_options(fuzz_patch PRIVATE
+        -fsanitize=fuzzer,address,undefined)
+    target_link_options(fuzz_patch PRIVATE
+        -fsanitize=fuzzer,address,undefined)
+endif()
+
 enable_testing()
 set(QUILT_TEST_EXECUTABLE "" CACHE STRING
     "Path or command name for the quilt executable used by CTest."

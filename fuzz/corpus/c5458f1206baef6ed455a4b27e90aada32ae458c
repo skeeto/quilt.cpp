@@ -1,0 +1,4 @@
+# content
+--- a/file.c
++++ /dev/nul+++ /dev/null
+@@ -1 tent

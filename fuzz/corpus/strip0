@@ -1,0 +1,6 @@
+old
+--- file.c
++++ file.c
+@@ -1 +1 @@
+-old
++new

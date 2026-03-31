@@ -100,6 +100,10 @@ struct PatchOptions {
     bool quiet = false;        // -s
     bool merge = false;        // --merge
     std::string merge_style;   // "" or "diff3"
+    // In-memory filesystem for fuzz testing. When non-null, all file I/O
+    // in builtin_patch uses this map instead of real syscalls.
+    // Key present = file exists, value = content.
+    std::map<std::string, std::string> *fs = nullptr;
 };
 
 struct PatchResult {

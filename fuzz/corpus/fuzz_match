@@ -1,0 +1,10 @@
+Xctx_different
+delete_me
+ctx_also_different
+--- a/file.c
++++ b/file.c
+@@ -1,3 +1,3 @@
+ ctx_orig
+-delete_me
++added
+ ctx_orig2

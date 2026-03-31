@@ -1,0 +1,5 @@
+# content
+--- a/file.c
++++ /dev/null
+@@ -1 +0,0 @@
+-content

@@ -244,10 +244,9 @@ struct FileContent {
     bool crlf = false;  // true if original file used \r\n line endings
 };
 
-static FileContent load_file_lines(std::string_view path)
+static FileContent load_file_lines(std::string_view content)
 {
     FileContent fc;
-    std::string content = read_file(path);
     if (content.empty()) {
         fc.has_trailing_newline = true;
         return fc;
@@ -256,7 +255,7 @@ static FileContent load_file_lines(std::string_view path)
     fc.has_trailing_newline = (content.back() == '\n');
 
     // Detect \r\n from the first line ending
-    auto first_lf = str_find(std::string_view(content), '\n');
+    auto first_lf = str_find(content, '\n');
     if (first_lf > 0 && content[checked_cast<size_t>(first_lf - 1)] == '\r')
         fc.crlf = true;
 
@@ -267,12 +266,12 @@ static FileContent load_file_lines(std::string_view path)
             ptrdiff_t end = i;
             if (end > start && content[checked_cast<size_t>(end - 1)] == '\r')
                 --end;
-            fc.lines.push_back(content.substr(checked_cast<size_t>(start), checked_cast<size_t>(end - start)));
+            fc.lines.emplace_back(content.substr(checked_cast<size_t>(start), checked_cast<size_t>(end - start)));
             start = i + 1;
         }
     }
     if (start < len) {
-        auto tail = content.substr(checked_cast<size_t>(start), checked_cast<size_t>(len - start));
+        std::string tail(content.substr(checked_cast<size_t>(start), checked_cast<size_t>(len - start)));
         if (!tail.empty() && tail.back() == '\r')
             tail.pop_back();
         fc.lines.push_back(std::move(tail));
@@ -659,6 +658,27 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
     PatchResult result;
     result.exit_code = 0;
 
+    // Filesystem abstraction: use in-memory map when opts.fs is set
+    auto fs_exists = [&](std::string_view p) -> bool {
+        if (opts.fs) return opts.fs->contains(std::string(p));
+        return file_exists(p);
+    };
+    auto fs_read = [&](std::string_view p) -> std::string {
+        if (opts.fs) {
+            auto it = opts.fs->find(std::string(p));
+            return it != opts.fs->end() ? it->second : std::string{};
+        }
+        return read_file(p);
+    };
+    auto fs_write = [&](std::string_view p, std::string_view c) -> bool {
+        if (opts.fs) { (*opts.fs)[std::string(p)] = std::string(c); return true; }
+        return write_file(p, c);
+    };
+    auto fs_delete = [&](std::string_view p) -> bool {
+        if (opts.fs) { opts.fs->erase(std::string(p)); return true; }
+        return delete_file(p);
+    };
+
     auto files = parse_patch(patch_text, opts.strip_level, opts.reverse);
 
     if (files.empty()) {
@@ -676,14 +696,14 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
 
         // Load current file contents
         FileContent fc;
-        bool file_existed = file_exists(pf.target_path);
+        bool file_existed = fs_exists(pf.target_path);
 
         if (pf.is_creation && file_existed) {
             // File exists but patch says it should be new — still try to apply
         }
 
         if (file_existed) {
-            fc = load_file_lines(pf.target_path);
+            fc = load_file_lines(fs_read(pf.target_path));
         } else if (!pf.is_creation) {
             // File doesn't exist and this isn't a creation patch
             result.err += "can't find file to patch at input line 0\n";
@@ -695,7 +715,7 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                     std::vector<bool> all_rejected(checked_cast<size_t>(std::ssize(pf.hunks)), true);
                     std::string rej_content = format_rejects(pf, all_rejected);
                     if (!rej_content.empty()) {
-                        write_file(pf.target_path + ".rej", rej_content);
+                        fs_write(pf.target_path + ".rej", rej_content);
                     }
                 }
                 continue;
@@ -811,18 +831,20 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                 }
 
                 // Create parent directories if needed
-                std::string dir = dirname(pf.target_path);
-                if (!dir.empty() && dir != "." && !is_directory(dir)) {
-                    make_dirs(dir);
+                if (!opts.fs) {
+                    std::string dir = dirname(pf.target_path);
+                    if (!dir.empty() && dir != "." && !is_directory(dir)) {
+                        make_dirs(dir);
+                    }
                 }
 
                 // Check if we should remove the file (-E flag)
                 if (opts.remove_empty && new_content.empty() && !pf.is_creation) {
                     if (file_existed) {
-                        delete_file(pf.target_path);
+                        fs_delete(pf.target_path);
                     }
                 } else {
-                    write_file(pf.target_path, new_content);
+                    fs_write(pf.target_path, new_content);
                 }
             }
 
@@ -830,7 +852,7 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
             if (file_has_rejects && !opts.merge) {
                 std::string rej_content = format_rejects(pf, rejected);
                 if (!rej_content.empty()) {
-                    write_file(pf.target_path + ".rej", rej_content);
+                    fs_write(pf.target_path + ".rej", rej_content);
                 }
                 if (!opts.quiet) {
                     ptrdiff_t rej_count = 0;

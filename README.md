@@ -72,6 +72,25 @@ escapes), double quotes (with `\"`, `\\`, `\$` escapes), `$VAR` and
 quoted and unquoted segments merge into a single token, just as in a
 shell. This applies to all `QUILT_*_ARGS` and `QUILT_*_OPTS` variables.
 
+## Fuzz Testing
+
+The built-in patch engine has a [libFuzzer][] harness. Build it with a
+non-Apple Clang that includes the fuzzer runtime:
+
+    $ cmake -B build-fuzz -DENABLE_FUZZ=ON \
+          -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug
+    $ cmake --build build-fuzz -t fuzz_patch
+    $ ASAN_OPTIONS=detect_container_overflow=0 \
+          ./build-fuzz/fuzz_patch fuzz/corpus/ -max_len=65536
+
+The fuzz target exercises patch parsing, hunk matching, output building,
+merge conflict markers, and reject generation. An in-memory filesystem
+(`PatchOptions::fs`) prevents the fuzzer from touching the real
+filesystem despite arbitrary filenames in fuzz-generated patches. Seed
+inputs are in `fuzz/corpus/`.
+
+[libFuzzer]: https://llvm.org/docs/LibFuzzer.html
+
 ### Deliberately omitted features
 
 Quilt.cpp omits `setup` because it's an old, RPM-specific workflow that

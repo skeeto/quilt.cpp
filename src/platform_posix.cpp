@@ -492,7 +492,9 @@ DateTime local_time(int64_t timestamp)
     };
 }
 
+#ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
 int main(int argc, char **argv)
 {
     return quilt_main(argc, argv);
 }
+#endif

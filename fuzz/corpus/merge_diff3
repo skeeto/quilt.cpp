@@ -1,0 +1,6 @@
+5Àwrong content
+--- a/file.c
++++ b/file.c
+@@ -1 +1 @@
+-expected
++new
