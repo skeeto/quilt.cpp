@@ -619,7 +619,7 @@ static std::map<std::string, std::string> split_patch_by_file(std::string_view c
             // Extract filename from +++ line
             std::string_view rest = std::string_view(line).substr(4);
             if (rest.starts_with("/dev/null")) {
-                // skip
+                // File deletion: current_file already set from --- line
             } else {
                 // Strip b/ prefix and trailing tab/timestamp
                 if (rest.starts_with("b/")) rest = rest.substr(2);
@@ -637,6 +637,21 @@ static std::map<std::string, std::string> split_patch_by_file(std::string_view c
         } else if (line.starts_with("===")) {
             current_section += line + "\n";
         } else if (line.starts_with("--- ")) {
+            // For file deletions (+++ /dev/null), we get the name from ---
+            if (current_file.empty()) {
+                std::string_view rest = std::string_view(line).substr(4);
+                if (!rest.starts_with("/dev/null")) {
+                    if (rest.starts_with("a/")) rest = rest.substr(2);
+                    auto tab = str_find(rest, '\t');
+                    if (tab >= 0) rest = rest.substr(0, checked_cast<size_t>(tab));
+                    auto slash = str_find(rest, '/');
+                    if (slash >= 0) {
+                        current_file = trim(rest.substr(checked_cast<size_t>(slash + 1)));
+                    } else {
+                        current_file = trim(rest);
+                    }
+                }
+            }
             current_section += line + "\n";
         } else {
             current_section += line + "\n";

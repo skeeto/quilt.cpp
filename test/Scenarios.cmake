@@ -442,6 +442,7 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     graph_prune_unreachable_edge
     graph_empty_backup_files
     push_fuzz_preserves_lines
+    refresh_shadow_deletion
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -7176,6 +7177,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_fold_strip_level()
     elseif(scenario STREQUAL "diff_U0_pure_insert")
         qt_scenario_diff_U0_pure_insert()
+    elseif(scenario STREQUAL "refresh_shadow_deletion")
+        qt_scenario_refresh_shadow_deletion()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -8635,4 +8638,31 @@ function(qt_scenario_diff_U0_pure_insert)
     # Should be @@ -3 +2,0 @@ (delete old line 3), not @@ -3 +0,0 @@
     qt_assert_contains("${out2}" "+2,0" "new_start should reference line 2")
     qt_assert_not_contains("${out2}" "+0,0" "new_start should not be 0")
+endfunction()
+
+# refresh_shadow_deletion: refresh -f preserves file-deletion sections for shadowed files
+function(qt_scenario_refresh_shadow_deletion)
+    qt_begin_test("refresh_shadow_deletion")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "content\n")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "other\n")
+    # Patch A: deletes f.txt, modifies g.txt
+    qt_quilt_ok(ARGS new a.patch MESSAGE "new a")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add f to a")
+    file(REMOVE "${QT_WORK_DIR}/f.txt")
+    qt_quilt_ok(ARGS add g.txt MESSAGE "add g to a")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "changed\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh a")
+    # Verify a.patch has file-deletion section
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/a.patch" "/dev/null"
+        "a.patch should contain file deletion")
+    # Patch B: modifies f.txt (creates it back and modifies)
+    qt_quilt_ok(ARGS new b.patch MESSAGE "new b")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "new\n")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add f to b")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "modified\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh b")
+    # refresh -f a.patch should preserve the file-deletion section
+    qt_quilt_ok(ARGS refresh -f a.patch MESSAGE "refresh -f a")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/a.patch" "/dev/null"
+        "a.patch should still contain file deletion after refresh -f")
 endfunction()
