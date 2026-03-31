@@ -496,7 +496,7 @@ QuiltState load_state() {
         // Read .quilt_series override
         std::string qs = trim(read_file(path_join(pc_abs, ".quilt_series")));
         if (!qs.empty()) {
-            q.series_file = path_join(q.patches_dir, qs);
+            q.series_file = qs;
         }
     }
 

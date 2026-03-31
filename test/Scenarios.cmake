@@ -212,6 +212,8 @@ set(QUILT_TEST_SCENARIOS
     import_P_multiple
     pop_deletes_empty_file
     pc_quilt_patches_overrides_env
+    pc_quilt_series_is_filename
+    series_pc_precedes_root
     rename_drops_strip_level
     refresh_shadow_rediff
 )
@@ -433,7 +435,6 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     refresh_diffstat_twice
     refresh_diffstat_header_replace
     series_in_pc_dir
-    series_pc_precedes_root
     series_leading_space_no_newline
     header_replace_no_newline
     annotate_no_series_file
@@ -7192,6 +7193,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_pop_deletes_empty_file()
     elseif(scenario STREQUAL "pc_quilt_patches_overrides_env")
         qt_scenario_pc_quilt_patches_overrides_env()
+    elseif(scenario STREQUAL "pc_quilt_series_is_filename")
+        qt_scenario_pc_quilt_series_is_filename()
     elseif(scenario STREQUAL "rename_drops_strip_level")
         qt_scenario_rename_drops_strip_level()
     else()
@@ -8767,6 +8770,25 @@ function(qt_scenario_pc_quilt_patches_overrides_env)
         "should use patches/ dir despite QUILT_PATCHES env")
     qt_assert_not_contains("${out}" "other.patch"
         "should not use other-patches/ dir")
+endfunction()
+
+# pc_quilt_series_is_filename: .pc/.quilt_series stores a series filename,
+# not a path under QUILT_PATCHES. Original quilt resolves it from the work tree.
+function(qt_scenario_pc_quilt_series_is_filename)
+    qt_begin_test("pc_quilt_series_is_filename")
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/patches")
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/.pc")
+    qt_write_file("${QT_WORK_DIR}/altseries" "root.patch\n")
+    qt_write_file("${QT_WORK_DIR}/patches/altseries" "patches.patch\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/applied-patches" "")
+    qt_write_file("${QT_WORK_DIR}/.pc/.version" "2\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/.quilt_patches" "patches\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/.quilt_series" "altseries\n")
+    qt_quilt_ok(OUTPUT series_out ARGS series MESSAGE "series failed")
+    qt_assert_contains("${series_out}" "root.patch"
+        ".pc/.quilt_series should point to the root series filename")
+    qt_assert_not_contains("${series_out}" "patches.patch"
+        ".pc/.quilt_series should not be resolved inside the patches dir")
 endfunction()
 
 # rename_drops_strip_level: renaming a -p0 patch must preserve -p0
