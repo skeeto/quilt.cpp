@@ -437,6 +437,11 @@ std::string get_cwd()
     return {};
 }
 
+std::string get_system_quiltrc()
+{
+    return "/etc/quilt.quiltrc";
+}
+
 bool set_cwd(std::string_view path)
 {
     std::string p = null_terminated(path);

@@ -563,6 +563,29 @@ std::string get_home_dir()
     return {};
 }
 
+std::string get_system_quiltrc()
+{
+    wchar_t buf[MAX_PATH];
+    DWORD len = GetModuleFileNameW(NULL, buf, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) return {};
+    std::wstring path(buf, len);
+    // Strip exe filename
+    auto pos = path.rfind(L'\\');
+    if (pos == std::wstring::npos) return {};
+    path.resize(pos);
+    // Strip parent directory (e.g. bin/)
+    pos = path.rfind(L'\\');
+    if (pos == std::wstring::npos) return {};
+    path.resize(pos);
+    path += L"\\etc\\quilt.quiltrc";
+    std::string result = wide_to_utf8(path.c_str(),
+                                      checked_cast<int>(std::ssize(path)));
+    for (char &c : result) {
+        if (c == '\\') c = '/';
+    }
+    return result;
+}
+
 std::string get_cwd()
 {
     DWORD len = GetCurrentDirectoryW(0, nullptr);

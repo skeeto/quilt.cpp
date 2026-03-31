@@ -441,7 +441,7 @@ static std::map<std::string, std::string> load_quiltrc(std::string_view quiltrc_
         if (!content.empty()) return parse_quiltrc(content);
     }
 
-    std::string sys_rc = "/etc/quilt.quiltrc";
+    std::string sys_rc = get_system_quiltrc();
     std::string content = read_file(sys_rc);
     if (!content.empty()) return parse_quiltrc(content);
 

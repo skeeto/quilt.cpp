@@ -49,6 +49,7 @@ void set_env(std::string_view name, std::string_view value);
 std::string get_home_dir();
 std::string get_cwd();
 bool set_cwd(std::string_view path);
+std::string get_system_quiltrc();
 
 // I/O
 void fd_write_stdout(std::string_view s);
