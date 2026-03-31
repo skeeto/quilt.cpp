@@ -205,6 +205,9 @@ set(QUILT_TEST_SCENARIOS
     delete_no_patch
     delete_topmost
     upgrade_bad_option
+    applied_unapplied_target
+    add_remove_unapplied_P
+    fold_strip_level
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -7164,6 +7167,12 @@ function(qt_run_named_scenario scenario)
         qt_scenario_graph_empty_backup_files()
     elseif(scenario STREQUAL "push_fuzz_preserves_lines")
         qt_scenario_push_fuzz_preserves_lines()
+    elseif(scenario STREQUAL "applied_unapplied_target")
+        qt_scenario_applied_unapplied_target()
+    elseif(scenario STREQUAL "add_remove_unapplied_P")
+        qt_scenario_add_remove_unapplied_P()
+    elseif(scenario STREQUAL "fold_strip_level")
+        qt_scenario_fold_strip_level()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -8528,4 +8537,75 @@ int main() {
         "patch changes should be applied")
     qt_assert_file_contains("${QT_WORK_DIR}/main.cpp" "argv[1]"
         "patch changes should be applied")
+endfunction()
+
+# applied_unapplied_target: quilt applied <unapplied-patch> should fail
+function(qt_scenario_applied_unapplied_target)
+    qt_begin_test("applied_unapplied_target")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p1")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "1\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p2")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2")
+    # Pop p2 so only p1 is applied
+    qt_quilt_ok(ARGS pop MESSAGE "pop")
+    # applied p2.patch should fail — p2 is not applied
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS applied p2.patch)
+    qt_assert_failure("${rc}" "applied with unapplied target should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "not applied" "should say patch is not applied")
+endfunction()
+
+# add_remove_unapplied_P: add/remove -P with unapplied patch should fail
+function(qt_scenario_add_remove_unapplied_P)
+    qt_begin_test("add_remove_unapplied_P")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p1")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "1\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2")
+    qt_quilt_ok(ARGS pop MESSAGE "pop p2")
+    # add -P with unapplied patch should fail
+    qt_quilt(RESULT rc1 OUTPUT out1 ERROR err1 ARGS add -P p2.patch f.txt)
+    qt_assert_failure("${rc1}" "add -P unapplied should fail")
+    qt_combine_output(c1 "${out1}" "${err1}")
+    qt_assert_contains("${c1}" "not applied" "add should say patch is not applied")
+    # remove -P with unapplied patch should fail
+    qt_quilt(RESULT rc2 OUTPUT out2 ERROR err2 ARGS remove -P p2.patch f.txt)
+    qt_assert_failure("${rc2}" "remove -P unapplied should fail")
+    qt_combine_output(c2 "${out2}" "${err2}")
+    qt_assert_contains("${c2}" "not applied" "remove should say patch is not applied")
+endfunction()
+
+# fold_strip_level: fold -p 0 should use the correct strip level for backup tracking
+function(qt_scenario_fold_strip_level)
+    qt_begin_test("fold_strip_level")
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/a/b")
+    qt_write_file("${QT_WORK_DIR}/a/b/foo.c" "old\n")
+    qt_quilt_ok(ARGS new test.patch MESSAGE "new")
+    qt_quilt_ok(ARGS add a/b/foo.c MESSAGE "add")
+    qt_write_file("${QT_WORK_DIR}/a/b/foo.c" "new\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh")
+    # Fold a patch with -p 0 (paths have no prefix to strip)
+    qt_quilt_ok(
+        ARGS fold -p 0
+        INPUT [=[--- a/b/foo.c
++++ a/b/foo.c
+@@ -1 +1 @@
+-new
++folded
+]=]
+        MESSAGE "fold -p 0 failed"
+    )
+    qt_assert_file_text("${QT_WORK_DIR}/a/b/foo.c" "folded" "file should be folded")
+    # The backup should only be a/b/foo.c, not b/foo.c (wrong strip level)
+    qt_assert_exists("${QT_WORK_DIR}/.pc/test.patch/a/b/foo.c"
+        "correct backup a/b/foo.c should exist")
+    qt_assert_not_exists("${QT_WORK_DIR}/.pc/test.patch/b/foo.c"
+        "spurious backup b/foo.c should not exist")
 endfunction()

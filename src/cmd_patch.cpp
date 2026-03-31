@@ -207,6 +207,11 @@ int cmd_add(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
+    if (!q.is_applied(patch)) {
+        err("Patch "); err(format_patch(q, patch)); err_line(" is not applied");
+        return 1;
+    }
+
     for (const auto &file : files) {
         // Check if file is already tracked by this patch
         std::string backup_path = path_join(pc_patch_dir(q, patch), file);
@@ -257,6 +262,11 @@ int cmd_remove(QuiltState &q, int argc, char **argv) {
 
     if (files.empty()) {
         err_line("Usage: quilt remove [-P patch] file ...");
+        return 1;
+    }
+
+    if (!q.is_applied(patch)) {
+        err("Patch "); err(format_patch(q, patch)); err_line(" is not applied");
         return 1;
     }
 

@@ -910,7 +910,7 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
     }
 
     // Parse the incoming patch to find affected files
-    auto affected_files = parse_patch_files(stdin_data);
+    auto affected_files = parse_patch_files(stdin_data, strip_level);
 
     // Track new files in the current patch
     auto currently_tracked = files_in_patch(q, top);

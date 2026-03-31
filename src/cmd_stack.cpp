@@ -90,6 +90,10 @@ int cmd_applied(QuiltState &q, int argc, char **argv) {
             err("Patch "); err(format_patch(q, target)); err_line(" is not in series");
             return 1;
         }
+        if (!q.is_applied(target)) {
+            err("Patch "); err(format_patch(q, target)); err_line(" is not applied");
+            return 1;
+        }
         for (const auto &a : q.applied) {
             out_line(format_patch(q, a));
             if (a == target) break;
