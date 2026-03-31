@@ -1791,6 +1791,11 @@ int cmd_revert(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
+    if (!q.is_applied(patch)) {
+        err("Patch "); err(format_patch(q, patch)); err_line(" is not applied");
+        return 1;
+    }
+
     for (const auto &file : files) {
         // Check if file is tracked by the patch
         std::string backup_path = path_join(pc_patch_dir(q, patch), file);
