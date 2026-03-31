@@ -506,12 +506,12 @@ QuiltState load_state() {
         std::string s1 = path_join(q.work_dir, series_name);
         std::string s2 = path_join(q.work_dir, q.patches_dir, series_name);
         std::string s3 = path_join(q.work_dir, q.pc_dir, series_name);
-        if (file_exists(s1)) {
+        if (file_exists(s3)) {
+            q.series_file = path_join(q.pc_dir, series_name);
+        } else if (file_exists(s1)) {
             q.series_file = series_name;
         } else if (file_exists(s2)) {
             q.series_file = path_join(q.patches_dir, series_name);
-        } else if (file_exists(s3)) {
-            q.series_file = path_join(q.pc_dir, series_name);
         } else {
             q.series_file = path_join(q.patches_dir, series_name);
         }

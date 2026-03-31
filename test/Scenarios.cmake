@@ -433,6 +433,7 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     refresh_diffstat_twice
     refresh_diffstat_header_replace
     series_in_pc_dir
+    series_pc_precedes_root
     series_leading_space_no_newline
     header_replace_no_newline
     annotate_no_series_file
@@ -7145,6 +7146,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_refresh_diffstat_header_replace()
     elseif(scenario STREQUAL "series_in_pc_dir")
         qt_scenario_series_in_pc_dir()
+    elseif(scenario STREQUAL "series_pc_precedes_root")
+        qt_scenario_series_pc_precedes_root()
     elseif(scenario STREQUAL "series_leading_space_no_newline")
         qt_scenario_series_leading_space_no_newline()
     elseif(scenario STREQUAL "header_replace_no_newline")
@@ -8175,6 +8178,21 @@ function(qt_scenario_series_in_pc_dir)
     #   s3 = <work_dir>/.pc/series      (exists!) → line 509
     qt_quilt_ok(OUTPUT series_out ARGS series MESSAGE "series failed")
     qt_assert_contains("${series_out}" "p.patch" "series should list patch from .pc/series")
+endfunction()
+
+# series_pc_precedes_root: docs/manual.md says the search order is
+# .pc/<series-name> -> <project-root>/<series-name> -> <QUILT_PATCHES>/<series-name>.
+# When both .pc/series and ./series exist, quilt should read .pc/series.
+function(qt_scenario_series_pc_precedes_root)
+    qt_begin_test("series_pc_precedes_root")
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/.pc")
+    qt_write_file("${QT_WORK_DIR}/series" "root.patch\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/series" "pc.patch\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/applied-patches" "")
+    qt_write_file("${QT_WORK_DIR}/.pc/.version" "2\n")
+    qt_quilt_ok(OUTPUT series_out ARGS series MESSAGE "series failed")
+    qt_assert_contains("${series_out}" "pc.patch" "series should prefer .pc/series over ./series")
+    qt_assert_not_contains("${series_out}" "root.patch" "series should not read the root series file first")
 endfunction()
 
 # series_leading_space_no_newline: core.cpp lines 105, 117-118
