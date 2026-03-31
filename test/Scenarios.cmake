@@ -208,6 +208,7 @@ set(QUILT_TEST_SCENARIOS
     applied_unapplied_target
     add_remove_unapplied_P
     fold_strip_level
+    diff_U0_pure_insert
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -7173,6 +7174,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_add_remove_unapplied_P()
     elseif(scenario STREQUAL "fold_strip_level")
         qt_scenario_fold_strip_level()
+    elseif(scenario STREQUAL "diff_U0_pure_insert")
+        qt_scenario_diff_U0_pure_insert()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -8608,4 +8611,28 @@ function(qt_scenario_fold_strip_level)
         "correct backup a/b/foo.c should exist")
     qt_assert_not_exists("${QT_WORK_DIR}/.pc/test.patch/b/foo.c"
         "spurious backup b/foo.c should not exist")
+endfunction()
+
+# diff_U0_pure_insert: diff -U0 with append should produce correct hunk header
+function(qt_scenario_diff_U0_pure_insert)
+    qt_begin_test("diff_U0_pure_insert")
+    # Test 1: pure insert (append at end)
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nb\nc\n")
+    qt_quilt_ok(ARGS new test.patch MESSAGE "new")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nb\nc\nd\n")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS diff -U0 MESSAGE "diff -U0")
+    # Should be @@ -3,0 +4 @@ (insert after old line 3), not @@ -0,0 +4 @@
+    qt_assert_contains("${out}" "-3,0" "old_start should reference line 3")
+    qt_assert_not_contains("${out}" "-0,0" "old_start should not be 0")
+    # Test 2: pure delete (remove line from middle) — separate patch
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "a\nb\nc\nd\n")
+    qt_quilt_ok(ARGS new test2.patch MESSAGE "new2")
+    qt_quilt_ok(ARGS add g.txt MESSAGE "add g")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "a\nb\nd\n")
+    qt_quilt_ok(OUTPUT out2 ERROR err2 ARGS diff -U0 MESSAGE "diff -U0 delete")
+    # Should be @@ -3 +2,0 @@ (delete old line 3), not @@ -3 +0,0 @@
+    qt_assert_contains("${out2}" "+2,0" "new_start should reference line 2")
+    qt_assert_not_contains("${out2}" "+0,0" "new_start should not be 0")
 endfunction()

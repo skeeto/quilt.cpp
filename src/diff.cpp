@@ -239,18 +239,24 @@ static std::vector<Hunk> build_hunks(const std::vector<EditOp> &ops,
             }
         }
 
-        // If no old lines at all, old_start should be the line after the previous context
-        if (first_old) h.old_start = h.ops.empty() ? 0 : 0;
-        if (first_new) h.new_start = h.ops.empty() ? 0 : 0;
-
-        // Edge case: empty side means start=0, count=0 per diff convention
-        // But standard diff uses start = line_before + 1 for empty ranges
-        if (h.old_count == 0 && !h.ops.empty()) {
-            // Find nearest old index
-            for (const auto &op : h.ops) {
-                if (op.type == 'I' && op.new_idx >= 0) {
-                    // The insert happens after old line op.new_idx (but we need the old context)
-                    // For a pure insert, old_start = line before insertion point
+        // If a side has no lines in the hunk (pure insert or pure delete),
+        // find the position from the preceding ops in the full ops list.
+        if (first_old) {
+            // Pure insert: old_start = last old line before insertion point
+            for (ptrdiff_t i = hunk_start - 1; i >= 0; --i) {
+                auto &prev = ops[checked_cast<size_t>(i)];
+                if (prev.old_idx >= 0) {
+                    h.old_start = prev.old_idx + 1;  // 1-based
+                    break;
+                }
+            }
+        }
+        if (first_new) {
+            // Pure delete: new_start = last new line before deletion point
+            for (ptrdiff_t i = hunk_start - 1; i >= 0; --i) {
+                auto &prev = ops[checked_cast<size_t>(i)];
+                if (prev.new_idx >= 0) {
+                    h.new_start = prev.new_idx + 1;  // 1-based
                     break;
                 }
             }
