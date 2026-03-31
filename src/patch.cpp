@@ -486,11 +486,14 @@ static std::string build_output(std::span<const std::string> file_lines,
         auto fz = hunk_fuzz[checked_cast<size_t>(h)];
         pos += fz.prefix;
         pat_len -= fz.prefix + fz.suffix;
+        if (pat_len < 0) pat_len = 0;
         ptrdiff_t new_start = fz.prefix;
         ptrdiff_t new_end = std::ssize(new_lines) - fz.suffix;
+        if (new_end < new_start) new_end = new_start;
 
         // Clamp to file bounds
         if (pos > file_len) pos = file_len;
+
         // Copy unchanged lines from last_copied to pos
         for (ptrdiff_t j = last_copied; j < pos; ++j) {
             output += file_lines[checked_cast<size_t>(j)];
@@ -562,8 +565,12 @@ static std::string build_merge_output(std::span<const std::string> file_lines,
             auto fz = hunk_fuzz[checked_cast<size_t>(h)];
             pos += fz.prefix;
             pat_len -= fz.prefix + fz.suffix;
+            if (pat_len < 0) pat_len = 0;
             ptrdiff_t new_start = fz.prefix;
             ptrdiff_t new_end = std::ssize(new_lines) - fz.suffix;
+            if (new_end < new_start) new_end = new_start;
+
+            if (pos > file_len) pos = file_len;
 
             for (ptrdiff_t j = last_copied; j < pos; ++j) {
                 output += file_lines[checked_cast<size_t>(j)];
