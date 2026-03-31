@@ -214,6 +214,7 @@ set(QUILT_TEST_SCENARIOS
     pc_quilt_patches_overrides_env
     pc_quilt_series_is_filename
     series_pc_precedes_root
+    quilt_series_pc_search_order
     top_index_applied_not_in_series
     rename_drops_strip_level
     refresh_shadow_rediff
@@ -7149,6 +7150,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_series_in_pc_dir()
     elseif(scenario STREQUAL "series_pc_precedes_root")
         qt_scenario_series_pc_precedes_root()
+    elseif(scenario STREQUAL "quilt_series_pc_search_order")
+        qt_scenario_quilt_series_pc_search_order()
     elseif(scenario STREQUAL "series_leading_space_no_newline")
         qt_scenario_series_leading_space_no_newline()
     elseif(scenario STREQUAL "header_replace_no_newline")
@@ -8789,6 +8792,26 @@ function(qt_scenario_pc_quilt_series_is_filename)
         ".pc/.quilt_series should point to the root series filename")
     qt_assert_not_contains("${series_out}" "patches.patch"
         ".pc/.quilt_series should not be resolved inside the patches dir")
+endfunction()
+
+# quilt_series_pc_search_order: when .pc/.quilt_series names a series file,
+# that name must still go through the normal .pc/root/patches search order.
+# If both .pc/altseries and ./altseries exist, .pc/altseries should win.
+function(qt_scenario_quilt_series_pc_search_order)
+    qt_begin_test("quilt_series_pc_search_order")
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/patches")
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/.pc")
+    qt_write_file("${QT_WORK_DIR}/.pc/altseries" "pc.patch\n")
+    qt_write_file("${QT_WORK_DIR}/altseries" "root.patch\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/applied-patches" "")
+    qt_write_file("${QT_WORK_DIR}/.pc/.version" "2\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/.quilt_patches" "patches\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/.quilt_series" "altseries\n")
+    qt_quilt_ok(OUTPUT series_out ARGS series MESSAGE "series failed")
+    qt_assert_contains("${series_out}" "pc.patch"
+        ".quilt_series name should resolve through .pc/ first")
+    qt_assert_not_contains("${series_out}" "root.patch"
+        ".quilt_series should not bypass the .pc search order")
 endfunction()
 
 # rename_drops_strip_level: renaming a -p0 patch must preserve -p0
