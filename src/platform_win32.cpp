@@ -555,6 +555,8 @@ void set_env(std::string_view name, std::string_view value)
 
 std::string get_home_dir()
 {
+    std::string home = get_env("HOME");
+    if (!home.empty()) return home;
     std::string up = get_env("USERPROFILE");
     if (!up.empty()) return up;
     std::string hd = get_env("HOMEDRIVE");
