@@ -81,13 +81,16 @@ runtime:
 
     $ cmake -B build-fuzz -DENABLE_FUZZ=ON \
           -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug
-    $ cmake --build build-fuzz -t fuzz_patch -t fuzz_shell_split -t fuzz_roundtrip
+    $ cmake --build build-fuzz -t fuzz_patch -t fuzz_shell_split \
+          -t fuzz_roundtrip -t fuzz_roundtrip_fuzz
     $ ASAN_OPTIONS=detect_container_overflow=0 \
           ./build-fuzz/fuzz_patch fuzz/corpus/ -max_len=65536
     $ ASAN_OPTIONS=detect_container_overflow=0 \
           ./build-fuzz/fuzz_shell_split fuzz/corpus_shell_split/ -max_len=4096
     $ ASAN_OPTIONS=detect_container_overflow=0 \
           ./build-fuzz/fuzz_roundtrip fuzz/corpus_roundtrip/ -max_len=2048
+    $ ASAN_OPTIONS=detect_container_overflow=0 \
+          ./build-fuzz/fuzz_roundtrip_fuzz fuzz/corpus_roundtrip_fuzz/ -max_len=2048
 
 `fuzz_patch` exercises patch parsing, hunk matching, output building,
 merge conflict markers, and reject generation. An in-memory filesystem
@@ -102,6 +105,11 @@ backslash escapes, and `$VAR`/`${VAR}` expansion.
 the resulting patch to the first string, and asserts the result matches
 the second. This catches semantic correctness bugs that crash-only
 fuzzing misses.
+
+`fuzz_roundtrip_fuzz` generates a valid diff, then mutates the "old"
+content to simulate source drift before applying the patch with fuzz
+matching (fuzz 1–3). This exercises the offset-search and
+context-trimming logic on well-formed patches without crashing.
 
 [libFuzzer]: https://llvm.org/docs/LibFuzzer.html
 

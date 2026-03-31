@@ -130,6 +130,16 @@ if(ENABLE_FUZZ)
         -fsanitize=fuzzer,address,undefined)
     target_link_options(fuzz_roundtrip PRIVATE
         -fsanitize=fuzzer,address,undefined)
+
+    add_executable(fuzz_roundtrip_fuzz fuzz/fuzz_roundtrip_fuzz.cpp ${FUZZ_SOURCES})
+    target_include_directories(fuzz_roundtrip_fuzz PRIVATE src)
+    target_precompile_headers(fuzz_roundtrip_fuzz PRIVATE src/quilt.hpp)
+    target_compile_definitions(fuzz_roundtrip_fuzz PRIVATE
+        FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
+    target_compile_options(fuzz_roundtrip_fuzz PRIVATE
+        -fsanitize=fuzzer,address,undefined)
+    target_link_options(fuzz_roundtrip_fuzz PRIVATE
+        -fsanitize=fuzzer,address,undefined)
 endif()
 
 enable_testing()
