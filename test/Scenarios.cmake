@@ -209,6 +209,7 @@ set(QUILT_TEST_SCENARIOS
     add_remove_unapplied_P
     fold_strip_level
     diff_U0_pure_insert
+    import_P_multiple
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -7179,6 +7180,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_diff_U0_pure_insert()
     elseif(scenario STREQUAL "refresh_shadow_deletion")
         qt_scenario_refresh_shadow_deletion()
+    elseif(scenario STREQUAL "import_P_multiple")
+        qt_scenario_import_P_multiple()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -8665,4 +8668,20 @@ function(qt_scenario_refresh_shadow_deletion)
     qt_quilt_ok(ARGS refresh -f a.patch MESSAGE "refresh -f a")
     qt_assert_file_contains("${QT_WORK_DIR}/patches/a.patch" "/dev/null"
         "a.patch should still contain file deletion after refresh -f")
+endfunction()
+
+# import_P_multiple: import -P with multiple files should fail upfront
+function(qt_scenario_import_P_multiple)
+    qt_begin_test("import_P_multiple")
+    qt_write_file("${QT_WORK_DIR}/ext/a.patch" "--- /dev/null\n+++ b/a.txt\n@@ -0,0 +1 @@\n+a\n")
+    qt_write_file("${QT_WORK_DIR}/ext/b.patch" "--- /dev/null\n+++ b/b.txt\n@@ -0,0 +1 @@\n+b\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err
+        ARGS import -P combined.patch ext/a.patch ext/b.patch)
+    qt_assert_failure("${rc}" "import -P with multiple files should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "single patch"
+        "error should mention single patch limitation")
+    # Series should be empty — no partial import
+    qt_assert_not_exists("${QT_WORK_DIR}/patches/series"
+        "series should not exist after rejected import")
 endfunction()

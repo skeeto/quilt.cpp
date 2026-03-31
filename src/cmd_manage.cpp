@@ -371,6 +371,11 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
+    if (!target_name.empty() && patchfiles.size() > 1) {
+        err_line("Option `-P' can only be used when importing a single patch");
+        return 1;
+    }
+
     if (!ensure_pc_dir(q)) {
         return 1;
     }
