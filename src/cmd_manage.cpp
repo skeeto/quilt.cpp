@@ -453,6 +453,7 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
                 merged_header = old_hdr;
                 if (!merged_header.empty() && merged_header.back() != '\n')
                     merged_header += '\n';
+                merged_header += "---\n";
                 merged_header += new_hdr;
             }
             std::string result = replace_header(new_content, merged_header);

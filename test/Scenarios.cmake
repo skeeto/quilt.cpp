@@ -276,7 +276,6 @@ set(QUILT_TEST_SCENARIOS
     graph_edge_labels_space
     graph_no_applied_with_series
     graph_unapplied_patch
-    graph_reduce
     graph_patch_prunes_unrelated
     graph_empty_backup_files
     annotate_no_applied
@@ -331,6 +330,9 @@ set(QUILT_TEST_SCENARIOS
     refresh_empty_message
     diff_combine_equals
     refresh_sorted_default
+    diff_P_shadowed
+    add_P_higher_patch
+    import_dup_append_separator
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -478,6 +480,7 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     next_with_target
     upgrade_help
     fork_applied_not_in_series
+    graph_reduce
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -7271,6 +7274,12 @@ function(qt_run_named_scenario scenario)
         qt_scenario_diff_combine_equals()
     elseif(scenario STREQUAL "refresh_sorted_default")
         qt_scenario_refresh_sorted_default()
+    elseif(scenario STREQUAL "diff_P_shadowed")
+        qt_scenario_diff_P_shadowed()
+    elseif(scenario STREQUAL "add_P_higher_patch")
+        qt_scenario_add_P_higher_patch()
+    elseif(scenario STREQUAL "import_dup_append_separator")
+        qt_scenario_import_dup_append_separator()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -9245,5 +9254,74 @@ function(qt_scenario_refresh_sorted_default)
     string(FIND "${patch_text}" "z.txt" z_pos)
     if(a_pos GREATER_EQUAL z_pos)
         qt_fail("refresh should output files in sorted order (a.txt before z.txt)")
+    endif()
+endfunction()
+
+# diff_P_shadowed: diff -P on non-topmost patch should show only that patch's changes
+function(qt_scenario_diff_P_shadowed)
+    qt_begin_test("diff_P_shadowed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p1 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "v1\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p2 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "v2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2 failed")
+    # diff -P p1 should show base→v1, NOT base→v2
+    qt_quilt_ok(OUTPUT diff_out ERROR diff_err ARGS diff -P p1.patch MESSAGE "diff -P p1 failed")
+    qt_assert_contains("${diff_out}" "+v1" "diff -P p1 should show +v1")
+    qt_assert_not_contains("${diff_out}" "+v2" "diff -P p1 should NOT show +v2")
+endfunction()
+
+# add_P_higher_patch: add -P should reject files modified by later applied patches
+function(qt_scenario_add_P_higher_patch)
+    qt_begin_test("add_P_higher_patch")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p1 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "v1\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p2 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "v2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2 failed")
+    # Create a new file and try to add it to p1 — should fail because p2 tracks f.txt
+    qt_write_file("${QT_WORK_DIR}/g.txt" "new\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS add -P p1.patch g.txt)
+    # g.txt is NOT modified by p2, so this should succeed
+    qt_assert_success("${rc}" "add -P p1 g.txt should succeed (g.txt not in p2)")
+    # Now try adding a file that IS already tracked by p2
+    qt_write_file("${QT_WORK_DIR}/h.txt" "h\n")
+    qt_quilt_ok(ARGS add -P p2.patch h.txt MESSAGE "add h to p2")
+    qt_quilt(RESULT rc2 OUTPUT out2 ERROR err2 ARGS add -P p1.patch h.txt)
+    qt_assert_failure("${rc2}" "add -P p1 h.txt should fail (h.txt in p2)")
+    qt_combine_output(combined "${out2}" "${err2}")
+    qt_assert_contains("${combined}" "modified by patch" "should explain why add failed")
+endfunction()
+
+# import_dup_append_separator: import -d a should put --- between old and new headers
+function(qt_scenario_import_dup_append_separator)
+    qt_begin_test("import_dup_append_separator")
+    # Create a patch with a header
+    qt_write_file("${QT_WORK_DIR}/ext/p.patch" "Old header line\n\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-old\n+new\n")
+    qt_quilt_ok(ARGS import "${QT_WORK_DIR}/ext/p.patch" MESSAGE "import failed")
+    # Create a new version of the same patch with a different header
+    qt_write_file("${QT_WORK_DIR}/ext/p.patch" "New header line\n\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-old\n+newer\n")
+    qt_quilt_ok(ARGS import -f -d a "${QT_WORK_DIR}/ext/p.patch" MESSAGE "reimport -d a failed")
+    # Check that the merged header has --- between old and new
+    file(READ "${QT_WORK_DIR}/patches/p.patch" patch_text)
+    qt_assert_contains("${patch_text}" "Old header line" "should keep old header")
+    qt_assert_contains("${patch_text}" "New header line" "should have new header")
+    string(FIND "${patch_text}" "---\nNew header" sep_pos)
+    if(sep_pos LESS 0)
+        # Also try with just --- as separator line
+        string(FIND "${patch_text}" "---\n" sep_pos)
+        string(FIND "${patch_text}" "Old header" old_pos)
+        string(FIND "${patch_text}" "New header" new_pos)
+        if(NOT (old_pos LESS sep_pos AND sep_pos LESS new_pos))
+            qt_fail("import -d a should place --- between old and new headers")
+        endif()
     endif()
 endfunction()

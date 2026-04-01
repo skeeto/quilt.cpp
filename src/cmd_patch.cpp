@@ -232,6 +232,21 @@ int cmd_add(QuiltState &q, int argc, char **argv) {
             return 2;
         }
 
+        // Check if file is modified by any patch applied after this one
+        bool found_patch = false;
+        for (const auto &ap : q.applied) {
+            if (!found_patch) {
+                if (ap == patch) found_patch = true;
+                continue;
+            }
+            std::string later_backup = path_join(pc_patch_dir(q, ap), file);
+            if (file_exists(later_backup)) {
+                err("File "); err(file); err(" modified by patch ");
+                err_line(patch_path_display(q, ap));
+                return 1;
+            }
+        }
+
         // Backup the file
         if (!backup_file(q, patch, file)) {
             err("Failed to back up "); err_line(file);
@@ -1902,10 +1917,30 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
             }
         }
     } else {
+        // Warn if more recent patches modify files in this patch
+        bool warned_shadowing = false;
         for (const auto &file : tracked) {
-            std::string diff_out = generate_file_diff(q, patch, file, p_format, reverse,
-                                                      diff_cmd_base, ctx_lines, diff_format,
-                                                      no_timestamps);
+            std::string shadowing = next_patch_for_file(q, patch, file);
+            if (!shadowing.empty() && !warned_shadowing) {
+                err("Warning: more recent patches modify files in patch ");
+                err_line(patch_path_display(q, patch));
+                warned_shadowing = true;
+            }
+
+            std::string old_path = path_join(pc_patch_dir(q, patch), file);
+            std::string new_path = path_join(q.work_dir, file);
+            bool new_placeholder = false;
+
+            // If a patch above this one shadows the file, use its backup
+            if (!shadowing.empty()) {
+                new_path = path_join(pc_patch_dir(q, shadowing), file);
+                new_placeholder = true;
+            }
+
+            std::string diff_out = generate_path_diff(
+                q, file, old_path, true, new_path, new_placeholder,
+                p_format, reverse, diff_cmd_base, ctx_lines, diff_format,
+                no_timestamps);
             if (!diff_out.empty()) {
                 if (!no_index) {
                     out("Index: " + (p_format == "0" ? file : p_format == "ab" ? "b/" + file : work_base + "/" + file) + "\n");
