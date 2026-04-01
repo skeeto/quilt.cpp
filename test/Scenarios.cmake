@@ -221,7 +221,6 @@ set(QUILT_TEST_SCENARIOS
     pop_verify_reverse
     pop_auto_refresh
     pop_refresh_args
-    init_extra_args
     refresh_unified
     refresh_unified_lines
     refresh_context
@@ -316,8 +315,9 @@ set(QUILT_TEST_SCENARIOS
 # Skipped when testing an external quilt binary.
 # Scenarios that test quilt.cpp-specific behavior: mail command format,
 # builtin diff/patch engines, internal shell_split, stub commands,
-# quilt.cpp extensions (init, --dep3, -p2, next <target>), and tests
-# that check error messages or exit codes that differ from original quilt.
+# Debian quilt extensions (init, --dep3), quilt.cpp extensions (next
+# <target>), and tests that check error messages or exit codes that
+# differ from upstream quilt.
 # Skipped when testing an external quilt binary.
 set(QUILT_TEST_SCENARIOS_NATIVE
     mail_basic
@@ -403,6 +403,7 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     pop_target_already_top
     init_creates_metadata
     init_help_text
+    init_extra_args
     init_from_subdir
     refresh_strip_whitespace_warning
     refresh_fork
