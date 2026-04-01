@@ -110,6 +110,7 @@ All internal strings are UTF-8. Indices and counts use `ptrdiff_t` (signed) with
 
 ## Design decisions
 
+- **Debian quilt vs upstream quilt**: Debian maintains a fork of quilt with extensions not in upstream (savannah.nongnu.org). quilt.cpp implements some Debian extensions: `init` command, `header --dep3`. The Homebrew quilt on macOS is upstream, not Debian. Tests for Debian-only features go in `QUILT_TEST_SCENARIOS_NATIVE` so the shared suite passes against upstream quilt.
 - **`quilt mail` diverges from original intentionally**: Output targets `git am`, not mailing lists. No `--send`, no cover letter, `--from`/`--sender` required. Cover-letter options (`-m`, `-M`, `--subject`, `--reply-to`) are accepted but silently ignored for compatibility with the original quilt's option set. See README.md "Differences from Quilt" for full details.
 - **`quilt upgrade` is a no-op**: Only the version 2 `.pc/` format is supported. The command succeeds silently.
 - **Commands that are implemented move out of `cmd_stubs.cpp`**: Stubs are only for truly unimplemented commands. Once a command has real behavior (even trivial like `upgrade`), it belongs in the appropriate `cmd_*.cpp` file.
