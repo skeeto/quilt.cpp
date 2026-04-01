@@ -309,6 +309,7 @@ set(QUILT_TEST_SCENARIOS
     rename_subdirectory
     series_comment_inline
     series_p_space
+    new_combined_p_flag
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -451,7 +452,6 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     revert_subdir
     series_in_pc_dir
     series_leading_space_no_newline
-    new_combined_p_flag
     next_with_target
     upgrade_help
     fork_applied_not_in_series
@@ -5698,10 +5698,12 @@ endfunction()
 
 function(qt_scenario_new_combined_p_flag)
     qt_begin_test("new_combined_p_flag")
-    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
-    # Combined -p flag: -p2 as a single argument (instead of -p 2)
-    qt_quilt_ok(ARGS new -p2 foo.patch MESSAGE "new -p2 failed")
-    qt_assert_file_contains("${QT_WORK_DIR}/patches/series" "-p2" "series should contain -p2")
+    # -p0 as a combined flag should succeed
+    qt_quilt_ok(ARGS new -p0 foo.patch MESSAGE "new -p0 failed")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/series" "-p0" "series should contain -p0")
+    # -p2 should be rejected (only -p0 and -p1 are valid)
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS new -p2 bar.patch)
+    qt_assert_failure("${rc}" "new -p2 should fail")
 endfunction()
 
 function(qt_scenario_next_with_target)

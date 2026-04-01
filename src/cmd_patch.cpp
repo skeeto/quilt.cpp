@@ -143,6 +143,13 @@ int cmd_new(QuiltState &q, int argc, char **argv) {
         q.series.insert(q.series.begin() + top_idx + 1, patch_name);
     }
 
+    // Validate strip level
+    if (!p_value.empty() && p_value != "0" && p_value != "1") {
+        err_line("Cannot create patches with -p" + p_value +
+                 ", please specify -p0 or -p1 instead");
+        return 1;
+    }
+
     // Store strip level
     if (!p_value.empty() && p_value != "1") {
         q.patch_strip_level[patch_name] = std::stoi(p_value);
