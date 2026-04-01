@@ -437,6 +437,7 @@ int cmd_graph(QuiltState &q, int argc, char **argv) {
         }
 
         selected->attrs.push_back("style=bold");
+        selected->attrs.push_back("color=grey");
 
         std::set<std::string> selected_files;
         for (const auto &[file, ranges] : selected->files) {

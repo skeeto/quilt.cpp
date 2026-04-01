@@ -1005,7 +1005,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     int i = 1;
     bool no_timestamps = !get_env("QUILT_NO_DIFF_TIMESTAMPS").empty();
     bool no_index = !get_env("QUILT_NO_DIFF_INDEX").empty();
-    bool sort_files = false;
+    bool sort_files = true;
     bool force = false;
     std::string diff_type;
     std::string context_num;
@@ -1406,10 +1406,30 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         }
     }
 
+    // Check if patch has no diff hunks
+    bool has_diff = false;
+    for (auto &line : split_lines(patch_content)) {
+        if (line.starts_with("--- ") || line.starts_with("diff ")) {
+            has_diff = true;
+            break;
+        }
+    }
+
+    // Check if patch content is unchanged (only skip write if file exists)
+    if (patch_content == old_content && file_exists(patch_file)) {
+        if (!has_diff) {
+            out("Nothing in patch "); out_line(patch_path_display(q, patch));
+        } else {
+            out("Patch "); out(patch_path_display(q, patch));
+            out_line(" is unchanged");
+        }
+        return 0;
+    }
+
     // Ensure patches directory exists
-    std::string patches_abs = path_join(q.work_dir, q.patches_dir);
-    if (!is_directory(patches_abs)) {
-        make_dirs(patches_abs);
+    std::string patch_dir = dirname(patch_file);
+    if (!is_directory(patch_dir)) {
+        make_dirs(patch_dir);
     }
 
     // Write the patch file
@@ -1427,7 +1447,11 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         delete_file(nr);
     }
 
-    out("Refreshed patch "); out_line(patch_path_display(q, patch));
+    if (!has_diff) {
+        out("Nothing in patch "); out_line(patch_path_display(q, patch));
+    } else {
+        out("Refreshed patch "); out_line(patch_path_display(q, patch));
+    }
     return 0;
 }
 
@@ -1447,7 +1471,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
     bool since_refresh = false;
     bool against_snapshot = false;
     bool reverse = false;
-    bool sort_files = false;
+    bool sort_files = true;
     std::string diff_utility;
     std::string combine_patch;
     std::string diff_type = "u";
@@ -1540,6 +1564,11 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
         if (arg == "--combine" && i + 1 < argc) {
             combine_patch = argv[i + 1];
             i += 2;
+            continue;
+        }
+        if (arg.starts_with("--combine=")) {
+            combine_patch = std::string(arg.substr(10));
+            i += 1;
             continue;
         }
         if (arg.starts_with("--diff=")) {
