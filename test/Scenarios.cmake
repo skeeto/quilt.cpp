@@ -6207,7 +6207,7 @@ function(qt_scenario_quilt_version)
     qt_begin_test("quilt_version")
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS --version)
     qt_assert_success("${rc}" "--version should succeed")
-    qt_assert_contains("${out}" "quilt version" "--version should print version")
+    qt_assert_matches("${out}" "^[0-9]+\\.[0-9]" "--version should print version")
 endfunction()
 
 function(qt_scenario_quilt_global_help)
