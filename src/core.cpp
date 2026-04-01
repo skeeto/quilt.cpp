@@ -1057,7 +1057,7 @@ int quilt_main(int argc, char **argv) {
 
     // Handle --version
     if (arg1 == "--version" || arg1 == "-v") {
-        out_line("quilt version 0.1.0");
+        out_line(QUILT_VERSION);
         return 0;
     }
 

@@ -5,10 +5,11 @@
 set -e
 src_dir=$1; shift
 output=$1; shift
+version=$1; shift
 # Remaining arguments are the source files (relative to source-root)
 files=""
 for f; do files="$files $f"; done
-awk -v src_dir="$src_dir" -v file_list="$files" '
+awk -v src_dir="$src_dir" -v file_list="$files" -v version="$version" '
 BEGIN {
     nf = split(file_list, files)
 
@@ -16,6 +17,7 @@ BEGIN {
     printf "// $ c++ -std=c++20 -o quilt.exe quilt.cpp -lshell32\n"
     printf "// $ cl /std:c++20 /EHsc quilt.cpp shell32.lib\n"
     printf "// This is free and unencumbered software released into the public domain.\n\n"
+    printf "#define QUILT_VERSION \"%s\"\n\n", version
 
     for (fi = 1; fi <= nf; fi++) {
         path = src_dir "/" files[fi]
