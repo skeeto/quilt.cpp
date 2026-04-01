@@ -61,8 +61,10 @@ int cmd_series(QuiltState &q, int argc, char **argv) {
 
     for (const auto &patch : q.series) {
         if (verbose) {
-            if (q.is_applied(patch)) {
+            if (!q.applied.empty() && patch == q.applied.back()) {
                 out("= ");
+            } else if (q.is_applied(patch)) {
+                out("+ ");
             } else {
                 out("  ");
             }
@@ -350,9 +352,10 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
         const std::string &name = q.series[checked_cast<size_t>(i)];
         std::string display = patch_path_display(q, name);
 
-        if (!quiet) {
-            out_line("Applying patch " + display);
+        if (i > start_idx) {
+            out_line("");
         }
+        out_line("Applying patch " + display);
 
         // Read patch file
         std::string patch_path = path_join(q.work_dir, q.patches_dir, name);
@@ -424,12 +427,13 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
                 write_applied_patches(q);
                 write_file(path_join(pc_dir, ".timestamp"), "");
                 write_file(path_join(pc_dir, ".needs_refresh"), "");
-                if (!quiet) {
-                    out_line("Applied patch " + display + " (forced; needs refresh)");
-                }
+                out_line("Applied patch " + display + " (forced; needs refresh)");
                 return 1;
             } else {
-                // Not forced: do not record, clean up backups
+                // Not forced: restore files from backups and clean up
+                for (const auto &file : affected) {
+                    restore_file(q, name, file);
+                }
                 err_line("Patch " + display + " does not apply (enforce with -f)");
                 if (!leave_rejects) {
                     for (const auto &file : affected) {
@@ -461,7 +465,7 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
         last_applied = name;
     }
 
-    if (!quiet && !last_applied.empty()) {
+    if (!last_applied.empty()) {
         out_line("\nNow at patch " + patch_path_display(q, last_applied));
     }
     return 0;
@@ -541,6 +545,7 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
     }
 
     // Pop from the top down to stop_idx
+    bool first_pop = true;
     while (std::ssize(q.applied) > stop_idx) {
         const std::string &name = q.applied.back();
         std::string display = patch_path_display(q, name);
@@ -591,17 +596,25 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
             }
         }
 
-        if (!quiet) {
-            out_line("Removing patch " + display);
+        if (!first_pop) {
+            out_line("");
         }
+        out_line("Removing patch " + display);
+        first_pop = false;
 
         // Restore backed-up files
         auto files = files_in_patch(q, name);
         for (const auto &file : files) {
-            if (verbose && !quiet) {
-                out_line("Restoring " + file);
-            }
             restore_file(q, name, file);
+            if (!quiet) {
+                // Show what happened to each file: "Removing" if the file
+                // was deleted (created by the patch), "Restoring" otherwise.
+                if (!file_exists(path_join(q.work_dir, file))) {
+                    out_line("Removing " + file);
+                } else {
+                    out_line("Restoring " + file);
+                }
+            }
         }
 
         // Remove the backup directory
@@ -612,12 +625,10 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
         write_applied_patches(q);
     }
 
-    if (!quiet) {
-        if (q.applied.empty()) {
-            out_line("\nNo patches applied");
-        } else {
-            out_line("\nNow at patch " + patch_path_display(q, q.applied.back()));
-        }
+    if (q.applied.empty()) {
+        out_line("\nNo patches applied");
+    } else {
+        out_line("\nNow at patch " + patch_path_display(q, q.applied.back()));
     }
     return 0;
 }

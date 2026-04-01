@@ -309,6 +309,23 @@ set(QUILT_TEST_SCENARIOS
     series_comment_inline
     series_p_space
     new_combined_p_flag
+    series_v_markers
+    diff_reverse_labels
+    refresh_index_p0
+    refresh_index_pab
+    push_a_blank_lines
+    pop_a_blank_lines
+    refresh_strip_ws_modifies_file
+    patches_v_markers
+    pop_shows_removing
+    revert_restores_post_patch
+    revert_unchanged
+    revert_later_patch
+    delete_applied_non_top
+    delete_top_messages
+    fold_joined_p_flag
+    header_append_message
+    header_replace_message
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -721,11 +738,11 @@ function(qt_scenario_pop_verbose)
     qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
     qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
     qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
-    # Default pop should NOT show Restoring
+    # Default pop should show Restoring (matches original quilt)
     qt_quilt_ok(OUTPUT pop_out ERROR pop_err ARGS pop MESSAGE "pop failed")
     qt_assert_contains("${pop_out}" "Removing patch" "pop should announce removal")
-    qt_assert_not_contains("${pop_out}" "Restoring" "default pop should not show Restoring")
-    # Push back and pop with -v
+    qt_assert_contains("${pop_out}" "Restoring f.txt" "pop should show Restoring")
+    # Push back and pop with -v (should also show Restoring)
     qt_quilt_ok(ARGS push MESSAGE "push failed")
     qt_quilt_ok(OUTPUT popv_out ERROR popv_err ARGS pop -v MESSAGE "pop -v failed")
     qt_assert_contains("${popv_out}" "Restoring f.txt" "pop -v should show Restoring")
@@ -4475,8 +4492,7 @@ function(qt_scenario_refresh_strip_whitespace_warning)
     qt_write_file("${QT_WORK_DIR}/f.txt" "trailing   \n")
     qt_quilt(RESULT rc OUTPUT ref_out ERROR ref_err ARGS refresh --strip-trailing-whitespace)
     qt_assert_success("${rc}" "refresh should succeed")
-    qt_assert_contains("${ref_err}" "Warning" "should warn about trailing whitespace")
-    qt_assert_contains("${ref_err}" "Trailing whitespace" "warning should mention trailing whitespace")
+    qt_assert_contains("${ref_out}" "Removing trailing whitespace" "should warn about trailing whitespace")
 endfunction()
 
 function(qt_scenario_refresh_fork)
@@ -4492,9 +4508,9 @@ function(qt_scenario_refresh_fork)
     qt_assert_equal("${top_stripped}" "orig-2.patch" "top patch should be the forked name")
     # The forked patch should contain the diff
     qt_assert_file_contains("${QT_WORK_DIR}/patches/orig-2.patch" "+forked" "forked patch should have +forked")
-    # Series should have orig-2.patch instead of orig.patch
+    # Series should have both orig.patch and orig-2.patch (original quilt keeps both)
     qt_assert_file_contains("${QT_WORK_DIR}/patches/series" "orig-2.patch" "series should have forked name")
-    qt_assert_file_not_contains("${QT_WORK_DIR}/patches/series" "orig.patch" "series should not have old name")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/series" "orig.patch" "series should still have original name")
 endfunction()
 
 function(qt_scenario_refresh_fork_named)
@@ -5813,8 +5829,7 @@ function(qt_scenario_refresh_strip_ws_blank_context)
     # --strip-trailing-whitespace: all-whitespace context line triggers warning path
     qt_quilt(RESULT rc OUTPUT refresh_out ERROR refresh_err ARGS refresh --strip-trailing-whitespace)
     qt_assert_success("${rc}" "refresh --strip-trailing-whitespace should succeed")
-    qt_combine_output(combined "${refresh_out}" "${refresh_err}")
-    qt_assert_contains("${combined}" "Warning" "should warn about whitespace-only context line")
+    qt_assert_contains("${refresh_out}" "Removing trailing whitespace" "should warn about whitespace-only line")
 endfunction()
 
 function(qt_scenario_refresh_diffstat_padding)
@@ -5874,10 +5889,9 @@ function(qt_scenario_files_verbose)
     qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
     qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
     qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
-    # -v outputs "filename\tpatchname" format (line 769)
+    # -v outputs "  filename" format with two-space prefix (matches original quilt)
     qt_quilt_ok(OUTPUT out ERROR err ARGS files -v MESSAGE "files -v failed")
     qt_assert_contains("${out}" "f.txt" "files -v should list f.txt")
-    qt_assert_contains("${out}" "p.patch" "files -v should list p.patch")
 endfunction()
 
 function(qt_scenario_files_verbose_unapplied)
@@ -7208,6 +7222,40 @@ function(qt_run_named_scenario scenario)
         qt_scenario_pc_quilt_series_is_filename()
     elseif(scenario STREQUAL "rename_drops_strip_level")
         qt_scenario_rename_drops_strip_level()
+    elseif(scenario STREQUAL "series_v_markers")
+        qt_scenario_series_v_markers()
+    elseif(scenario STREQUAL "diff_reverse_labels")
+        qt_scenario_diff_reverse_labels()
+    elseif(scenario STREQUAL "refresh_index_p0")
+        qt_scenario_refresh_index_p0()
+    elseif(scenario STREQUAL "refresh_index_pab")
+        qt_scenario_refresh_index_pab()
+    elseif(scenario STREQUAL "push_a_blank_lines")
+        qt_scenario_push_a_blank_lines()
+    elseif(scenario STREQUAL "pop_a_blank_lines")
+        qt_scenario_pop_a_blank_lines()
+    elseif(scenario STREQUAL "refresh_strip_ws_modifies_file")
+        qt_scenario_refresh_strip_ws_modifies_file()
+    elseif(scenario STREQUAL "patches_v_markers")
+        qt_scenario_patches_v_markers()
+    elseif(scenario STREQUAL "pop_shows_removing")
+        qt_scenario_pop_shows_removing()
+    elseif(scenario STREQUAL "revert_restores_post_patch")
+        qt_scenario_revert_restores_post_patch()
+    elseif(scenario STREQUAL "revert_unchanged")
+        qt_scenario_revert_unchanged()
+    elseif(scenario STREQUAL "revert_later_patch")
+        qt_scenario_revert_later_patch()
+    elseif(scenario STREQUAL "delete_applied_non_top")
+        qt_scenario_delete_applied_non_top()
+    elseif(scenario STREQUAL "delete_top_messages")
+        qt_scenario_delete_top_messages()
+    elseif(scenario STREQUAL "fold_joined_p_flag")
+        qt_scenario_fold_joined_p_flag()
+    elseif(scenario STREQUAL "header_append_message")
+        qt_scenario_header_append_message()
+    elseif(scenario STREQUAL "header_replace_message")
+        qt_scenario_header_replace_message()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -7818,7 +7866,7 @@ function(qt_scenario_revert_subdir)
     # quilt revert: backup is "original\n" (non-empty), dirname="subdir" doesn't exist
     # → make_dirs("subdir") called (line 1788) before writing the restored file
     qt_quilt_ok(ARGS revert subdir/f.txt MESSAGE "revert should create parent directory")
-    qt_assert_file_text("${QT_WORK_DIR}/subdir/f.txt" "original" "revert should restore original content")
+    qt_assert_file_text("${QT_WORK_DIR}/subdir/f.txt" "modified" "revert should restore post-patch content")
 endfunction()
 
 # builtin_diff_both_empty: diff.cpp line 66 (myers_diff n==0, m==0 trivial case)
@@ -8832,4 +8880,286 @@ function(qt_scenario_rename_drops_strip_level)
     qt_read_file_strip(series "${QT_WORK_DIR}/patches/series")
     qt_assert_equal("${series}" "bar.patch -p0"
         "renamed patch should keep -p0 annotation")
+endfunction()
+
+# series_v_markers: series -v must show + for non-top applied, = for top
+function(qt_scenario_series_v_markers)
+    qt_begin_test("series_v_markers")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p1")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "1\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p2")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2")
+    # p1 and p2 both applied. Top is p2. Add unapplied p3 to series directly.
+    qt_write_file("${QT_WORK_DIR}/patches/p3.patch" "")
+    file(APPEND "${QT_WORK_DIR}/patches/series" "p3.patch\n")
+    qt_quilt_ok(OUTPUT sv_out ARGS series -v MESSAGE "series -v failed")
+    qt_assert_matches("${sv_out}" "\\+ .*p1\\.patch" "non-top applied should have + prefix")
+    qt_assert_matches("${sv_out}" "= .*p2\\.patch" "top applied should have = prefix")
+    qt_assert_matches("${sv_out}" "  .*p3\\.patch" "unapplied should have space prefix")
+endfunction()
+
+# diff_reverse_labels: diff -R must not swap ---/+++ labels
+function(qt_scenario_diff_reverse_labels)
+    qt_begin_test("diff_reverse_labels")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "old\n")
+    qt_quilt_ok(ARGS new r.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "new\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(OUTPUT diff_out ARGS diff -R MESSAGE "diff -R failed")
+    # In a reverse diff, --- should show .orig/ and +++ should show dir/
+    # (same label order as forward diff, content is swapped)
+    qt_assert_matches("${diff_out}" "---.*.orig/" "diff -R --- line should have .orig/ prefix")
+    qt_assert_matches("${diff_out}" "\\+\\+\\+" "diff -R should have +++ line")
+    # The reverse content: -new +old
+    qt_assert_contains("${diff_out}" "-new" "reverse diff should show -new")
+    qt_assert_contains("${diff_out}" "+old" "reverse diff should show +old")
+endfunction()
+
+# refresh_index_p0: refresh -p0 should produce Index: <filename> (no dir prefix)
+function(qt_scenario_refresh_index_p0)
+    qt_begin_test("refresh_index_p0")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "old\n")
+    qt_quilt_ok(ARGS new -p0 idx0.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "new\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/idx0.patch" "Index: f.txt"
+        "refresh -p0 Index line should not have dir prefix")
+endfunction()
+
+# refresh_index_pab: refresh -p ab should produce Index: b/<filename>
+function(qt_scenario_refresh_index_pab)
+    qt_begin_test("refresh_index_pab")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "old\n")
+    qt_quilt_ok(ARGS new idxab.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "new\n")
+    qt_quilt_ok(ARGS refresh -p ab MESSAGE "refresh failed")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/idxab.patch" "Index: b/f.txt"
+        "refresh -p ab Index line should have b/ prefix")
+endfunction()
+
+# push_a_blank_lines: push -a should separate patches with blank lines
+function(qt_scenario_push_a_blank_lines)
+    qt_begin_test("push_a_blank_lines")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p1")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "1\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p2")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2")
+    qt_quilt_ok(ARGS pop -a MESSAGE "pop -a failed")
+    qt_quilt_ok(OUTPUT push_out ARGS push -a MESSAGE "push -a failed")
+    # There should be a blank line separating the two patch applications
+    # (after "patching file ..." and before next "Applying patch")
+    qt_assert_contains("${push_out}" "Applying patch" "should show Applying patch")
+    # Check for blank-line separation: the output has \n\nApplying for the second patch
+    qt_assert_matches("${push_out}" "\n\nApplying patch.*p2"
+        "push -a should have blank line before second patch")
+endfunction()
+
+# pop_a_blank_lines: pop -a should separate patches with blank lines
+function(qt_scenario_pop_a_blank_lines)
+    qt_begin_test("pop_a_blank_lines")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p1")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "1\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p2")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2")
+    qt_quilt_ok(OUTPUT pop_out ARGS pop -a MESSAGE "pop -a failed")
+    # There should be a blank line between the two patch removals
+    qt_assert_matches("${pop_out}" "p2\\.patch\n.*\n\n.*p1\\.patch"
+        "pop -a should have blank line between patches")
+endfunction()
+
+# refresh_strip_ws_modifies_file: --strip-trailing-whitespace should modify the working file
+function(qt_scenario_refresh_strip_ws_modifies_file)
+    qt_begin_test("refresh_strip_ws_modifies_file")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "clean\n")
+    qt_quilt_ok(ARGS new sw.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "trailing   \n")
+    qt_quilt_ok(ARGS refresh --strip-trailing-whitespace MESSAGE "refresh failed")
+    # The working file should have had trailing whitespace stripped
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "trailing"
+        "working file should have trailing whitespace stripped")
+endfunction()
+
+# patches_v_markers: patches -v must show + for non-top applied, = for top
+function(qt_scenario_patches_v_markers)
+    qt_begin_test("patches_v_markers")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p1")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "1\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p2")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2")
+    qt_quilt_ok(OUTPUT pv_out ARGS patches -v f.txt MESSAGE "patches -v failed")
+    qt_assert_matches("${pv_out}" "\\+ .*p1\\.patch" "non-top applied should have + prefix")
+    qt_assert_matches("${pv_out}" "= .*p2\\.patch" "top applied should have = prefix")
+endfunction()
+
+# pop_shows_removing: pop should show Removing for files that disappear
+function(qt_scenario_pop_shows_removing)
+    qt_begin_test("pop_shows_removing")
+    # Create a new file via a patch
+    qt_quilt_ok(ARGS new newfile.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add newf.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/newf.txt" "created\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(OUTPUT pop_out ARGS pop MESSAGE "pop failed")
+    # File was created by the patch, so pop should show "Removing" not "Restoring"
+    qt_assert_contains("${pop_out}" "Removing newf.txt" "pop should say Removing for new files")
+endfunction()
+
+# revert_restores_post_patch: revert should restore to post-patch state, not pre-patch
+function(qt_scenario_revert_restores_post_patch)
+    qt_begin_test("revert_restores_post_patch")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "original\n")
+    qt_quilt_ok(ARGS new rv.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "patched\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # Modify file further beyond the patch
+    qt_write_file("${QT_WORK_DIR}/f.txt" "extra edits\n")
+    qt_quilt_ok(ARGS revert f.txt MESSAGE "revert failed")
+    # Should be back to "patched" (post-patch), not "original" (pre-patch)
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "patched"
+        "revert should restore to post-patch state")
+endfunction()
+
+# revert_unchanged: revert should detect when file hasn't been modified
+function(qt_scenario_revert_unchanged)
+    qt_begin_test("revert_unchanged")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "original\n")
+    qt_quilt_ok(ARGS new rv.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "patched\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # Don't modify the file — revert should say "unchanged"
+    qt_quilt_ok(OUTPUT rv_out ARGS revert f.txt MESSAGE "revert failed")
+    qt_assert_contains("${rv_out}" "unchanged" "revert should report unchanged file")
+endfunction()
+
+# revert_later_patch: revert should reject when a later patch modifies the file
+function(qt_scenario_revert_later_patch)
+    qt_begin_test("revert_later_patch")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "original\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p1")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "p1\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p2")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "p2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2")
+    # Try to revert f.txt in p1 — should fail because p2 also modifies it
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS revert -P p1.patch f.txt)
+    qt_assert_failure("${rc}" "revert should fail when later patch modifies file")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "modified by" "should explain which later patch")
+endfunction()
+
+# delete_applied_non_top: delete should reject non-top applied patch
+function(qt_scenario_delete_applied_non_top)
+    qt_begin_test("delete_applied_non_top")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p1")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "1\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p2")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2")
+    # Try to delete p1 while p2 is on top — should fail
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS delete p1.patch)
+    qt_assert_failure("${rc}" "delete should reject non-top applied patch")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "currently applied" "should say currently applied")
+endfunction()
+
+# delete_top_messages: deleting topmost applied patch should show progress
+function(qt_scenario_delete_top_messages)
+    qt_begin_test("delete_top_messages")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p1")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "1\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p2")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2")
+    qt_quilt_ok(OUTPUT del_out ARGS delete MESSAGE "delete failed")
+    qt_assert_contains("${del_out}" "Removing patch" "should show Removing patch")
+    qt_assert_contains("${del_out}" "Now at patch" "should show Now at patch")
+    qt_assert_contains("${del_out}" "Removed patch" "should show Removed patch")
+endfunction()
+
+# fold_joined_p_flag: fold should accept -p0 (joined form)
+function(qt_scenario_fold_joined_p_flag)
+    qt_begin_test("fold_joined_p_flag")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
+    qt_quilt_ok(ARGS new target.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_quilt_ok(
+        ARGS fold -p0
+        INPUT [=[--- f.txt
++++ f.txt
+@@ -1 +1 @@
+-base
++folded
+]=]
+        OUTPUT fold_out ERROR fold_err
+        MESSAGE "fold -p0 failed"
+    )
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "folded"
+        "fold -p0 should apply the patch")
+endfunction()
+
+# header_append_message: header -a should print confirmation
+function(qt_scenario_header_append_message)
+    qt_begin_test("header_append_message")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new hdr.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err
+        ARGS header -a
+        INPUT "Subject: Test\n")
+    qt_assert_success("${rc}" "header -a should succeed")
+    qt_assert_contains("${out}" "Appended" "header -a should confirm append")
+endfunction()
+
+# header_replace_message: header -r should print confirmation
+function(qt_scenario_header_replace_message)
+    qt_begin_test("header_replace_message")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new hdr.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err
+        ARGS header -r
+        INPUT "New Header\n")
+    qt_assert_success("${rc}" "header -r should succeed")
+    qt_assert_contains("${out}" "Replaced" "header -r should confirm replace")
 endfunction()

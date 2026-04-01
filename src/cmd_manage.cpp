@@ -106,32 +106,6 @@ static std::string replace_header(std::string_view content, std::string_view new
     return result;
 }
 
-static int pop_to_patch(QuiltState &q, std::string_view patch) {
-    // Pop all applied patches from top until patch is removed
-    while (!q.applied.empty()) {
-        std::string top = q.applied.back();
-        // Restore files
-        auto tracked = files_in_patch(q, top);
-        for (const auto &f : tracked) {
-            if (!restore_file(q, top, f)) {
-                return 1;
-            }
-        }
-        // Remove .pc/<patch>/ directory
-        std::string pc_dir = pc_patch_dir(q, top);
-        if (is_directory(pc_dir) && !delete_dir_recursive(pc_dir)) {
-            err_line("Failed to remove " + pc_dir);
-            return 1;
-        }
-        q.applied.pop_back();
-        if (!write_applied_checked(q, q.applied)) {
-            return 1;
-        }
-
-        if (top == patch) break;
-    }
-    return 0;
-}
 
 int cmd_delete(QuiltState &q, int argc, char **argv) {
     bool opt_remove = false;
@@ -183,10 +157,35 @@ int cmd_delete(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    // If patch is applied, pop it (and everything above it)
+    // If patch is applied, only allow deleting the topmost patch
     if (q.is_applied(patch)) {
-        int rc = pop_to_patch(q, patch);
-        if (rc != 0) return rc;
+        if (patch != q.applied.back()) {
+            err("Patch "); err(patch_path_display(q, patch));
+            err_line(" is currently applied");
+            return 1;
+        }
+        // Pop the topmost patch with progress messages
+        auto tracked = files_in_patch(q, patch);
+        out_line("Removing patch " + patch_path_display(q, patch));
+        for (const auto &f : tracked) {
+            restore_file(q, patch, f);
+            if (!file_exists(path_join(q.work_dir, f))) {
+                out_line("Removing " + f);
+            } else {
+                out_line("Restoring " + f);
+            }
+        }
+        std::string pc_dir = pc_patch_dir(q, patch);
+        if (is_directory(pc_dir)) delete_dir_recursive(pc_dir);
+        q.applied.pop_back();
+        if (!write_applied_checked(q, q.applied)) return 1;
+        out_line("");
+        if (!q.applied.empty()) {
+            out_line("Now at patch " +
+                     patch_path_display(q, q.applied.back()));
+        } else {
+            out_line("No patches applied");
+        }
     }
 
     // Remove from series
@@ -462,13 +461,18 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
                 return 1;
             }
         } else if (existing && force && !dup_mode) {
-            // No -d flag: if both have headers, error
+            // Both patches exist and no -d flag: check if both have headers
             std::string old_content = read_file(dest);
             std::string new_content = read_file(patchfile);
-            std::string old_hdr = trim(extract_header(old_content));
-            std::string new_hdr = trim(extract_header(new_content));
+            std::string old_hdr = extract_header(old_content);
+            std::string new_hdr = extract_header(new_content);
             if (!old_hdr.empty() && !new_hdr.empty()) {
-                err_line("Patch headers differ; use -d to specify how to handle them.");
+                err_line("Patch headers differ:");
+                err_line("@@ -1 +1 @@");
+                err_line("-" + old_hdr);
+                err_line("+" + new_hdr);
+                err_line("Please use -d {o|a|n} to specify which patch "
+                         "header(s) to keep.");
                 return 1;
             }
             if (!copy_file(patchfile, dest)) {
@@ -516,8 +520,13 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
             }
         }
 
-        out_line("Importing patch " + patchfile +
-                 " (stored as " + patch_path_display(q, name) + ")");
+        if (existing && force) {
+            out_line("Replacing patch " + patch_path_display(q, name) +
+                     " with new version");
+        } else {
+            out_line("Importing patch " + patchfile +
+                     " (stored as " + patch_path_display(q, name) + ")");
+        }
     }
 
     return 0;
@@ -672,6 +681,8 @@ int cmd_header(QuiltState &q, int argc, char **argv) {
         }
         std::string new_content = replace_header(content, new_header);
         write_file(patch_file, new_content);
+        out_line("Appended text to header of patch " +
+                 patch_path_display(q, patch));
         return 0;
     }
 
@@ -683,6 +694,8 @@ int cmd_header(QuiltState &q, int argc, char **argv) {
         }
         std::string new_content = replace_header(content, new_header);
         write_file(patch_file, new_content);
+        out_line("Replaced header of patch " +
+                 patch_path_display(q, patch));
         return 0;
     }
 
@@ -787,8 +800,8 @@ int cmd_files(QuiltState &q, int argc, char **argv) {
         patches_to_show.push_back(target_patch);
     }
 
-    // With labels (-l or -v): iterate patches, output per-patch file listings
-    if (opt_labels || opt_verbose) {
+    // With labels (-l): iterate patches, output per-patch file listings
+    if (opt_labels) {
         for (const auto &patch : patches_to_show) {
             std::vector<std::string> file_list;
             if (q.is_applied(patch)) {
@@ -800,16 +813,11 @@ int cmd_files(QuiltState &q, int argc, char **argv) {
             }
             std::ranges::sort(file_list);
             for (const auto &f : file_list) {
-                if (opt_labels) {
-                    out_line(patch + " " + f);
-                } else {
-                    out_line(f + "\t" + patch);
-                }
+                out_line(patch + " " + f);
             }
         }
     } else {
-        // Without labels: collect unique files across all patches, sorted
-        std::set<std::string> seen;
+        // Collect all files across patches
         std::vector<std::string> all_files;
         for (const auto &patch : patches_to_show) {
             std::vector<std::string> file_list;
@@ -821,14 +829,16 @@ int cmd_files(QuiltState &q, int argc, char **argv) {
                 file_list = parse_patch_files(content);
             }
             for (auto &f : file_list) {
-                if (seen.insert(f).second) {
-                    all_files.push_back(std::move(f));
-                }
+                all_files.push_back(std::move(f));
             }
         }
         std::ranges::sort(all_files);
         for (const auto &f : all_files) {
-            out_line(f);
+            if (opt_verbose) {
+                out_line("  " + f);
+            } else {
+                out_line(f);
+            }
         }
     }
 
@@ -896,9 +906,11 @@ int cmd_patches(QuiltState &q, int argc, char **argv) {
         if (touches) {
             std::string display = patch;
             if (opt_verbose) {
-                // Show applied status
-                if (q.is_applied(patch)) {
+                // Show applied status: = for top, + for other applied, space for unapplied
+                if (!q.applied.empty() && patch == q.applied.back()) {
                     out_line("= " + display);
+                } else if (q.is_applied(patch)) {
+                    out_line("+ " + display);
                 } else {
                     out_line("  " + display);
                 }
@@ -927,6 +939,9 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
             opt_force = true;
         } else if (arg == "-p" && i + 1 < argc) {
             strip_level = std::stoi(std::string(argv[++i]));
+        } else if (arg.starts_with("-p") && arg.size() > 2 &&
+                   arg[2] >= '0' && arg[2] <= '9') {
+            strip_level = std::stoi(std::string(arg.substr(2)));
         } else if (arg[0] == '-') {
             err("Unrecognized option: "); err_line(arg);
             return 1;

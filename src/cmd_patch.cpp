@@ -554,7 +554,6 @@ static std::string generate_path_diff(const QuiltState &q,
 
     if (reverse) {
         std::swap(old_arg, new_arg);
-        std::swap(old_label, new_label);
     }
 
     // Use built-in diff when no external diff utility is specified
@@ -992,36 +991,6 @@ static std::string remove_diffstat_section(std::string_view header) {
 
 // Strip trailing whitespace from diff output lines.
 // Returns the cleaned diff and emits warnings to stderr.
-static std::string strip_trailing_ws(std::string_view diff, std::string_view filename) {
-    std::string result;
-    auto lines = split_lines(diff);
-    int lineno = 0;
-    for (const auto &line : lines) {
-        lineno++;
-        if (line.empty()) {
-            result += '\n';
-            continue;
-        }
-        // Strip \r from CRLF before checking for trailing whitespace
-        std::string_view l = line;
-        if (!l.empty() && l.back() == '\r') l.remove_suffix(1);
-        auto end = l.find_last_not_of(" \t");
-        if (end == std::string::npos) {
-            err_line(std::format("Warning: Trailing whitespace in line {} of {}",
-                                lineno, filename));
-            result += '\n';
-        } else if (static_cast<ptrdiff_t>(end) + 1 < std::ssize(l)) {
-            err_line(std::format("Warning: Trailing whitespace in line {} of {}",
-                                lineno, filename));
-            result += l.substr(0, end + 1);
-            result += '\n';
-        } else {
-            result += l;
-            result += '\n';
-        }
-    }
-    return result;
-}
 
 int cmd_refresh(QuiltState &q, int argc, char **argv) {
     if (q.applied.empty()) {
@@ -1169,19 +1138,115 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     }
 
     // Fork before refresh if -z was given
+    // Unlike standalone "fork" (which replaces the original), refresh -z
+    // inserts a new patch *after* the original and refreshes the fork.
+    // The original patch keeps its content. The fork captures only the
+    // delta between the original's refreshed state and the current working
+    // tree.
     if (opt_fork) {
         if (patch != q.applied.back()) {
             err_line("Can only use -z with the topmost applied patch");
             return 1;
         }
-        std::vector<std::string> fork_storage;
-        fork_storage.push_back("fork");
-        if (!fork_name.empty()) fork_storage.push_back(fork_name);
-        std::vector<char *> fork_argv;
-        for (auto &s : fork_storage) fork_argv.push_back(s.data());
-        int frc = cmd_fork(q, checked_cast<int>(std::ssize(fork_argv)), fork_argv.data());
-        if (frc != 0) return frc;
-        patch = q.applied.back();
+        std::string old_name(patch);
+
+        // Generate fork name
+        std::string new_name;
+        if (!fork_name.empty()) {
+            new_name = fork_name;
+        } else {
+            auto dot = str_rfind(old_name, '.');
+            if (dot > 0) {
+                new_name = old_name.substr(0, checked_cast<size_t>(dot)) + "-2" + old_name.substr(checked_cast<size_t>(dot));
+            } else {
+                new_name = old_name + "-2";
+            }
+        }
+
+        if (q.find_in_series(new_name)) {
+            err("Patch "); err(new_name); err_line(" already exists in series");
+            return 1;
+        }
+
+        auto idx = q.find_in_series(old_name);
+        if (!idx) {
+            err("Patch "); err(old_name); err_line(" is not in series");
+            return 1;
+        }
+
+        // Create the fork's .pc/ directory with backups representing the
+        // file state *after* the original patch (i.e., the intermediate
+        // state between the two patches).  Reconstruct this by applying
+        // the original patch to the backup copies in an in-memory FS.
+        std::string old_pc = pc_patch_dir(q, old_name);
+        std::string new_pc = pc_patch_dir(q, new_name);
+        make_dirs(new_pc);
+
+        std::string orig_patch_path = path_join(q.work_dir, q.patches_dir, old_name);
+        std::string orig_patch_content = read_file(orig_patch_path);
+        int orig_strip = q.get_strip_level(old_name);
+        auto orig_files = files_in_patch(q, old_name);
+
+        // Build in-memory FS from backup copies, apply original patch
+        std::map<std::string, std::string> memfs;
+        for (const auto &file : orig_files) {
+            std::string backup_path = path_join(old_pc, file);
+            if (file_exists(backup_path) && !is_placeholder_copy(backup_path)) {
+                memfs[file] = read_file(backup_path);
+            }
+        }
+        if (!orig_patch_content.empty()) {
+            PatchOptions popts;
+            popts.strip_level = orig_strip;
+            popts.quiet = true;
+            popts.fs = &memfs;
+            if (q.patch_reversed.contains(old_name)) popts.reverse = true;
+            builtin_patch(orig_patch_content, popts);
+        }
+
+        // Write the intermediate states to the fork's .pc/ directory
+        for (const auto &file : orig_files) {
+            std::string fork_backup = path_join(new_pc, file);
+            std::string fork_dir = dirname(fork_backup);
+            if (!is_directory(fork_dir)) make_dirs(fork_dir);
+
+            auto it = memfs.find(file);
+            if (it != memfs.end()) {
+                write_file(fork_backup, it->second);
+            } else {
+                // File was deleted by patch or not present — write empty placeholder
+                write_file(fork_backup, "");
+            }
+        }
+
+        // Write .timestamp for the fork
+        write_file(path_join(new_pc, ".timestamp"), "");
+
+        // Migrate per-patch metadata to fork
+        auto sl_it = q.patch_strip_level.find(old_name);
+        if (sl_it != q.patch_strip_level.end()) {
+            q.patch_strip_level[new_name] = sl_it->second;
+        }
+        if (q.patch_reversed.contains(old_name)) {
+            q.patch_reversed.insert(new_name);
+        }
+
+        // Insert new patch after original in series
+        q.series.insert(q.series.begin() + *idx + 1, new_name);
+        std::string series_abs = path_join(q.work_dir, q.series_file);
+        if (!write_series(series_abs, q.series, q.patch_strip_level, q.patch_reversed)) {
+            err_line("Failed to write series file.");
+            return 1;
+        }
+
+        // Update applied: add fork after original
+        q.applied.push_back(new_name);
+        std::string applied_path = path_join(q.work_dir, q.pc_dir, "applied-patches");
+        write_applied(applied_path, q.applied);
+
+        out_line("Fork of patch " + patch_path_display(q, old_name) +
+                 " created as " + patch_path_display(q, new_name));
+        patch = new_name;
     }
 
     // Compute shadowed files (files modified by patches above this one)
@@ -1247,8 +1312,11 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
                     p_format, false, {}, ctx_lines, diff_format, no_timestamps);
                 if (!diff_out.empty()) {
                     if (!no_index) {
-                        std::string work_base = basename(q.work_dir);
-                        patch_content += "Index: " + work_base + "/" + file + "\n";
+                        std::string idx_name;
+                        if (p_format == "0") idx_name = file;
+                        else if (p_format == "ab") idx_name = "b/" + file;
+                        else idx_name = basename(q.work_dir) + "/" + file;
+                        patch_content += "Index: " + idx_name + "\n";
                         patch_content += "===================================================================\n";
                     }
                     patch_content += diff_out;
@@ -1259,15 +1327,50 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
             }
             continue;
         }
+        // Strip trailing whitespace from working file before diffing
+        if (opt_strip_whitespace) {
+            std::string working_path = path_join(q.work_dir, file);
+            if (file_exists(working_path)) {
+                std::string content = read_file(working_path);
+                std::string stripped;
+                auto lines = split_lines(content);
+                int lineno = 0;
+                for (const auto &line : lines) {
+                    lineno++;
+                    std::string_view l = line;
+                    auto end = l.find_last_not_of(" \t");
+                    if (end == std::string::npos) {
+                        if (!l.empty()) {
+                            out_line("Removing trailing whitespace from line "
+                                     + std::to_string(lineno) + " of " + file);
+                        }
+                        stripped += '\n';
+                    } else if (static_cast<ptrdiff_t>(end) + 1 < std::ssize(l)) {
+                        out_line("Removing trailing whitespace from line "
+                                 + std::to_string(lineno) + " of " + file);
+                        stripped += l.substr(0, end + 1);
+                        stripped += '\n';
+                    } else {
+                        stripped += l;
+                        stripped += '\n';
+                    }
+                }
+                if (stripped != content) {
+                    write_file(working_path, stripped);
+                }
+            }
+        }
+
         std::string diff_out = generate_file_diff(q, patch, file, p_format,
                                                    false, {}, ctx_lines,
                                                    diff_format, no_timestamps);
-        if (opt_strip_whitespace && !diff_out.empty()) {
-            diff_out = strip_trailing_ws(diff_out, file);
-        }
         if (!diff_out.empty()) {
             if (!no_index) {
-                patch_content += "Index: " + work_base + "/" + file + "\n";
+                std::string idx_name;
+                if (p_format == "0") idx_name = file;
+                else if (p_format == "ab") idx_name = "b/" + file;
+                else idx_name = work_base + "/" + file;
+                patch_content += "Index: " + idx_name + "\n";
                 patch_content += "===================================================================\n";
             }
             patch_content += diff_out;
@@ -1656,7 +1759,6 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
 
             if (reverse) {
                 std::swap(old_f, new_f);
-                std::swap(old_label, new_label);
             }
 
             std::string diff_out;
@@ -1688,7 +1790,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
             }
             if (!diff_out.empty()) {
                 if (!no_index) {
-                    out("Index: " + work_base + "/" + file + "\n");
+                    out("Index: " + (p_format == "0" ? file : p_format == "ab" ? "b/" + file : work_base + "/" + file) + "\n");
                     out("===================================================================\n");
                 }
                 emit_diff(diff_out);
@@ -1722,7 +1824,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                 no_timestamps);
             if (!diff_out.empty()) {
                 if (!no_index) {
-                    out("Index: " + work_base + "/" + file + "\n");
+                    out("Index: " + (p_format == "0" ? file : p_format == "ab" ? "b/" + file : work_base + "/" + file) + "\n");
                     out("===================================================================\n");
                 }
                 emit_diff(diff_out);
@@ -1764,7 +1866,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                 no_timestamps);
             if (!diff_out.empty()) {
                 if (!no_index) {
-                    out("Index: " + work_base + "/" + file + "\n");
+                    out("Index: " + (p_format == "0" ? file : p_format == "ab" ? "b/" + file : work_base + "/" + file) + "\n");
                     out("===================================================================\n");
                 }
                 emit_diff(diff_out);
@@ -1777,7 +1879,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                                                       no_timestamps);
             if (!diff_out.empty()) {
                 if (!no_index) {
-                    out("Index: " + work_base + "/" + file + "\n");
+                    out("Index: " + (p_format == "0" ? file : p_format == "ab" ? "b/" + file : work_base + "/" + file) + "\n");
                     out("===================================================================\n");
                 }
                 emit_diff(diff_out);
@@ -1824,6 +1926,33 @@ int cmd_revert(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
+    // Check if any later applied patch also modifies these files
+    bool found_patch = false;
+    for (const auto &ap : q.applied) {
+        if (!found_patch) {
+            if (ap == patch) found_patch = true;
+            continue;
+        }
+        // ap is a patch applied after 'patch'
+        auto later_files = files_in_patch(q, ap);
+        for (const auto &file : files) {
+            for (const auto &lf : later_files) {
+                if (lf == file) {
+                    err("File "); err(file);
+                    err(" modified by patch ");
+                    err_line(patch_path_display(q, ap));
+                    return 1;
+                }
+            }
+        }
+    }
+
+    // Read the patch file to apply its hunks to backup content
+    std::string patch_file = path_join(q.work_dir, q.patches_dir, patch);
+    std::string patch_text = read_file(patch_file);
+    int strip_level = q.patch_strip_level.count(std::string(patch))
+        ? q.patch_strip_level.at(std::string(patch)) : 1;
+
     for (const auto &file : files) {
         // Check if file is tracked by the patch
         std::string backup_path = path_join(pc_patch_dir(q, patch), file);
@@ -1833,22 +1962,48 @@ int cmd_revert(QuiltState &q, int argc, char **argv) {
             return 1;
         }
 
-        // Restore from backup but keep the backup
+        // Build the clean post-patch state by applying patch to backup
+        std::string backup_content = read_file(backup_path);
+        std::map<std::string, std::string> memfs;
+        memfs[file] = backup_content;
+        PatchOptions opts;
+        opts.strip_level = strip_level;
+        opts.quiet = true;
+        opts.fs = &memfs;
+        builtin_patch(patch_text, opts);
+
+        std::string clean_content = memfs.count(file) ? memfs[file] : "";
+
+        // Check if current file matches clean state (unchanged)
         std::string target = path_join(q.work_dir, file);
-        std::string content = read_file(backup_path);
-        if (content.empty()) {
-            // Backup was empty placeholder — file didn't exist before, delete it
-            delete_file(target);
-        } else {
-            // Ensure target directory exists
-            std::string target_dir = dirname(target);
-            if (!is_directory(target_dir)) {
-                make_dirs(target_dir);
+        std::string current = file_exists(target) ? read_file(target) : "";
+        if (current == clean_content) {
+            out("File "); out(file);
+            out_line(" is unchanged");
+            continue;
+        }
+
+        // Write the clean post-patch state
+        if (clean_content.empty() && backup_content.empty()) {
+            // File didn't exist before and patch creates it — restore to
+            // post-patch state (clean_content from memfs)
+            if (memfs.count(file) && !memfs[file].empty()) {
+                clean_content = memfs[file];
+            } else {
+                delete_file(target);
+                out("Changes to "); out(file); out(" in patch ");
+                out(patch_path_display(q, patch)); out_line(" reverted");
+                continue;
             }
-            if (!write_file(target, content)) {
-                err("Failed to restore "); err_line(file);
-                return 1;
-            }
+        }
+
+        std::string target_dir = dirname(target);
+        if (!is_directory(target_dir)) {
+            make_dirs(target_dir);
+        }
+        if (!write_file(target, clean_content)) {
+            err("Failed to restore "); err_line(file);
+            return 1;
         }
 
         out("Changes to "); out(file); out(" in patch ");
