@@ -218,17 +218,107 @@ set(QUILT_TEST_SCENARIOS
     top_index_applied_not_in_series
     rename_drops_strip_level
     refresh_shadow_rediff
+    pop_verify_reverse
+    pop_auto_refresh
+    pop_refresh_args
+    init_extra_args
+    refresh_unified
+    refresh_unified_lines
+    refresh_context
+    refresh_context_lines
+    refresh_backup
+    refresh_backup_no_existing
+    refresh_strip_whitespace
+    refresh_fork_named
+    refresh_fork_not_top
+    refresh_diffstat
+    refresh_U_combined
+    refresh_C_combined
+    refresh_re_diffstat
+    refresh_diffstat_delete_file
+    refresh_diffstat_padding
+    refresh_diffstat_scale
+    refresh_diffstat_twice
+    refresh_diffstat_header_replace
+    refresh_diffstat_double_newline
+    refresh_creates_patches_dir
+    refresh_diffstat_bare_header
+    refresh_diffstat_bare_false_positive
+    header_strip_diffstat
+    header_strip_trailing_whitespace
+    header_strip_diffstat_print
+    header_strip_ws_print
+    header_strip_diffstat_append
+    header_strip_combined
+    header_backup_append
+    header_strip_ws_empty_line
+    header_strip_diffstat_false_positive
+    header_edit_backup
+    header_replace_no_newline
+    color_option_accepted
+    trace_option_accepted
+    fold_reverse_no_newline
+    fold_patch_opts
+    fold_force
+    fold_force_env
+    fold_quiet
+    fold_strip
+    fold_fail
+    fold_patch_opts_fuzz
+    diff_z_p0
+    diff_z_pab
+    diff_snapshot_new_file_after
+    diff_z_external
+    diff_z_reverse
+    diff_z_subdir
+    diff_snapshot_shadow
+    diff_combine_shadowing
+    diff_external_quilt_diff_opts
+    graph_edge_labels_space
+    graph_no_applied_with_series
+    graph_unapplied_patch
+    graph_reduce
+    graph_patch_prunes_unrelated
+    graph_empty_backup_files
+    annotate_no_applied
+    annotate_empty_series
+    annotate_basic
+    annotate_stop_patch
+    annotate_created_file
+    annotate_subdirectory
+    annotate_no_series_file
+    quilt_no_args
+    quilt_quiltrc_equals
+    quiltrc_export_prefix
+    quiltrc_invalid_key
+    quiltrc_dquote_backslash
+    quiltrc_leading_whitespace
+    quiltrc_export_extra_space
+    quiltrc_explicit_empty
+    push_count_clamp
+    push_quilt_patch_opts
+    push_quilt_patch_opts_fuzz
+    push_missing_file
+    push_fuzz_offset
+    push_backward_offset
+    push_new_file_subdir
+    push_crlf_patch
+    push_fuzz_preserves_lines
+    files_combine_dash_no_applied
+    files_unapplied_duplicate
+    rename_subdirectory
+    series_comment_inline
+    series_p_space
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
 # Skipped when testing an external quilt binary.
+# Scenarios that test quilt.cpp-specific behavior: mail command format,
+# builtin diff/patch engines, internal shell_split, stub commands,
+# quilt.cpp extensions (init, --dep3, -p2, next <target>), and tests
+# that check error messages or exit codes that differ from original quilt.
+# Skipped when testing an external quilt binary.
 set(QUILT_TEST_SCENARIOS_NATIVE
-    pop_verbose
-    pop_verify_reverse
-    pop_auto_refresh
-    pop_refresh_args
-    init_creates_metadata
-    init_help_text
     mail_basic
     mail_single_patch
     mail_patch_range
@@ -256,6 +346,7 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     mail_non_ascii
     mail_single_dash_positional
     mail_leading_blank_header
+    mail_ten_patches
     builtin_diff_identical_files
     builtin_diff_simple_change
     builtin_diff_new_file
@@ -269,6 +360,8 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     builtin_diff_single_line_files
     builtin_diff_context_format
     builtin_diff_vs_system_diff
+    builtin_diff_both_empty
+    builtin_diff_trailing_newline_only
     builtin_patch_exact_apply
     builtin_patch_offset
     builtin_patch_fuzz
@@ -285,128 +378,15 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     builtin_patch_empty_context
     builtin_patch_force
     builtin_patch_vs_system
-    refresh_unified
-    refresh_unified_lines
-    refresh_context
-    refresh_context_lines
-    refresh_backup
-    refresh_backup_no_existing
-    refresh_strip_whitespace
-    refresh_strip_whitespace_warning
-    refresh_fork
-    refresh_fork_named
-    refresh_fork_not_top
-    refresh_diffstat
-    header_strip_diffstat
-    header_strip_trailing_whitespace
-    header_strip_diffstat_print
-    header_strip_ws_print
-    header_dep3_template
-    header_dep3_nonempty
-    header_strip_diffstat_append
-    header_strip_combined
-    unknown_option_rejected
-    color_option_accepted
-    color_option_invalid
-    trace_option_accepted
     builtin_patch_trailing_lines
     builtin_patch_merge_conflict_partial
     builtin_patch_merge_diff3
-    fold_reverse_no_newline
-    diff_external_context_format
-    fold_empty_stdin
-    init_extra_args
-    refresh_U_combined
-    refresh_C_combined
-    diff_external_context_multiline
-    diff_external_with_C
-    diff_quilt_diff_opts_combined
-    diff_quilt_diff_opts_separate
-    refresh_re_diffstat
-    diff_P_unapplied
-    refresh_diffstat_delete_file
-    refresh_strip_ws_blank_context
-    refresh_diffstat_padding
-    diff_z_p0
-    diff_z_pab
-    diff_snapshot_new_file_after
-    diff_z_external
-    diff_z_reverse
-    diff_z_subdir
-    diff_snapshot_shadow
-    fold_patch_opts
-    fold_force
-    fold_force_env
-    header_backup_append
-    stub_grep
-    stub_setup
-    stub_shell
-    graph_lines_with_num
-    graph_lines_nan
-    graph_edge_labels_space
-    graph_edge_labels_bad
-    graph_T_bad
-    graph_T_ps
-    graph_Tps
-    graph_bad_option
-    graph_two_patches
-    graph_all_with_patch
-    graph_no_applied_with_series
-    graph_all_empty
-    graph_unapplied_patch
-    annotate_bad_option
-    annotate_two_files
-    annotate_no_applied
-    annotate_empty_series
-    annotate_nonexistent_file
-    quilt_no_args
-    quilt_version
-    quilt_global_help
-    quilt_help_command
-    quilt_unknown_command
-    quilt_ambiguous_command
-    quilt_quiltrc_equals
-    quiltrc_export_prefix
-    quiltrc_invalid_key
-    quiltrc_dquote_backslash
-    fold_quiet
-    fold_strip
-    fold_fail
-    push_count_clamp
-    push_missing_patch
-    push_quilt_patch_opts
-    pop_auto_refresh_fail
-    import_no_files
-    header_strip_ws_empty_line
-    files_combine_dash_no_applied
-    push_quilt_patch_opts_fuzz
     builtin_patch_merge_copy_lines
     builtin_patch_no_newline_context
     builtin_patch_empty_context_line
-    push_missing_file
-    refresh_diffstat_scale
-    diff_combine_shadowing
-    fold_patch_opts_fuzz
-    rename_subdirectory
-    header_edit_backup
-    header_strip_diffstat_false_positive
-    files_combine_dash_patch_no_applied
-    files_unapplied_duplicate
-    push_fuzz_offset
-    header_edit_fail
-    push_backward_offset
-    push_new_file_subdir
     builtin_patch_empty_file_content
     builtin_patch_stray_minus
-    diff_external_context_no_newline
-    diff_external_quilt_diff_opts
-    revert_subdir
-    builtin_diff_both_empty
-    builtin_diff_trailing_newline_only
-    quiltrc_leading_whitespace
-    series_comment_inline
-    series_p_space
-    init_from_subdir
+    diff_builtin_context_no_newline
     shell_split_single_quotes
     shell_split_double_quotes
     shell_split_var_expansion
@@ -414,42 +394,67 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     shell_split_mixed
     shell_split_dquote_escape
     shell_split_unquoted_backslash
-    annotate_basic
-    annotate_stop_patch
-    annotate_created_file
-    annotate_subdirectory
-    graph_reduce
-    new_combined_p_flag
-    next_with_target
-    files_verbose
-    upgrade_help
+    stub_grep
+    stub_setup
+    stub_shell
+    pop_verbose
+    pop_auto_refresh_fail
+    pop_target_already_top
+    init_creates_metadata
+    init_help_text
+    init_from_subdir
+    refresh_strip_whitespace_warning
+    refresh_fork
+    refresh_strip_ws_blank_context
+    header_dep3_template
+    header_dep3_nonempty
+    header_edit_fail
     header_no_patch_applied
     header_empty_series
-    pop_target_already_top
-    diff_builtin_context_no_newline
-    mail_ten_patches
+    unknown_option_rejected
+    color_option_invalid
+    fold_empty_stdin
+    diff_external_context_format
+    diff_external_context_multiline
+    diff_external_with_C
+    diff_quilt_diff_opts_combined
+    diff_quilt_diff_opts_separate
+    diff_P_unapplied
+    diff_external_context_no_newline
+    graph_lines_with_num
+    graph_lines_nan
+    graph_edge_labels_bad
+    graph_T_bad
+    graph_T_ps
+    graph_Tps
+    graph_bad_option
+    graph_two_patches
+    graph_all_with_patch
+    graph_all_empty
     graph_dot_escape
     graph_lines_identical_content
-    graph_patch_prunes_unrelated
     graph_empty_series
-    quiltrc_export_extra_space
-    quiltrc_explicit_empty
-    refresh_diffstat_twice
-    refresh_diffstat_header_replace
+    graph_prune_unreachable_edge
+    annotate_bad_option
+    annotate_two_files
+    annotate_nonexistent_file
+    quilt_version
+    quilt_global_help
+    quilt_help_command
+    quilt_unknown_command
+    quilt_ambiguous_command
+    push_missing_patch
+    push_reject_no_newline
+    import_no_files
+    files_combine_dash_patch_no_applied
+    files_verbose
+    revert_subdir
     series_in_pc_dir
     series_leading_space_no_newline
-    header_replace_no_newline
-    annotate_no_series_file
-    push_reject_no_newline
+    new_combined_p_flag
+    next_with_target
+    upgrade_help
     fork_applied_not_in_series
-    refresh_diffstat_double_newline
-    refresh_creates_patches_dir
-    push_crlf_patch
-    refresh_diffstat_bare_header
-    refresh_diffstat_bare_false_positive
-    graph_prune_unreachable_edge
-    graph_empty_backup_files
-    push_fuzz_preserves_lines
 )
 
 function(qt_strip_trailing_newlines out_var text)
