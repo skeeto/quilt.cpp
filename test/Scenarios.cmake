@@ -514,6 +514,13 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     graph_reduce
     merge_markers_per_hunk
     push_verbose_long_option
+    diff_algorithm_myers
+    diff_algorithm_minimal
+    diff_algorithm_invalid
+    diff_algorithm_not_implemented
+    diff_algorithm_space_form
+    refresh_diff_algorithm
+    diff_algorithm_minimal_vs_myers
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -7517,6 +7524,20 @@ function(qt_run_named_scenario scenario)
         qt_scenario_next_no_series_exit1()
     elseif(scenario STREQUAL "previous_no_series_exit1")
         qt_scenario_previous_no_series_exit1()
+    elseif(scenario STREQUAL "diff_algorithm_myers")
+        qt_scenario_diff_algorithm_myers()
+    elseif(scenario STREQUAL "diff_algorithm_minimal")
+        qt_scenario_diff_algorithm_minimal()
+    elseif(scenario STREQUAL "diff_algorithm_invalid")
+        qt_scenario_diff_algorithm_invalid()
+    elseif(scenario STREQUAL "diff_algorithm_not_implemented")
+        qt_scenario_diff_algorithm_not_implemented()
+    elseif(scenario STREQUAL "diff_algorithm_space_form")
+        qt_scenario_diff_algorithm_space_form()
+    elseif(scenario STREQUAL "refresh_diff_algorithm")
+        qt_scenario_refresh_diff_algorithm()
+    elseif(scenario STREQUAL "diff_algorithm_minimal_vs_myers")
+        qt_scenario_diff_algorithm_minimal_vs_myers()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -9990,4 +10011,145 @@ function(qt_scenario_previous_no_series_exit1)
     qt_assert_equal("${rc}" "1" "previous with no series file should exit 1")
     qt_combine_output(combined "${out}" "${err}")
     qt_assert_contains("${combined}" "No series file found" "should say no series file")
+endfunction()
+
+# --diff-algorithm tests
+
+function(qt_scenario_diff_algorithm_myers)
+    qt_begin_test("diff_algorithm_myers")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nbbb\nccc\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nBBB\nccc\n")
+    qt_quilt(RESULT rc OUTPUT diff_out ERROR diff_err ARGS diff --diff-algorithm=myers)
+    qt_assert_success("${rc}" "diff --diff-algorithm=myers should succeed")
+    qt_assert_contains("${diff_out}" "-bbb" "should show removed line")
+    qt_assert_contains("${diff_out}" "+BBB" "should show added line")
+endfunction()
+
+function(qt_scenario_diff_algorithm_minimal)
+    qt_begin_test("diff_algorithm_minimal")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nbbb\nccc\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nBBB\nccc\n")
+    qt_quilt(RESULT rc OUTPUT diff_out ERROR diff_err ARGS diff --diff-algorithm=minimal)
+    qt_assert_success("${rc}" "diff --diff-algorithm=minimal should succeed")
+    qt_assert_contains("${diff_out}" "-bbb" "should show removed line")
+    qt_assert_contains("${diff_out}" "+BBB" "should show added line")
+endfunction()
+
+function(qt_scenario_diff_algorithm_invalid)
+    qt_begin_test("diff_algorithm_invalid")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS diff --diff-algorithm=bogus)
+    qt_assert_failure("${rc}" "invalid algorithm should fail")
+    qt_assert_contains("${err}" "Unknown diff algorithm" "should report unknown algorithm")
+endfunction()
+
+function(qt_scenario_diff_algorithm_not_implemented)
+    qt_begin_test("diff_algorithm_not_implemented")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS diff --diff-algorithm=patience)
+    qt_assert_failure("${rc}" "patience should fail as unimplemented")
+    qt_assert_contains("${err}" "not yet implemented" "should say not implemented")
+    qt_quilt(RESULT rc2 OUTPUT out2 ERROR err2 ARGS diff --diff-algorithm=histogram)
+    qt_assert_failure("${rc2}" "histogram should fail as unimplemented")
+    qt_assert_contains("${err2}" "not yet implemented" "should say not implemented")
+endfunction()
+
+function(qt_scenario_diff_algorithm_space_form)
+    qt_begin_test("diff_algorithm_space_form")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nbbb\nccc\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nBBB\nccc\n")
+    qt_quilt(RESULT rc OUTPUT diff_out ERROR diff_err ARGS diff --diff-algorithm minimal)
+    qt_assert_success("${rc}" "diff --diff-algorithm minimal (space) should succeed")
+    qt_assert_contains("${diff_out}" "-bbb" "should show removed line")
+    qt_assert_contains("${diff_out}" "+BBB" "should show added line")
+endfunction()
+
+function(qt_scenario_refresh_diff_algorithm)
+    qt_begin_test("refresh_diff_algorithm")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nbbb\nccc\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nBBB\nccc\n")
+    qt_quilt_ok(ARGS refresh --diff-algorithm=minimal MESSAGE "refresh --diff-algorithm=minimal failed")
+    qt_read_file_strip(patch_content "${QT_WORK_DIR}/patches/p.patch")
+    qt_assert_contains("${patch_content}" "-bbb" "patch should contain removed line")
+    qt_assert_contains("${patch_content}" "+BBB" "patch should contain added line")
+endfunction()
+
+# Distinguishing test: large input where myers heuristic produces a
+# suboptimal diff while minimal finds the true shortest edit script.
+function(qt_scenario_diff_algorithm_minimal_vs_myers)
+    qt_begin_test("diff_algorithm_minimal_vs_myers")
+
+    # Generate a 400-line file, then modify 2/3 of the lines.
+    # Edit distance ~533 exceeds the cost cap (256), so myers
+    # will use a heuristic and produce a longer diff than minimal.
+    set(original "")
+    set(modified "")
+    foreach(i RANGE 0 399)
+        string(LENGTH "${i}" ilen)
+        if(ilen EQUAL 1)
+            set(pad "00${i}")
+        elseif(ilen EQUAL 2)
+            set(pad "0${i}")
+        else()
+            set(pad "${i}")
+        endif()
+        string(APPEND original "original_line_${pad}\n")
+        math(EXPR mod3 "${i} % 3")
+        if(mod3 EQUAL 0)
+            string(APPEND modified "original_line_${pad}\n")
+        else()
+            string(APPEND modified "replacement_line_${pad}\n")
+        endif()
+    endforeach()
+
+    qt_write_file("${QT_WORK_DIR}/f.txt" "${original}")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "${modified}")
+
+    # Get diffs with both algorithms
+    qt_quilt(RESULT rc_myers OUTPUT diff_myers ERROR err_myers
+             ARGS diff --diff-algorithm=myers --no-timestamps)
+    qt_assert_success("${rc_myers}" "myers diff should succeed")
+
+    qt_quilt(RESULT rc_min OUTPUT diff_min ERROR err_min
+             ARGS diff --diff-algorithm=minimal --no-timestamps)
+    qt_assert_success("${rc_min}" "minimal diff should succeed")
+
+    # Count +/- lines (excluding --- and +++ headers)
+    string(REGEX MATCHALL "\n-[^\n]" myers_dels "${diff_myers}")
+    string(REGEX MATCHALL "\n\\+[^\n]" myers_adds "${diff_myers}")
+    list(LENGTH myers_dels myers_del_count)
+    list(LENGTH myers_adds myers_add_count)
+    math(EXPR myers_edits "${myers_del_count} + ${myers_add_count}")
+
+    string(REGEX MATCHALL "\n-[^\n]" min_dels "${diff_min}")
+    string(REGEX MATCHALL "\n\\+[^\n]" min_adds "${diff_min}")
+    list(LENGTH min_dels min_del_count)
+    list(LENGTH min_adds min_add_count)
+    math(EXPR min_edits "${min_del_count} + ${min_add_count}")
+
+    # minimal must produce a diff no longer than myers
+    if(min_edits GREATER myers_edits)
+        qt_fail("minimal (${min_edits} edits) should be <= myers (${myers_edits} edits)")
+    endif()
+
+    # On this input the heuristic should actually produce a longer diff
+    if(min_edits EQUAL myers_edits)
+        qt_fail("Expected minimal (${min_edits}) to be strictly shorter than myers (${myers_edits}) on large input")
+    endif()
 endfunction()

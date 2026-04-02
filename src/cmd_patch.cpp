@@ -529,7 +529,8 @@ static std::string generate_path_diff(const QuiltState &q,
                                       std::span<const std::string> diff_cmd_base = {},
                                       int context_lines = 3,
                                       DiffFormat diff_format = DiffFormat::unified,
-                                      bool no_timestamps = false) {
+                                      bool no_timestamps = false,
+                                      DiffAlgorithm diff_algorithm = DiffAlgorithm::myers) {
     bool old_missing = old_path.empty() || !file_exists(old_path) ||
         (old_placeholder && is_placeholder_copy(old_path));
     bool new_missing = new_path.empty() || !file_exists(new_path) ||
@@ -591,7 +592,8 @@ static std::string generate_path_diff(const QuiltState &q,
         if (opts_ctx >= 0) ctx = opts_ctx;
 
         DiffResult result = builtin_diff(old_arg, new_arg, ctx,
-                                          old_label, new_label, diff_format);
+                                          old_label, new_label, diff_format,
+                                          diff_algorithm);
         return result.output;
     }
 
@@ -624,12 +626,14 @@ static std::string generate_file_diff(const QuiltState &q, std::string_view patc
                                       std::span<const std::string> diff_cmd_base = {},
                                       int context_lines = 3,
                                       DiffFormat diff_format = DiffFormat::unified,
-                                      bool no_timestamps = false) {
+                                      bool no_timestamps = false,
+                                      DiffAlgorithm diff_algorithm = DiffAlgorithm::myers) {
     std::string backup_path = path_join(pc_patch_dir(q, patch), file);
     std::string working_path = path_join(q.work_dir, file);
     return generate_path_diff(q, file, backup_path, true, working_path, false,
                               p_format, reverse, diff_cmd_base,
-                              context_lines, diff_format, no_timestamps);
+                              context_lines, diff_format, no_timestamps,
+                              diff_algorithm);
 }
 
 static std::map<std::string, std::string> split_patch_by_file(std::string_view content) {
@@ -1040,6 +1044,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     bool opt_diffstat = false;
     bool opt_backup = false;
     bool opt_strip_whitespace = false;
+    DiffAlgorithm diff_algorithm = DiffAlgorithm::myers;
 
     while (i < argc) {
         std::string_view arg = argv[i];
@@ -1130,6 +1135,36 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         if (arg == "--strip-trailing-whitespace") {
             opt_strip_whitespace = true;
             i += 1;
+            continue;
+        }
+        if (arg.starts_with("--diff-algorithm=")) {
+            auto name = arg.substr(17);
+            auto algo = parse_diff_algorithm(name);
+            if (!algo) {
+                err("Unknown diff algorithm: "); err_line(name);
+                return 1;
+            }
+            if (*algo == DiffAlgorithm::patience || *algo == DiffAlgorithm::histogram) {
+                err("Diff algorithm not yet implemented: "); err_line(name);
+                return 1;
+            }
+            diff_algorithm = *algo;
+            i += 1;
+            continue;
+        }
+        if (arg == "--diff-algorithm" && i + 1 < argc) {
+            std::string_view name = argv[i + 1];
+            auto algo = parse_diff_algorithm(name);
+            if (!algo) {
+                err("Unknown diff algorithm: "); err_line(name);
+                return 1;
+            }
+            if (*algo == DiffAlgorithm::patience || *algo == DiffAlgorithm::histogram) {
+                err("Diff algorithm not yet implemented: "); err_line(name);
+                return 1;
+            }
+            diff_algorithm = *algo;
+            i += 2;
             continue;
         }
         if (arg[0] == '-') {
@@ -1338,7 +1373,8 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
                 std::string next_backup = path_join(pc_patch_dir(q, it->second), file);
                 std::string diff_out = generate_path_diff(q, file,
                     this_backup, true, next_backup, true,
-                    p_format, false, {}, ctx_lines, diff_format, no_timestamps);
+                    p_format, false, {}, ctx_lines, diff_format, no_timestamps,
+                    diff_algorithm);
                 if (!diff_out.empty()) {
                     if (!no_index) {
                         std::string idx_name;
@@ -1364,7 +1400,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
                 std::set<int> modified_lines;
                 std::string diff_check = generate_file_diff(
                     q, patch, file, "1", false, {}, 0,
-                    DiffFormat::unified, true);
+                    DiffFormat::unified, true, diff_algorithm);
                 if (!diff_check.empty()) {
                     auto dlines = split_lines(diff_check);
                     int new_lineno = 0;
@@ -1444,7 +1480,8 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
 
         std::string diff_out = generate_file_diff(q, patch, file, p_format,
                                                    false, {}, ctx_lines,
-                                                   diff_format, no_timestamps);
+                                                   diff_format, no_timestamps,
+                                                   diff_algorithm);
         if (diff_out.starts_with("Binary files ")) {
             err("Diff failed on file '"); err(file); err_line("', aborting");
             return 1;
@@ -1563,6 +1600,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
     std::string combine_patch;
     std::string diff_type = "u";
     std::string context_num;
+    DiffAlgorithm diff_algorithm = DiffAlgorithm::myers;
     int i = 1;
 
     while (i < argc) {
@@ -1661,6 +1699,36 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
         if (arg.starts_with("--diff=")) {
             diff_utility = std::string(arg.substr(7));
             i += 1;
+            continue;
+        }
+        if (arg.starts_with("--diff-algorithm=")) {
+            auto name = arg.substr(17);
+            auto algo = parse_diff_algorithm(name);
+            if (!algo) {
+                err("Unknown diff algorithm: "); err_line(name);
+                return 1;
+            }
+            if (*algo == DiffAlgorithm::patience || *algo == DiffAlgorithm::histogram) {
+                err("Diff algorithm not yet implemented: "); err_line(name);
+                return 1;
+            }
+            diff_algorithm = *algo;
+            i += 1;
+            continue;
+        }
+        if (arg == "--diff-algorithm" && i + 1 < argc) {
+            std::string_view name = argv[i + 1];
+            auto algo = parse_diff_algorithm(name);
+            if (!algo) {
+                err("Unknown diff algorithm: "); err_line(name);
+                return 1;
+            }
+            if (*algo == DiffAlgorithm::patience || *algo == DiffAlgorithm::histogram) {
+                err("Diff algorithm not yet implemented: "); err_line(name);
+                return 1;
+            }
+            diff_algorithm = *algo;
+            i += 2;
             continue;
         }
         if (arg == "--color" || arg.starts_with("--color=")) {
@@ -1886,7 +1954,8 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                 if (opts_ctx >= 0) ctx = opts_ctx;
 
                 DiffResult dr = builtin_diff(old_f, new_f, ctx,
-                                             old_label, new_label, diff_format);
+                                             old_label, new_label, diff_format,
+                                             diff_algorithm);
                 diff_out = std::move(dr.output);
             } else {
                 std::vector<std::string> diff_cmd = diff_cmd_base;
@@ -1937,7 +2006,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
             std::string diff_out = generate_path_diff(
                 q, file, old_path, old_placeholder, new_path, new_placeholder,
                 p_format, reverse, diff_cmd_base, ctx_lines, diff_format,
-                no_timestamps);
+                no_timestamps, diff_algorithm);
             if (!diff_out.empty()) {
                 if (!no_index) {
                     out("Index: " + (p_format == "0" ? file : p_format == "ab" ? "b/" + file : work_base + "/" + file) + "\n");
@@ -1979,7 +2048,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
             std::string diff_out = generate_path_diff(
                 q, file, old_path, true, new_path, new_placeholder,
                 p_format, reverse, diff_cmd_base, ctx_lines, diff_format,
-                no_timestamps);
+                no_timestamps, diff_algorithm);
             if (!diff_out.empty()) {
                 if (!no_index) {
                     out("Index: " + (p_format == "0" ? file : p_format == "ab" ? "b/" + file : work_base + "/" + file) + "\n");
@@ -2012,7 +2081,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
             std::string diff_out = generate_path_diff(
                 q, file, old_path, true, new_path, new_placeholder,
                 p_format, reverse, diff_cmd_base, ctx_lines, diff_format,
-                no_timestamps);
+                no_timestamps, diff_algorithm);
             if (!diff_out.empty()) {
                 if (!no_index) {
                     out("Index: " + (p_format == "0" ? file : p_format == "ab" ? "b/" + file : work_base + "/" + file) + "\n");

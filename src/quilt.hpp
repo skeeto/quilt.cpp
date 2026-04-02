@@ -116,6 +116,9 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
 
 // Built-in diff engine
 enum class DiffFormat { unified, context };
+enum class DiffAlgorithm { myers, minimal, patience, histogram };
+
+std::optional<DiffAlgorithm> parse_diff_algorithm(std::string_view name);
 
 struct DiffResult {
     int exit_code;       // 0 = identical, 1 = different
@@ -127,6 +130,7 @@ DiffResult builtin_diff(std::string_view old_path, std::string_view new_path,
                          std::string_view old_label = {},
                          std::string_view new_label = {},
                          DiffFormat format = DiffFormat::unified,
+                         DiffAlgorithm algorithm = DiffAlgorithm::myers,
                          std::map<std::string, std::string> *fs = nullptr);
 
 // Patch name helpers — shared across command files

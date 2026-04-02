@@ -8,6 +8,26 @@
 #include "platform.hpp"
 #include <algorithm>
 #include <cstdio>
+#include <optional>
+
+std::optional<DiffAlgorithm> parse_diff_algorithm(std::string_view name)
+{
+    if (name == "myers")     return DiffAlgorithm::myers;
+    if (name == "minimal")   return DiffAlgorithm::minimal;
+    if (name == "patience")  return DiffAlgorithm::patience;
+    if (name == "histogram") return DiffAlgorithm::histogram;
+    return std::nullopt;
+}
+
+// Approximate integer square root: next power of 2 >= sqrt(n).
+// Matches libxdiff's xdl_bogosqrt().
+static ptrdiff_t bogosqrt(ptrdiff_t n)
+{
+    ptrdiff_t r = 1;
+    while (r * r < n)
+        r <<= 1;
+    return r;
+}
 
 // Split content into lines, preserving the information about whether
 // the file ended with a newline.  Each element is one line WITHOUT its
@@ -54,75 +74,13 @@ struct EditOp {
     ptrdiff_t new_idx; // index in new_lines (-1 for Delete)
 };
 
-static std::vector<EditOp> myers_diff(
-    std::span<const std::string_view> old_lines,
-    std::span<const std::string_view> new_lines)
+// Backtrack through a Myers trace from (x,y) back to (0,0), building
+// edit operations in reverse order.  Returns ops in forward order.
+static std::vector<EditOp> backtrack_trace(
+    const std::vector<std::vector<ptrdiff_t>> &trace,
+    ptrdiff_t final_d, ptrdiff_t x, ptrdiff_t y, ptrdiff_t offset)
 {
-    ptrdiff_t n = std::ssize(old_lines);
-    ptrdiff_t m = std::ssize(new_lines);
-
-    // Trivial cases
-    if (n == 0 && m == 0) {
-        return {};
-    }
-    if (n == 0) {
-        std::vector<EditOp> ops;
-        ops.reserve(checked_cast<size_t>(m));
-        for (ptrdiff_t j = 0; j < m; ++j)
-            ops.push_back({'I', -1, j});
-        return ops;
-    }
-    if (m == 0) {
-        std::vector<EditOp> ops;
-        ops.reserve(checked_cast<size_t>(n));
-        for (ptrdiff_t i = 0; i < n; ++i)
-            ops.push_back({'D', i, -1});
-        return ops;
-    }
-
-    // Myers' algorithm with linear-space trace recording.
-    // We store the V array for each D step to reconstruct the path.
-    ptrdiff_t max_d = n + m;
-    // V is indexed by k + offset where k ranges from -max_d to max_d
-    ptrdiff_t offset = max_d;
-    ptrdiff_t v_size = 2 * max_d + 1;
-
-    // Store a copy of V for each d value to reconstruct the edit path
-    std::vector<std::vector<ptrdiff_t>> trace;
-    std::vector<ptrdiff_t> v(checked_cast<size_t>(v_size), -1);
-    v[checked_cast<size_t>(offset + 1)] = 0;
-
-    ptrdiff_t final_d = -1;
-    for (ptrdiff_t d = 0; d <= max_d; ++d) {
-        trace.push_back(v);  // save state before this round
-        for (ptrdiff_t k = -d; k <= d; k += 2) {
-            ptrdiff_t x;
-            if (k == -d || (k != d && v[checked_cast<size_t>(offset + k - 1)] < v[checked_cast<size_t>(offset + k + 1)])) {
-                x = v[checked_cast<size_t>(offset + k + 1)];  // move down (insert)
-            } else {
-                x = v[checked_cast<size_t>(offset + k - 1)] + 1;  // move right (delete)
-            }
-            ptrdiff_t y = x - k;
-
-            // Follow diagonal (equal lines)
-            while (x < n && y < m && old_lines[checked_cast<size_t>(x)] == new_lines[checked_cast<size_t>(y)]) {
-                ++x;
-                ++y;
-            }
-
-            v[checked_cast<size_t>(offset + k)] = x;
-
-            if (x >= n && y >= m) {
-                final_d = d;
-                goto found;
-            }
-        }
-    }
-found:
-
-    // Backtrack through the trace to build edit operations
     std::vector<EditOp> ops;
-    ptrdiff_t x = n, y = m;
 
     for (ptrdiff_t d = final_d; d > 0; --d) {
         const auto &prev_v = trace[checked_cast<size_t>(d)];
@@ -164,6 +122,116 @@ found:
 
     std::ranges::reverse(ops);
     return ops;
+}
+
+static std::vector<EditOp> myers_diff(
+    std::span<const std::string_view> old_lines,
+    std::span<const std::string_view> new_lines,
+    DiffAlgorithm algorithm = DiffAlgorithm::myers)
+{
+    ptrdiff_t n = std::ssize(old_lines);
+    ptrdiff_t m = std::ssize(new_lines);
+
+    // Trivial cases
+    if (n == 0 && m == 0) {
+        return {};
+    }
+    if (n == 0) {
+        std::vector<EditOp> ops;
+        ops.reserve(checked_cast<size_t>(m));
+        for (ptrdiff_t j = 0; j < m; ++j)
+            ops.push_back({'I', -1, j});
+        return ops;
+    }
+    if (m == 0) {
+        std::vector<EditOp> ops;
+        ops.reserve(checked_cast<size_t>(n));
+        for (ptrdiff_t i = 0; i < n; ++i)
+            ops.push_back({'D', i, -1});
+        return ops;
+    }
+
+    // Myers' algorithm with linear-space trace recording.
+    // We store the V array for each D step to reconstruct the path.
+    ptrdiff_t max_d = n + m;
+    // V is indexed by k + offset where k ranges from -max_d to max_d
+    ptrdiff_t offset = max_d;
+    ptrdiff_t v_size = 2 * max_d + 1;
+
+    // Cost cap for myers mode (heuristic, matches libxdiff).
+    // minimal mode searches the full O(ND) space.
+    ptrdiff_t mxcost = max_d;
+    if (algorithm == DiffAlgorithm::myers) {
+        mxcost = bogosqrt(n + m);
+        if (mxcost < 256) mxcost = 256;
+        if (mxcost > max_d) mxcost = max_d;
+    }
+
+    // Store a copy of V for each d value to reconstruct the edit path
+    std::vector<std::vector<ptrdiff_t>> trace;
+    std::vector<ptrdiff_t> v(checked_cast<size_t>(v_size), -1);
+    v[checked_cast<size_t>(offset + 1)] = 0;
+
+    ptrdiff_t final_d = -1;
+    for (ptrdiff_t d = 0; d <= max_d; ++d) {
+        trace.push_back(v);  // save state before this round
+        for (ptrdiff_t k = -d; k <= d; k += 2) {
+            ptrdiff_t x;
+            if (k == -d || (k != d && v[checked_cast<size_t>(offset + k - 1)] < v[checked_cast<size_t>(offset + k + 1)])) {
+                x = v[checked_cast<size_t>(offset + k + 1)];  // move down (insert)
+            } else {
+                x = v[checked_cast<size_t>(offset + k - 1)] + 1;  // move right (delete)
+            }
+            ptrdiff_t y = x - k;
+
+            // Follow diagonal (equal lines)
+            while (x < n && y < m && old_lines[checked_cast<size_t>(x)] == new_lines[checked_cast<size_t>(y)]) {
+                ++x;
+                ++y;
+            }
+
+            v[checked_cast<size_t>(offset + k)] = x;
+
+            if (x >= n && y >= m) {
+                final_d = d;
+                goto found;
+            }
+        }
+
+        // Cost heuristic: if we've exceeded the budget, pick the
+        // furthest-reaching endpoint and construct a suboptimal script.
+        // This matches libxdiff's behavior for --diff-algorithm=myers.
+        if (d >= mxcost && d < max_d) {
+            // Find the diagonal with maximum progress (x + y)
+            ptrdiff_t best_x = -1, best_y = -1;
+            for (ptrdiff_t k = -d; k <= d; k += 2) {
+                ptrdiff_t x = v[checked_cast<size_t>(offset + k)];
+                if (x < 0) continue;
+                ptrdiff_t y = x - k;
+                if (x > n || y > m || y < 0) continue;
+                if (best_x < 0 || (x + y) > (best_x + best_y)) {
+                    best_x = x;
+                    best_y = y;
+                }
+            }
+
+            if (best_x >= 0) {
+                // Backtrack from the best endpoint to (0,0)
+                final_d = d;
+                auto ops = backtrack_trace(trace, final_d, best_x, best_y, offset);
+
+                // Append remaining unmatched lines as raw deletes/inserts
+                for (ptrdiff_t i = best_x; i < n; ++i)
+                    ops.push_back({'D', i, -1});
+                for (ptrdiff_t j = best_y; j < m; ++j)
+                    ops.push_back({'I', -1, j});
+                return ops;
+            }
+        }
+    }
+found:
+
+    return backtrack_trace(trace, final_d, n, m, offset);
 }
 
 // A hunk groups consecutive edits with surrounding context lines.
@@ -476,6 +544,7 @@ DiffResult builtin_diff(std::string_view old_path, std::string_view new_path,
                          int context_lines,
                          std::string_view old_label, std::string_view new_label,
                          DiffFormat format,
+                         DiffAlgorithm algorithm,
                          std::map<std::string, std::string> *fs)
 {
     // Read files — treat /dev/null or non-existent as empty
@@ -506,8 +575,8 @@ DiffResult builtin_diff(std::string_view old_path, std::string_view new_path,
     auto old_fl = split_file_lines(old_content);
     auto new_fl = split_file_lines(new_content);
 
-    // Run Myers diff
-    auto ops = myers_diff(old_fl.lines, new_fl.lines);
+    // Run diff algorithm
+    auto ops = myers_diff(old_fl.lines, new_fl.lines, algorithm);
 
     // Check if there are any differences
     bool has_diff = false;
