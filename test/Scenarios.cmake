@@ -168,6 +168,7 @@ set(QUILT_TEST_SCENARIOS
     unapplied_unknown_target
     previous_no_patches_applied
     push_no_series
+    push_empty_series
     push_already_applied
     import_bad_option
     rename_unknown_patch
@@ -5649,6 +5650,43 @@ function(qt_scenario_push_no_series)
     qt_assert_contains("${combined}" "No series file found" "push with no series should explain the failure")
 endfunction()
 
+# push_empty_series: series file exists but is empty — should say "No patches in series"
+function(qt_scenario_push_empty_series)
+    qt_begin_test("push_empty_series")
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/patches")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "")
+    # push
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_failure("${rc}" "push with empty series should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "No patches in series" "push should say no patches in series")
+    # top
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS top)
+    qt_assert_failure("${rc}" "top with empty series should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "No patches in series" "top should say no patches in series")
+    # next
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS next)
+    qt_assert_failure("${rc}" "next with empty series should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "No patches in series" "next should say no patches in series")
+    # previous
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS previous)
+    qt_assert_failure("${rc}" "previous with empty series should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "No patches in series" "previous should say no patches in series")
+    # applied
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS applied)
+    qt_assert_failure("${rc}" "applied with empty series should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "No patches in series" "applied should say no patches in series")
+    # unapplied
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS unapplied)
+    qt_assert_failure("${rc}" "unapplied with empty series should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "No patches in series" "unapplied should say no patches in series")
+endfunction()
+
 function(qt_scenario_push_already_applied)
     qt_begin_test("push_already_applied")
     qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
@@ -6937,6 +6975,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_previous_no_patches_applied()
     elseif(scenario STREQUAL "push_no_series")
         qt_scenario_push_no_series()
+    elseif(scenario STREQUAL "push_empty_series")
+        qt_scenario_push_empty_series()
     elseif(scenario STREQUAL "push_already_applied")
         qt_scenario_push_already_applied()
     elseif(scenario STREQUAL "import_bad_option")

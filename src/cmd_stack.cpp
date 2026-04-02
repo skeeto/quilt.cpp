@@ -103,6 +103,14 @@ int cmd_applied(QuiltState &q, int argc, char **argv) {
         return 0;
     }
 
+    if (q.series.empty()) {
+        if (q.series_file_exists) {
+            err_line("No patches in series");
+        } else {
+            err_line("No series file found");
+        }
+        return 1;
+    }
     if (q.applied.empty()) {
         err_line("No patches applied");
         return 1;
@@ -123,6 +131,15 @@ int cmd_unapplied(QuiltState &q, int argc, char **argv) {
             return 1;
         }
         target = strip_patches_prefix(q, arg);
+    }
+
+    if (q.series.empty()) {
+        if (q.series_file_exists) {
+            err_line("No patches in series");
+        } else {
+            err_line("No series file found");
+        }
+        return 1;
     }
 
     ptrdiff_t start_idx;
@@ -158,9 +175,13 @@ int cmd_top(QuiltState &q, int argc, char **argv) {
             return 1;
         }
     }
-    if (!q.series_file_exists) {
-        err_line("No series file found");
-        return 1;
+    if (q.series.empty()) {
+        if (q.series_file_exists) {
+            err_line("No patches in series");
+        } else {
+            err_line("No series file found");
+        }
+        return 2;
     }
     if (q.applied.empty()) {
         err_line("No patches applied");
@@ -179,6 +200,15 @@ int cmd_next(QuiltState &q, int argc, char **argv) {
             return 1;
         }
         target = strip_patches_prefix(q, arg);
+    }
+
+    if (q.series.empty()) {
+        if (q.series_file_exists) {
+            err_line("No patches in series");
+        } else {
+            err_line("No series file found");
+        }
+        return 2;
     }
 
     ptrdiff_t after_idx;
@@ -228,9 +258,13 @@ int cmd_previous(QuiltState &q, int argc, char **argv) {
         return 0;
     }
 
-    if (!q.series_file_exists) {
-        err_line("No series file found");
-        return 1;
+    if (q.series.empty()) {
+        if (q.series_file_exists) {
+            err_line("No patches in series");
+        } else {
+            err_line("No series file found");
+        }
+        return 2;
     }
 
     if (q.applied.empty()) {
@@ -309,8 +343,12 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
     ptrdiff_t start_idx = top + 1;
 
     if (q.series.empty()) {
-        err_line("No series file found");
-        return 1;
+        if (q.series_file_exists) {
+            err_line("No patches in series");
+        } else {
+            err_line("No series file found");
+        }
+        return 2;
     }
 
     if (start_idx >= std::ssize(q.series)) {
