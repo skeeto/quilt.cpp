@@ -263,8 +263,8 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
         std::string_view arg = argv[i];
         if (arg == "-a") { push_all = true; }
         else if (arg == "-f") { force = true; }
-        else if (arg == "-q") { quiet = true; }
-        else if (arg == "-v") { verbose = true; }
+        else if (arg == "-q" || arg == "--quiet") { quiet = true; }
+        else if (arg == "-v" || arg == "--verbose") { verbose = true; }
         else if (arg.starts_with("--fuzz=")) { fuzz = checked_cast<int>(parse_int(arg.substr(7))); }
         else if (arg == "-m" || arg == "--merge") { merge = true; }
         else if (arg.starts_with("--merge=")) { merge = true; merge_style = std::string(arg.substr(8)); }
@@ -475,8 +475,7 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
     bool pop_all = false;
     bool force = false;
     bool quiet = false;
-    bool verbose = false;
-    bool verify_reverse = false;
+    [[maybe_unused]] bool verbose = false;  // accepted for compat, pop is verbose by default
     bool auto_refresh = false;
     int pop_count = -1;
     std::string_view target;
@@ -485,9 +484,9 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
         std::string_view arg = argv[i];
         if (arg == "-a") { pop_all = true; }
         else if (arg == "-f") { force = true; }
-        else if (arg == "-q") { quiet = true; }
-        else if (arg == "-v") { verbose = true; }
-        else if (arg == "-R") { verify_reverse = true; }
+        else if (arg == "-q" || arg == "--quiet") { quiet = true; }
+        else if (arg == "-v" || arg == "--verbose") { verbose = true; }
+        else if (arg == "-R") { /* accepted for compat, always verified now */ }
         else if (arg == "--refresh") { auto_refresh = true; }
         else if (arg[0] == '-') {
             err("Unrecognized option: "); err_line(arg);
@@ -568,13 +567,13 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
         // Check if patch needs refresh (force-applied) and -f not given
         std::string pc_dir = pc_patch_dir(q, name);
         std::string nr = path_join(pc_dir, ".needs_refresh");
-        if (file_exists(nr) && !force) {
+        if (file_exists(nr) && !force && !auto_refresh) {
             err_line("Patch " + display + " needs to be refreshed first.");
             return 1;
         }
 
-        // Verify patch removes cleanly if -R given
-        if (verify_reverse) {
+        // Check if patch removes cleanly (detects dirty/unrefreshed changes)
+        if (!force) {
             std::string patch_path = path_join(q.work_dir, q.patches_dir, name);
             std::string patch_content = read_file(patch_path);
             if (!patch_content.empty()) {
@@ -587,11 +586,9 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
                 verify_opts.quiet = true;
                 PatchResult vr = builtin_patch(patch_content, verify_opts);
                 if (vr.exit_code != 0) {
-                    if (!force) {
-                        err_line("Patch " + display +
-                                 " does not remove cleanly (enforce with -f)");
-                        return 1;
-                    }
+                    err_line("Patch " + display +
+                             " does not remove cleanly (refresh it or enforce with -f)");
+                    return 1;
                 }
             }
         }

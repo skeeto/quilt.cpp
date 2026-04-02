@@ -588,7 +588,7 @@ static std::string build_merge_output(std::span<const std::string> file_lines,
             last_copied = pos + pat_len;
             if (last_copied > file_len) last_copied = file_len;
         } else {
-            // Rejected — insert conflict markers at expected position
+            // Rejected — insert per-change conflict markers at expected position
             ptrdiff_t expected = hunk.old_start - 1;
             if (expected < last_copied) expected = last_copied;
             if (expected > file_len) expected = file_len;
@@ -599,44 +599,66 @@ static std::string build_merge_output(std::span<const std::string> file_lines,
                 output += '\n';
             }
 
-            // Extract old-side (context + deletion) lines and new-side lines
-            std::vector<std::string_view> old_context_lines;
-            for (const auto &line : hunk.lines) {
-                char prefix = line[0];
-                if (prefix == ' ' || prefix == '-') {
-                    old_context_lines.push_back(std::string_view(line).substr(1));
+            // Walk through hunk lines, emitting context outside markers
+            // and changed regions inside markers.
+            ptrdiff_t file_pos = expected;
+            ptrdiff_t hi = 0;
+            ptrdiff_t hunk_len = std::ssize(hunk.lines);
+
+            while (hi < hunk_len) {
+                char prefix = hunk.lines[checked_cast<size_t>(hi)][0];
+
+                if (prefix == ' ') {
+                    // Context line — emit the file's actual line
+                    if (file_pos < file_len) {
+                        output += file_lines[checked_cast<size_t>(file_pos)];
+                        output += '\n';
+                        ++file_pos;
+                    }
+                    ++hi;
+                } else {
+                    // Changed region — collect contiguous -/+ lines
+                    std::vector<std::string_view> old_lines, new_change;
+                    while (hi < hunk_len && hunk.lines[checked_cast<size_t>(hi)][0] == '-') {
+                        old_lines.push_back(std::string_view(hunk.lines[checked_cast<size_t>(hi)]).substr(1));
+                        ++hi;
+                    }
+                    while (hi < hunk_len && hunk.lines[checked_cast<size_t>(hi)][0] == '+') {
+                        new_change.push_back(std::string_view(hunk.lines[checked_cast<size_t>(hi)]).substr(1));
+                        ++hi;
+                    }
+
+                    output += "<<<<<<<\n";
+
+                    // Current file content for the old-side span
+                    ptrdiff_t span = std::ssize(old_lines);
+                    ptrdiff_t end = file_pos + span;
+                    if (end > file_len) end = file_len;
+                    for (ptrdiff_t j = file_pos; j < end; ++j) {
+                        output += file_lines[checked_cast<size_t>(j)];
+                        output += '\n';
+                    }
+
+                    if (merge_style == "diff3") {
+                        output += "|||||||\n";
+                        for (const auto &ol : old_lines) {
+                            output += ol;
+                            output += '\n';
+                        }
+                    }
+
+                    output += "=======\n";
+                    for (const auto &nl : new_change) {
+                        output += nl;
+                        output += '\n';
+                    }
+                    output += ">>>>>>>\n";
+
+                    file_pos = end;
                 }
             }
-            auto new_lines = get_new_lines(hunk);
 
-            output += "<<<<<<< current\n";
-
-            // Show what's currently in the file at this position
-            ptrdiff_t current_end = expected + std::ssize(old_context_lines);
-            if (current_end > file_len) current_end = file_len;
-            for (ptrdiff_t j = expected; j < current_end; ++j) {
-                output += file_lines[checked_cast<size_t>(j)];
-                output += '\n';
-            }
-
-            if (merge_style == "diff3") {
-                output += "||||||| expected\n";
-                for (const auto &ol : old_context_lines) {
-                    output += ol;
-                    output += '\n';
-                }
-            }
-
-            output += "=======\n";
-
-            for (const auto &nl : new_lines) {
-                output += nl;
-                output += '\n';
-            }
-
-            output += ">>>>>>> patch\n";
-
-            last_copied = current_end;
+            last_copied = file_pos;
         }
     }
 

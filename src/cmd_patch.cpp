@@ -535,6 +535,17 @@ static std::string generate_path_diff(const QuiltState &q,
     bool new_missing = new_path.empty() || !file_exists(new_path) ||
         (new_placeholder && is_placeholder_copy(new_path));
 
+    // Detect binary files (null bytes in first 8 KB)
+    auto is_binary = [](std::string_view path) {
+        std::string data = read_file(path);
+        size_t check_len = data.size() < 8192 ? data.size() : 8192;
+        return data.find('\0', 0) < check_len;
+    };
+    if ((!old_missing && is_binary(old_path)) ||
+        (!new_missing && is_binary(new_path))) {
+        return "Binary files differ\n";
+    }
+
     std::string old_arg = old_missing ? "/dev/null" : std::string(old_path);
     std::string new_arg = new_missing ? "/dev/null" : std::string(new_path);
 
@@ -600,8 +611,7 @@ static std::string generate_path_diff(const QuiltState &q,
 
     ProcessResult result = run_cmd(cmd_argv);
     if (result.exit_code == 2) {
-        err("diff failed for "); err_line(file);
-        return "";
+        return {};
     }
 
     return result.out;
@@ -1014,7 +1024,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     }
 
     // Parse options
-    std::string_view patch;
+    std::string patch;
     std::string p_format;
     bool explicit_p = false;
     int i = 1;
@@ -1379,6 +1389,10 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         std::string diff_out = generate_file_diff(q, patch, file, p_format,
                                                    false, {}, ctx_lines,
                                                    diff_format, no_timestamps);
+        if (diff_out.starts_with("Binary files ")) {
+            err("Diff failed on file '"); err(file); err_line("', aborting");
+            return 1;
+        }
         if (!diff_out.empty()) {
             if (!no_index) {
                 std::string idx_name;

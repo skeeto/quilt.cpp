@@ -333,6 +333,10 @@ set(QUILT_TEST_SCENARIOS
     diff_P_shadowed
     add_P_higher_patch
     import_dup_append_separator
+    pop_dirty_tree
+    pop_dirty_tree_force
+    pop_dirty_tree_refresh
+    refresh_binary_file
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -481,6 +485,8 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     upgrade_help
     fork_applied_not_in_series
     graph_reduce
+    merge_markers_per_hunk
+    push_verbose_long_option
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -4340,9 +4346,9 @@ function(qt_scenario_builtin_patch_merge_markers)
     # Push with --merge and -f
     qt_quilt(RESULT rc OUTPUT push_out ERROR push_err ARGS push --merge -f)
     # Should have exit code != 0 but force-applied
-    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "<<<<<<< current" "should have merge conflict marker")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "<<<<<<<" "should have merge conflict marker")
     qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "=======" "should have separator")
-    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" ">>>>>>> patch" "should have end marker")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" ">>>>>>>" "should have end marker")
 endfunction()
 
 function(qt_scenario_builtin_patch_empty_context)
@@ -4984,12 +4990,12 @@ function(qt_scenario_builtin_patch_merge_conflict_partial)
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --merge -f)
     # File should have both applied change and conflict markers
     qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "TWO" "successful hunk should be applied")
-    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "<<<<<<< current" "failed hunk should produce conflict marker")
-    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" ">>>>>>> patch" "failed hunk should produce end marker")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "<<<<<<<" "failed hunk should produce conflict marker")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" ">>>>>>>" "failed hunk should produce end marker")
 endfunction()
 
 # builtin_patch_merge_diff3: push --merge=diff3 with conflict produces diff3-style
-# markers including the ||||||| expected section
+# markers including the ||||||| section
 function(qt_scenario_builtin_patch_merge_diff3)
     qt_begin_test("builtin_patch_merge_diff3")
     qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nbbb\nccc\n")
@@ -5001,10 +5007,10 @@ function(qt_scenario_builtin_patch_merge_diff3)
     # Completely change file so patch conflict occurs
     qt_write_file("${QT_WORK_DIR}/f.txt" "xxx\nyyy\nzzz\n")
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --merge=diff3 -f)
-    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "<<<<<<< current" "should have conflict open")
-    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "||||||| expected" "diff3 style should have expected section")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "<<<<<<<" "should have conflict open")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "|||||||" "diff3 style should have expected section")
     qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "=======" "should have separator")
-    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" ">>>>>>> patch" "should have conflict end")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" ">>>>>>>" "should have conflict end")
 endfunction()
 
 # fold_reverse_no_newline: fold -R a patch that removes trailing newline;
@@ -7280,6 +7286,18 @@ function(qt_run_named_scenario scenario)
         qt_scenario_add_P_higher_patch()
     elseif(scenario STREQUAL "import_dup_append_separator")
         qt_scenario_import_dup_append_separator()
+    elseif(scenario STREQUAL "pop_dirty_tree")
+        qt_scenario_pop_dirty_tree()
+    elseif(scenario STREQUAL "pop_dirty_tree_force")
+        qt_scenario_pop_dirty_tree_force()
+    elseif(scenario STREQUAL "pop_dirty_tree_refresh")
+        qt_scenario_pop_dirty_tree_refresh()
+    elseif(scenario STREQUAL "push_verbose_long_option")
+        qt_scenario_push_verbose_long_option()
+    elseif(scenario STREQUAL "refresh_binary_file")
+        qt_scenario_refresh_binary_file()
+    elseif(scenario STREQUAL "merge_markers_per_hunk")
+        qt_scenario_merge_markers_per_hunk()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -7482,7 +7500,7 @@ function(qt_scenario_builtin_patch_merge_copy_lines)
     # Hunk2 succeeded: F should be in result
     qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "F" "successful hunk should be applied")
     # Hunk1 failed: conflict markers should be present
-    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "<<<<<<< current" "rejected hunk should produce conflict")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "<<<<<<<" "rejected hunk should produce conflict")
     # Trailing lines g, h should still be present
     qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "g" "trailing lines should be preserved")
     qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "h" "trailing lines should be preserved")
@@ -7518,7 +7536,7 @@ function(qt_scenario_builtin_patch_empty_context_line)
     # Write a patch where the empty context line has its space stripped (bare empty line)
     qt_write_file("${QT_WORK_DIR}/patches/p.patch"
         "--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n before\n\n-after\n+AFTER\n")
-    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_quilt_ok(ARGS pop -f MESSAGE "pop failed")
     qt_quilt_ok(ARGS push MESSAGE "push with stripped empty context should succeed")
     qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "AFTER" "patch with stripped empty context should apply")
 endfunction()
@@ -9323,5 +9341,113 @@ function(qt_scenario_import_dup_append_separator)
         if(NOT (old_pos LESS sep_pos AND sep_pos LESS new_pos))
             qt_fail("import -d a should place --- between old and new headers")
         endif()
+    endif()
+endfunction()
+
+# pop_dirty_tree: pop should refuse when working file differs from refreshed state
+function(qt_scenario_pop_dirty_tree)
+    qt_begin_test("pop_dirty_tree")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "patched\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # Modify file after refresh (dirty state)
+    qt_write_file("${QT_WORK_DIR}/f.txt" "dirty\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS pop)
+    qt_assert_failure("${rc}" "pop should fail with dirty working tree")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "does not remove cleanly" "should explain dirty state")
+endfunction()
+
+# pop_dirty_tree_force: pop -f should succeed even with dirty working tree
+function(qt_scenario_pop_dirty_tree_force)
+    qt_begin_test("pop_dirty_tree_force")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "patched\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "dirty\n")
+    qt_quilt_ok(ARGS pop -f MESSAGE "pop -f should succeed")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "base" "file should be restored to backup")
+endfunction()
+
+# pop_dirty_tree_refresh: pop --refresh should refresh then pop with dirty tree
+function(qt_scenario_pop_dirty_tree_refresh)
+    qt_begin_test("pop_dirty_tree_refresh")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "patched\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "dirty\n")
+    qt_quilt_ok(ARGS pop --refresh MESSAGE "pop --refresh should succeed")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "base" "file should be restored")
+    # Verify the patch was updated with the dirty content
+    file(READ "${QT_WORK_DIR}/patches/p.patch" patch_text)
+    qt_assert_contains("${patch_text}" "dirty" "patch should contain dirty change after refresh")
+endfunction()
+
+# push_verbose_long_option: --verbose and --quiet should be accepted
+function(qt_scenario_push_verbose_long_option)
+    qt_begin_test("push_verbose_long_option")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "mod\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # --verbose should be accepted
+    qt_quilt_ok(ARGS push --verbose MESSAGE "push --verbose should work")
+    qt_quilt_ok(ARGS pop --quiet MESSAGE "pop --quiet should work")
+    qt_quilt_ok(ARGS push --quiet MESSAGE "push --quiet should work")
+endfunction()
+
+# refresh_binary_file: refresh should fail on binary files
+function(qt_scenario_refresh_binary_file)
+    qt_begin_test("refresh_binary_file")
+    # Create a binary file using printf to generate null bytes
+    execute_process(COMMAND ${CMAKE_COMMAND} -E env printf "\\0\\001\\002"
+        OUTPUT_FILE "${QT_WORK_DIR}/f.dat")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.dat MESSAGE "add failed")
+    execute_process(COMMAND ${CMAKE_COMMAND} -E env printf "\\0\\003\\004"
+        OUTPUT_FILE "${QT_WORK_DIR}/f.dat")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh)
+    qt_assert_failure("${rc}" "refresh should fail on binary file")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Diff failed" "should report diff failure")
+endfunction()
+
+# merge_markers_per_hunk: conflict markers should wrap only changed lines, not whole file
+function(qt_scenario_merge_markers_per_hunk)
+    qt_begin_test("merge_markers_per_hunk")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nbbb\nccc\nddd\neee\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    # Write a patch that expects bbb -> XXX
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -1,5 +1,5 @@\n aaa\n-bbb\n+XXX\n ccc\n ddd\n eee\n")
+    # Change the file so bbb -> BBB (creates conflict)
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nBBB\nccc\nddd\neee\n")
+    qt_quilt_ok(ARGS pop -f MESSAGE "pop -f")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nBBB\nccc\nddd\neee\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -f --merge)
+    # Context lines should appear outside markers
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "aaa" "context should be preserved")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "ccc" "context should be preserved")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "<<<<<<<" "should have conflict marker")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "=======" "should have separator")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" ">>>>>>>" "should have end marker")
+    # The file should NOT have the whole-file-in-markers pattern
+    qt_read_file_raw(content "${QT_WORK_DIR}/f.txt")
+    # "aaa" should NOT be between <<<<<<< and =======
+    string(FIND "${content}" "<<<<<<<" marker_start)
+    string(FIND "${content}" "=======" separator_pos)
+    string(FIND "${content}" "aaa" aaa_pos)
+    # aaa should come BEFORE the marker, not inside it
+    if(aaa_pos GREATER marker_start AND aaa_pos LESS separator_pos)
+        qt_fail("context line 'aaa' should be outside conflict markers")
     endif()
 endfunction()
