@@ -432,6 +432,20 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
                      " exists. Replace with -f.");
             return 1;
         }
+        if (existing && force && q.is_applied(name)) {
+            err_line("Patch " + patch_path_display(q, name) +
+                     " is applied");
+            return 1;
+        }
+
+        // Ensure parent directory of dest exists (for subdir patch names)
+        std::string dest_dir = dirname(dest);
+        if (!is_directory(dest_dir)) {
+            if (!make_dirs(dest_dir)) {
+                err_line("Failed to create " + dest_dir);
+                return 1;
+            }
+        }
 
         // Copy patchfile to patches/<name>, handling -d header mode
         if (existing && force && dup_mode && dup_mode != 'n') {
@@ -642,12 +656,16 @@ int cmd_header(QuiltState &q, int argc, char **argv) {
     std::string_view patch;
     if (!patch_arg.empty()) {
         patch = patch_arg;
+        // Verify patch is in series
+        if (!q.find_in_series(patch)) {
+            err("Patch "); err(patch);
+            err_line(" is not in series");
+            return 1;
+        }
     } else if (!q.applied.empty()) {
         patch = q.applied.back();
-    } else if (!q.series.empty()) {
-        patch = q.series.front();
     } else {
-        err_line("No patch in series");
+        err_line("No patches applied");
         return 1;
     }
 

@@ -2063,17 +2063,13 @@ int cmd_revert(QuiltState &q, int argc, char **argv) {
         }
 
         // Write the clean post-patch state
-        if (clean_content.empty() && backup_content.empty()) {
-            // File didn't exist before and patch creates it — restore to
-            // post-patch state (clean_content from memfs)
-            if (memfs.count(file) && !memfs[file].empty()) {
-                clean_content = memfs[file];
-            } else {
-                delete_file(target);
-                out("Changes to "); out(file); out(" in patch ");
-                out(patch_path_display(q, patch)); out_line(" reverted");
-                continue;
-            }
+        if (clean_content.empty()) {
+            // Post-patch state is empty — either file was deleted by patch
+            // or didn't exist.  Remove the working-tree copy.
+            delete_file(target);
+            out("Changes to "); out(file); out(" in patch ");
+            out(patch_path_display(q, patch)); out_line(" reverted");
+            continue;
         }
 
         std::string target_dir = dirname(target);

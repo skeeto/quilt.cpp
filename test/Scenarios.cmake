@@ -178,7 +178,10 @@ set(QUILT_TEST_SCENARIOS
     revert_bad_option
     revert_no_files
     revert_with_P
+    revert_file_delete
     header_with_patch_arg
+    header_nonexistent_patch
+    import_applied_reject
     refresh_sort
     files_bad_option
     files_no_patch_applied
@@ -5554,6 +5557,52 @@ function(qt_scenario_revert_with_P)
     qt_assert_file_text("${QT_WORK_DIR}/f.txt" "original" "revert -P should restore original content")
 endfunction()
 
+# revert_file_delete: revert should delete file when patch deletes it
+function(qt_scenario_revert_file_delete)
+    qt_begin_test("revert_file_delete")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "content\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    file(REMOVE "${QT_WORK_DIR}/f.txt")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # Recreate the file (simulating user edit after patch deleted it)
+    qt_write_file("${QT_WORK_DIR}/f.txt" "recreated\n")
+    # Revert should delete the file (post-patch state = no file)
+    qt_quilt_ok(ARGS revert f.txt MESSAGE "revert failed")
+    if(EXISTS "${QT_WORK_DIR}/f.txt")
+        qt_fail("revert should delete file when patch deletes it")
+    endif()
+endfunction()
+
+# header_nonexistent_patch: header with unknown patch should error
+function(qt_scenario_header_nonexistent_patch)
+    qt_begin_test("header_nonexistent_patch")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS header nosuch.patch)
+    qt_assert_failure("${rc}" "header with nonexistent patch should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "not in series" "should say patch not in series")
+endfunction()
+
+# import_applied_reject: import -f should reject overwriting applied patch
+function(qt_scenario_import_applied_reject)
+    qt_begin_test("import_applied_reject")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new existing.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # Create an external patch file to import
+    qt_write_file("${QT_WORK_DIR}/external.patch"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+z\n")
+    # import -f -P existing.patch while applied should fail
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS import -f -P existing.patch "${QT_WORK_DIR}/external.patch")
+    qt_assert_failure("${rc}" "import -f of applied patch should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "applied" "should say patch is applied")
+endfunction()
+
 function(qt_scenario_header_with_patch_arg)
     qt_begin_test("header_with_patch_arg")
     qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
@@ -5912,8 +5961,13 @@ function(qt_scenario_header_no_patch_applied)
     qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
     qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
     qt_quilt_ok(ARGS pop MESSAGE "pop failed")
-    # No patch applied but p.patch in series → header uses q.series.front() (lines 606-607)
-    qt_quilt_ok(OUTPUT out ERROR err ARGS header MESSAGE "header with unapplied patch failed")
+    # No patches applied and no patch arg → should error
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS header)
+    qt_assert_failure("${rc}" "header with no patches applied should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "No patches applied" "header should say no patches applied")
+    # But specifying the patch by name should still work
+    qt_quilt_ok(ARGS header p.patch MESSAGE "header with patch arg should work")
 endfunction()
 
 function(qt_scenario_header_empty_series)
@@ -7039,8 +7093,14 @@ function(qt_run_named_scenario scenario)
         qt_scenario_revert_no_files()
     elseif(scenario STREQUAL "revert_with_P")
         qt_scenario_revert_with_P()
+    elseif(scenario STREQUAL "revert_file_delete")
+        qt_scenario_revert_file_delete()
     elseif(scenario STREQUAL "header_with_patch_arg")
         qt_scenario_header_with_patch_arg()
+    elseif(scenario STREQUAL "header_nonexistent_patch")
+        qt_scenario_header_nonexistent_patch()
+    elseif(scenario STREQUAL "import_applied_reject")
+        qt_scenario_import_applied_reject()
     elseif(scenario STREQUAL "refresh_sort")
         qt_scenario_refresh_sort()
     elseif(scenario STREQUAL "files_bad_option")
