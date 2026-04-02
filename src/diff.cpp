@@ -445,6 +445,248 @@ static std::vector<EditOp> patience_diff(
     return ops;
 }
 
+// Histogram diff algorithm.
+//
+// Extends patience diff by relaxing the strict uniqueness requirement.
+// Instead of only anchoring on lines unique in both files, histogram diff
+// builds an occurrence-count index of the old file and finds the longest
+// contiguous matching block anchored at the lowest-occurrence line.  It
+// then recurses on the regions before and after the block.  Falls back to
+// Myers (minimal) when no suitable anchor exists.
+static constexpr int MAX_CHAIN_LENGTH = 64;
+static constexpr int MAX_RECURSION = 1024;  // same as Git's MAX_CNT_RECURSIVE
+
+static std::vector<EditOp> histogram_diff_impl(
+    std::span<const std::string_view> old_lines,
+    std::span<const std::string_view> new_lines,
+    int depth)
+{
+    ptrdiff_t n = std::ssize(old_lines);
+    ptrdiff_t m = std::ssize(new_lines);
+
+    if (n == 0 && m == 0) return {};
+    if (n == 0) {
+        std::vector<EditOp> ops;
+        for (ptrdiff_t j = 0; j < m; ++j)
+            ops.push_back({'I', -1, j});
+        return ops;
+    }
+    if (m == 0) {
+        std::vector<EditOp> ops;
+        for (ptrdiff_t i = 0; i < n; ++i)
+            ops.push_back({'D', i, -1});
+        return ops;
+    }
+
+    // Step 1: Match common prefix and suffix.
+    ptrdiff_t prefix = 0;
+    while (prefix < n && prefix < m &&
+           old_lines[checked_cast<size_t>(prefix)] == new_lines[checked_cast<size_t>(prefix)])
+        ++prefix;
+
+    ptrdiff_t suffix = 0;
+    while (suffix < (n - prefix) && suffix < (m - prefix) &&
+           old_lines[checked_cast<size_t>(n - 1 - suffix)] == new_lines[checked_cast<size_t>(m - 1 - suffix)])
+        ++suffix;
+
+    ptrdiff_t inner_old_len = n - prefix - suffix;
+    ptrdiff_t inner_new_len = m - prefix - suffix;
+
+    if (inner_old_len <= 0 && inner_new_len <= 0) {
+        std::vector<EditOp> ops;
+        for (ptrdiff_t i = 0; i < n; ++i)
+            ops.push_back({'E', i, i});
+        return ops;
+    }
+
+    // If recursion is too deep, fall back to Myers to avoid O(N²) behavior
+    // on files with many unique lines (where each split removes only one line).
+    if (depth >= MAX_RECURSION) {
+        auto inner_old = old_lines.subspan(checked_cast<size_t>(prefix),
+                                           checked_cast<size_t>(inner_old_len));
+        auto inner_new = new_lines.subspan(checked_cast<size_t>(prefix),
+                                           checked_cast<size_t>(inner_new_len));
+        auto inner_ops = myers_diff(inner_old, inner_new, DiffAlgorithm::minimal);
+        std::vector<EditOp> ops;
+        for (ptrdiff_t i = 0; i < prefix; ++i)
+            ops.push_back({'E', i, i});
+        for (auto &op : inner_ops) {
+            if (op.old_idx >= 0) op.old_idx += prefix;
+            if (op.new_idx >= 0) op.new_idx += prefix;
+            ops.push_back(op);
+        }
+        for (ptrdiff_t i = 0; i < suffix; ++i)
+            ops.push_back({'E', n - suffix + i, m - suffix + i});
+        return ops;
+    }
+
+    // Step 2: Build histogram of old interior lines.
+    // Map line content → (occurrence count, list of positions in old).
+    // Also build a parallel count array for O(1) lookup during extension.
+    struct HistEntry {
+        int count = 0;
+        std::vector<ptrdiff_t> positions;  // interior-relative positions in old
+    };
+    std::unordered_map<std::string_view, HistEntry> hist;
+    std::vector<int> old_count(checked_cast<size_t>(inner_old_len));
+
+    for (ptrdiff_t i = 0; i < inner_old_len; ++i) {
+        auto &entry = hist[old_lines[checked_cast<size_t>(prefix + i)]];
+        entry.count++;
+        entry.positions.push_back(i);
+    }
+    for (ptrdiff_t i = 0; i < inner_old_len; ++i) {
+        auto it = hist.find(old_lines[checked_cast<size_t>(prefix + i)]);
+        old_count[checked_cast<size_t>(i)] = it->second.count;
+    }
+
+    // Step 3: Scan new interior lines to find the best contiguous matching block.
+    // Best block: lowest min-occurrence-count, then longest.
+    //
+    // Key optimizations vs. naive approach:
+    //  (a) Skip lines in B whose A-count exceeds the current best threshold.
+    //  (b) Skip A-occurrences whose count exceeds the threshold.
+    //  (c) After extending a block forward, advance j past the extension so
+    //      positions already covered are not re-scanned.
+    //  (d) Use precomputed old_count[] instead of hash lookups during extension.
+    ptrdiff_t best_old_start = -1, best_new_start = -1, best_len = 0;
+    int best_threshold = MAX_CHAIN_LENGTH + 1;
+
+    for (ptrdiff_t j = 0; j < inner_new_len; ) {
+        auto it = hist.find(new_lines[checked_cast<size_t>(prefix + j)]);
+        if (it == hist.end()) { ++j; continue; }
+        const auto &entry = it->second;
+        if (entry.count > MAX_CHAIN_LENGTH || entry.count > best_threshold) {
+            ++j; continue;   // (a) can't improve on current best
+        }
+
+        ptrdiff_t j_advance = 1;  // how far to advance j after this iteration
+
+        for (ptrdiff_t pi = 0; pi < std::ssize(entry.positions); ++pi) {
+            ptrdiff_t oi = entry.positions[checked_cast<size_t>(pi)];
+
+            // Extend backwards
+            ptrdiff_t back = 0;
+            int min_occ = entry.count;
+            while (oi - back - 1 >= 0 && j - back - 1 >= 0 &&
+                   old_lines[checked_cast<size_t>(prefix + oi - back - 1)] ==
+                   new_lines[checked_cast<size_t>(prefix + j - back - 1)]) {
+                ++back;
+                int occ = old_count[checked_cast<size_t>(oi - back)];
+                if (occ < min_occ) min_occ = occ;
+            }
+
+            // Extend forwards (past the initial match at (oi, j))
+            ptrdiff_t fwd = 0;
+            while (oi + fwd + 1 < inner_old_len && j + fwd + 1 < inner_new_len &&
+                   old_lines[checked_cast<size_t>(prefix + oi + fwd + 1)] ==
+                   new_lines[checked_cast<size_t>(prefix + j + fwd + 1)]) {
+                ++fwd;
+                int occ = old_count[checked_cast<size_t>(oi + fwd)];
+                if (occ < min_occ) min_occ = occ;
+            }
+
+            ptrdiff_t block_len = back + 1 + fwd;
+            ptrdiff_t block_old_start = oi - back;
+            ptrdiff_t block_new_start = j - back;
+
+            // (c) Skip j past forward extension to avoid re-scanning
+            if (fwd + 1 > j_advance)
+                j_advance = fwd + 1;
+
+            // Accept if lower occurrence threshold, or same threshold but longer
+            if (min_occ < best_threshold ||
+                (min_occ == best_threshold && block_len > best_len)) {
+                best_threshold = min_occ;
+                best_old_start = block_old_start;
+                best_new_start = block_new_start;
+                best_len = block_len;
+            }
+        }
+        j += j_advance;
+    }
+
+    // Step 4: If no block found, fall back to Myers (minimal).
+    auto inner_old = old_lines.subspan(checked_cast<size_t>(prefix),
+                                       checked_cast<size_t>(inner_old_len));
+    auto inner_new = new_lines.subspan(checked_cast<size_t>(prefix),
+                                       checked_cast<size_t>(inner_new_len));
+
+    if (best_len == 0) {
+        auto inner_ops = myers_diff(inner_old, inner_new, DiffAlgorithm::minimal);
+        std::vector<EditOp> ops;
+        for (ptrdiff_t i = 0; i < prefix; ++i)
+            ops.push_back({'E', i, i});
+        for (auto &op : inner_ops) {
+            if (op.old_idx >= 0) op.old_idx += prefix;
+            if (op.new_idx >= 0) op.new_idx += prefix;
+            ops.push_back(op);
+        }
+        for (ptrdiff_t i = 0; i < suffix; ++i)
+            ops.push_back({'E', n - suffix + i, m - suffix + i});
+        return ops;
+    }
+
+    // Step 5: Recurse on regions before and after the matching block.
+    std::vector<EditOp> ops;
+
+    // Emit prefix
+    for (ptrdiff_t i = 0; i < prefix; ++i)
+        ops.push_back({'E', i, i});
+
+    // Region before the block
+    if (best_old_start > 0 || best_new_start > 0) {
+        auto before_old = old_lines.subspan(checked_cast<size_t>(prefix),
+                                            checked_cast<size_t>(best_old_start));
+        auto before_new = new_lines.subspan(checked_cast<size_t>(prefix),
+                                            checked_cast<size_t>(best_new_start));
+        auto before_ops = histogram_diff_impl(before_old, before_new, depth + 1);
+        for (auto &op : before_ops) {
+            if (op.old_idx >= 0) op.old_idx += prefix;
+            if (op.new_idx >= 0) op.new_idx += prefix;
+            ops.push_back(op);
+        }
+    }
+
+    // Emit the matching block as Equal ops
+    for (ptrdiff_t k = 0; k < best_len; ++k) {
+        ops.push_back({'E', prefix + best_old_start + k,
+                            prefix + best_new_start + k});
+    }
+
+    // Region after the block
+    ptrdiff_t after_old_start = best_old_start + best_len;
+    ptrdiff_t after_new_start = best_new_start + best_len;
+    ptrdiff_t after_old_len = inner_old_len - after_old_start;
+    ptrdiff_t after_new_len = inner_new_len - after_new_start;
+
+    if (after_old_len > 0 || after_new_len > 0) {
+        auto after_old = old_lines.subspan(checked_cast<size_t>(prefix + after_old_start),
+                                           checked_cast<size_t>(after_old_len));
+        auto after_new = new_lines.subspan(checked_cast<size_t>(prefix + after_new_start),
+                                           checked_cast<size_t>(after_new_len));
+        auto after_ops = histogram_diff_impl(after_old, after_new, depth + 1);
+        for (auto &op : after_ops) {
+            if (op.old_idx >= 0) op.old_idx += prefix + after_old_start;
+            if (op.new_idx >= 0) op.new_idx += prefix + after_new_start;
+            ops.push_back(op);
+        }
+    }
+
+    // Emit suffix
+    for (ptrdiff_t i = 0; i < suffix; ++i)
+        ops.push_back({'E', n - suffix + i, m - suffix + i});
+
+    return ops;
+}
+
+static std::vector<EditOp> histogram_diff(
+    std::span<const std::string_view> old_lines,
+    std::span<const std::string_view> new_lines)
+{
+    return histogram_diff_impl(old_lines, new_lines, 0);
+}
+
 // A hunk groups consecutive edits with surrounding context lines.
 struct Hunk {
     ptrdiff_t old_start;  // 1-based
@@ -790,6 +1032,8 @@ DiffResult builtin_diff(std::string_view old_path, std::string_view new_path,
     std::vector<EditOp> ops;
     if (algorithm == DiffAlgorithm::patience)
         ops = patience_diff(old_fl.lines, new_fl.lines);
+    else if (algorithm == DiffAlgorithm::histogram)
+        ops = histogram_diff(old_fl.lines, new_fl.lines);
     else
         ops = myers_diff(old_fl.lines, new_fl.lines, algorithm);
 

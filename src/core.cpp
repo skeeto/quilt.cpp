@@ -686,7 +686,7 @@ static Command commands[] = {
      "Usage: quilt refresh [-p n] [-u | -U num | -c | -C num] [-z [new_name]]\n"
      "       [-f] [--no-timestamps] [--no-index] [--diffstat] [--sort]\n"
      "       [--strip-trailing-whitespace] [--backup]\n"
-     "       [--diff-algorithm={myers|minimal|patience}] [patch]\n"
+     "       [--diff-algorithm={myers|minimal|patience|histogram}] [patch]\n"
      "\n"
      "Regenerate the topmost or named patch by diffing backup copies in\n"
      ".pc/ against the current working tree. This is what actually writes\n"
@@ -711,14 +711,14 @@ static Command commands[] = {
      "  --backup          Save the old patch file as name~ before updating.\n"
      "  --diff-algorithm=name\n"
      "                    Select the diff algorithm: myers (default),\n"
-     "                    minimal, or patience.\n",
+     "                    minimal, patience, or histogram.\n",
      "Regenerate a patch from working tree changes"},
 
     {"diff", cmd_diff,
      "Usage: quilt diff [-p n] [-u | -U num | -c | -C num]\n"
      "       [--combine patch] [-P patch] [-z] [-R] [--snapshot]\n"
      "       [--diff=utility] [--no-timestamps] [--no-index] [--sort]\n"
-     "       [--diff-algorithm={myers|minimal|patience}] [file ...]\n"
+     "       [--diff-algorithm={myers|minimal|patience|histogram}] [file ...]\n"
      "\n"
      "Show the diff that quilt refresh would produce for the topmost or\n"
      "named patch. Without -z, shows the full patch content (backup vs.\n"
@@ -745,7 +745,7 @@ static Command commands[] = {
      "  --sort            Sort files alphabetically in the output.\n"
      "  --diff-algorithm=name\n"
      "                    Select the diff algorithm: myers (default),\n"
-     "                    minimal, or patience.\n",
+     "                    minimal, patience, or histogram.\n",
      "Show the diff of the topmost or a specified patch"},
 
     {"series", cmd_series,

@@ -440,7 +440,7 @@ Quilt.cpp's built-in diff engine supports multiple algorithms, selected with `--
 | `myers` (default) | Myers' O(ND) algorithm with speed heuristics. Uses a cost cap at approximately sqrt(N) to avoid quadratic runtime on large, heavily-changed files. May produce slightly suboptimal diffs. |
 | `minimal` | Myers' O(ND) algorithm without heuristics. Guarantees the shortest possible edit script at the expense of potentially longer runtime on large diffs. Equivalent to GNU diff's `--minimal` flag. |
 | `patience` | Anchors on lines unique to both files, computes their longest increasing subsequence, and recurses on gaps. Produces more readable diffs for code, especially when functions are reordered. Falls back to minimal Myers for regions with no unique lines. |
-| `histogram` | Not yet implemented. Will extend patience to handle non-unique lines. |
+| `histogram` | Extends patience diff by anchoring on the lowest-occurrence common line rather than requiring uniqueness. Finds the longest contiguous matching block around it and recurses. Falls back to minimal Myers when no suitable anchor exists. |
 
 For most files, `myers` and `minimal` produce identical output. They diverge only on large files with many scattered changes where the edit distance exceeds approximately 256. See `docs/diff-algorithms.md` for a detailed explanation of all four algorithms.
 

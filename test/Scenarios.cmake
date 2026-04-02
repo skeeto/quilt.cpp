@@ -517,7 +517,6 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     diff_algorithm_myers
     diff_algorithm_minimal
     diff_algorithm_invalid
-    diff_algorithm_not_implemented
     diff_algorithm_space_form
     refresh_diff_algorithm
     diff_algorithm_minimal_vs_myers
@@ -525,6 +524,9 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     diff_algorithm_patience_basic
     diff_algorithm_patience_function_insert
     diff_algorithm_patience_no_unique
+    diff_algorithm_histogram_basic
+    diff_algorithm_histogram_function_insert
+    diff_algorithm_histogram_no_unique
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -7534,8 +7536,6 @@ function(qt_run_named_scenario scenario)
         qt_scenario_diff_algorithm_minimal()
     elseif(scenario STREQUAL "diff_algorithm_invalid")
         qt_scenario_diff_algorithm_invalid()
-    elseif(scenario STREQUAL "diff_algorithm_not_implemented")
-        qt_scenario_diff_algorithm_not_implemented()
     elseif(scenario STREQUAL "diff_algorithm_space_form")
         qt_scenario_diff_algorithm_space_form()
     elseif(scenario STREQUAL "refresh_diff_algorithm")
@@ -7550,6 +7550,12 @@ function(qt_run_named_scenario scenario)
         qt_scenario_diff_algorithm_patience_function_insert()
     elseif(scenario STREQUAL "diff_algorithm_patience_no_unique")
         qt_scenario_diff_algorithm_patience_no_unique()
+    elseif(scenario STREQUAL "diff_algorithm_histogram_basic")
+        qt_scenario_diff_algorithm_histogram_basic()
+    elseif(scenario STREQUAL "diff_algorithm_histogram_function_insert")
+        qt_scenario_diff_algorithm_histogram_function_insert()
+    elseif(scenario STREQUAL "diff_algorithm_histogram_no_unique")
+        qt_scenario_diff_algorithm_histogram_no_unique()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -10062,17 +10068,6 @@ function(qt_scenario_diff_algorithm_invalid)
     qt_assert_contains("${err}" "Unknown diff algorithm" "should report unknown algorithm")
 endfunction()
 
-function(qt_scenario_diff_algorithm_not_implemented)
-    qt_begin_test("diff_algorithm_not_implemented")
-    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
-    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
-    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
-    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
-    qt_quilt(RESULT rc2 OUTPUT out2 ERROR err2 ARGS diff --diff-algorithm=histogram)
-    qt_assert_failure("${rc2}" "histogram should fail as unimplemented")
-    qt_assert_contains("${err2}" "not yet implemented" "should say not implemented")
-endfunction()
-
 function(qt_scenario_diff_algorithm_space_form)
     qt_begin_test("diff_algorithm_space_form")
     qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nbbb\nccc\n")
@@ -10309,5 +10304,75 @@ function(qt_scenario_diff_algorithm_patience_no_unique)
     qt_quilt(RESULT rc OUTPUT diff_out ERROR diff_err
              ARGS diff --diff-algorithm=patience --no-timestamps)
     qt_assert_success("${rc}" "patience with no unique lines should succeed")
+    qt_assert_contains("${diff_out}" "+X" "should show the inserted line")
+endfunction()
+
+function(qt_scenario_diff_algorithm_histogram_basic)
+    qt_begin_test("diff_algorithm_histogram_basic")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nbbb\nccc\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nBBB\nccc\n")
+    qt_quilt(RESULT rc OUTPUT diff_out ERROR diff_err ARGS diff --diff-algorithm=histogram)
+    qt_assert_success("${rc}" "diff --diff-algorithm=histogram should succeed")
+    qt_assert_contains("${diff_out}" "-bbb" "should show removed line")
+    qt_assert_contains("${diff_out}" "+BBB" "should show added line")
+    qt_assert_contains("${diff_out}" " aaa" "should show context")
+    qt_assert_contains("${diff_out}" " ccc" "should show context")
+endfunction()
+
+function(qt_scenario_diff_algorithm_histogram_function_insert)
+    qt_begin_test("diff_algorithm_histogram_function_insert")
+
+    # Two functions, each with a duplicated closing brace.
+    set(old_content [=[void func1() {
+    x += 1
+}
+void func2() {
+    x += 2
+}
+]=])
+    # Insert a new function between them.
+    set(new_content [=[void func1() {
+    x += 1
+}
+void func_new() {
+    x += 1.5
+}
+void func2() {
+    x += 2
+}
+]=])
+
+    qt_write_file("${QT_WORK_DIR}/f.txt" "${old_content}")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "${new_content}")
+
+    qt_quilt(RESULT rc OUTPUT diff_out ERROR diff_err
+             ARGS diff --diff-algorithm=histogram --no-timestamps)
+    qt_assert_success("${rc}" "histogram diff should succeed")
+
+    # Histogram behaves like patience when unique lines exist:
+    # it should NOT detach the closing brace from func1.
+    qt_assert_contains("${diff_out}" " }" "closing brace should be context, not detached")
+    qt_assert_contains("${diff_out}" "+void func_new" "new function should be added")
+    qt_assert_contains("${diff_out}" "+    x += 1.5" "new function body should be added")
+endfunction()
+
+function(qt_scenario_diff_algorithm_histogram_no_unique)
+    qt_begin_test("diff_algorithm_histogram_no_unique")
+
+    # No line is unique — each appears at least twice.  Patience would
+    # fall back entirely to Myers here, but histogram can still anchor
+    # on the lowest-occurrence lines.
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nb\nc\na\nb\nc\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nb\nc\nX\na\nb\nc\n")
+
+    qt_quilt(RESULT rc OUTPUT diff_out ERROR diff_err
+             ARGS diff --diff-algorithm=histogram --no-timestamps)
+    qt_assert_success("${rc}" "histogram with no unique lines should succeed")
     qt_assert_contains("${diff_out}" "+X" "should show the inserted line")
 endfunction()
