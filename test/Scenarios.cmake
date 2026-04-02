@@ -344,6 +344,13 @@ set(QUILT_TEST_SCENARIOS
     pop_dirty_tree_refresh
     refresh_binary_file
     quilt_patches_absolute_path
+    push_already_applied_exit2
+    pop_target_top_no_patch_removed
+    unapplied_last_patch_ok
+    push_quiet_no_extra_blank
+    pop_quiet_no_extra_blank
+    next_applied_patch_errors
+    pop_dirty_hint_message
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -4899,7 +4906,7 @@ function(qt_scenario_pop_target_already_top)
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS pop p2.patch)
     qt_assert_failure("${rc}" "pop to already-top patch should fail")
     qt_combine_output(combined "${out}" "${err}")
-    qt_assert_contains("${combined}" "currently on top" "should explain it is already the top patch")
+    qt_assert_contains("${combined}" "No patch removed" "should explain no patch was removed")
 endfunction()
 
 # push_unknown_target: quilt push <nonexistent-patch> should fail
@@ -5840,12 +5847,19 @@ function(qt_scenario_next_with_target)
     qt_quilt_ok(ARGS add f.txt MESSAGE "add p3 failed")
     qt_write_file("${QT_WORK_DIR}/f.txt" "3\n")
     qt_quilt_ok(ARGS refresh MESSAGE "refresh p3 failed")
-    # next p1 should be p2
-    qt_quilt_ok(OUTPUT next_out ERROR next_err ARGS next p1.patch MESSAGE "next p1 failed")
-    qt_assert_contains("${next_out}" "p2.patch" "next p1 should be p2")
-    # next p2 should be p3
-    qt_quilt_ok(OUTPUT next2_out ERROR next2_err ARGS next p2.patch MESSAGE "next p2 failed")
-    qt_assert_contains("${next2_out}" "p3.patch" "next p2 should be p3")
+    # Pop all, then push p1 only — p2 and p3 are unapplied
+    qt_quilt_ok(ARGS pop -a MESSAGE "pop -a failed")
+    qt_quilt_ok(ARGS push MESSAGE "push p1 failed")
+    # next with an applied patch should error
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS next p1.patch)
+    qt_assert_failure("${rc}" "next applied patch should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "currently applied" "should say currently applied")
+    # next with an unapplied patch returns the patch itself
+    qt_quilt_ok(OUTPUT next_out ARGS next p2.patch MESSAGE "next p2 failed")
+    qt_assert_contains("${next_out}" "p2.patch" "next unapplied p2 should return p2")
+    qt_quilt_ok(OUTPUT next3_out ARGS next p3.patch MESSAGE "next p3 failed")
+    qt_assert_contains("${next3_out}" "p3.patch" "next unapplied p3 should return p3")
 endfunction()
 
 function(qt_scenario_next_unknown_target)
@@ -7449,6 +7463,20 @@ function(qt_run_named_scenario scenario)
         qt_scenario_merge_markers_per_hunk()
     elseif(scenario STREQUAL "quilt_patches_absolute_path")
         qt_scenario_quilt_patches_absolute_path()
+    elseif(scenario STREQUAL "push_already_applied_exit2")
+        qt_scenario_push_already_applied_exit2()
+    elseif(scenario STREQUAL "pop_target_top_no_patch_removed")
+        qt_scenario_pop_target_top_no_patch_removed()
+    elseif(scenario STREQUAL "unapplied_last_patch_ok")
+        qt_scenario_unapplied_last_patch_ok()
+    elseif(scenario STREQUAL "push_quiet_no_extra_blank")
+        qt_scenario_push_quiet_no_extra_blank()
+    elseif(scenario STREQUAL "pop_quiet_no_extra_blank")
+        qt_scenario_pop_quiet_no_extra_blank()
+    elseif(scenario STREQUAL "next_applied_patch_errors")
+        qt_scenario_next_applied_patch_errors()
+    elseif(scenario STREQUAL "pop_dirty_hint_message")
+        qt_scenario_pop_dirty_hint_message()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -9622,4 +9650,128 @@ function(qt_scenario_quilt_patches_absolute_path)
     qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "base" "file should be restored")
     qt_quilt_ok(ENV "${qp_env}" ARGS push MESSAGE "push failed")
     qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "mod" "file should be patched")
+endfunction()
+
+# push_already_applied_exit2: push <applied-patch> should exit 2 with "currently applied"
+function(qt_scenario_push_already_applied_exit2)
+    qt_begin_test("push_already_applied_exit2")
+    qt_write_file("${QT_WORK_DIR}/f1.txt" "a\n")
+    qt_write_file("${QT_WORK_DIR}/f2.txt" "b\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add f1.txt MESSAGE "add f1 failed")
+    qt_write_file("${QT_WORK_DIR}/f1.txt" "a1\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add f2.txt MESSAGE "add f2 failed")
+    qt_write_file("${QT_WORK_DIR}/f2.txt" "b2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2 failed")
+    # Pop p2 so p1 is applied but p2 is not — series is not fully applied
+    qt_quilt_ok(ARGS pop MESSAGE "pop p2 failed")
+    # Now push p1.patch which is already applied
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push p1.patch)
+    qt_assert_equal("${rc}" "2" "push already-applied should exit 2")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "currently applied" "should say currently applied")
+endfunction()
+
+# pop_target_top_no_patch_removed: pop <top-patch> should say "No patch removed"
+function(qt_scenario_pop_target_top_no_patch_removed)
+    qt_begin_test("pop_target_top_no_patch_removed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "1\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS pop p1.patch)
+    qt_assert_failure("${rc}" "pop top patch should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "No patch removed" "should say no patch removed")
+endfunction()
+
+# unapplied_last_patch_ok: unapplied <last-unapplied-patch> should succeed with empty output
+function(qt_scenario_unapplied_last_patch_ok)
+    qt_begin_test("unapplied_last_patch_ok")
+    qt_write_file("${QT_WORK_DIR}/f1.txt" "a\n")
+    qt_write_file("${QT_WORK_DIR}/f2.txt" "b\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add f1.txt MESSAGE "add f1 failed")
+    qt_write_file("${QT_WORK_DIR}/f1.txt" "a1\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add f2.txt MESSAGE "add f2 failed")
+    qt_write_file("${QT_WORK_DIR}/f2.txt" "b2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2 failed")
+    # Pop all, push only p1
+    qt_quilt_ok(ARGS pop -a MESSAGE "pop -a failed")
+    qt_quilt_ok(ARGS push MESSAGE "push p1 failed")
+    # unapplied p2.patch (the last and only unapplied) should succeed with empty output
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS unapplied p2.patch)
+    qt_assert_success("${rc}" "unapplied last-patch should succeed")
+    qt_assert_equal("${out}" "" "unapplied last-patch should produce empty output")
+endfunction()
+
+# push_quiet_no_extra_blank: push -q should not have extra blank line
+function(qt_scenario_push_quiet_no_extra_blank)
+    qt_begin_test("push_quiet_no_extra_blank")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -q)
+    qt_assert_success("${rc}" "push -q should succeed")
+    # Should be exactly 2 lines: "Applying patch..." and "Now at patch..."
+    qt_assert_not_contains("${out}" "\n\n" "push -q should not have double newline")
+endfunction()
+
+# pop_quiet_no_extra_blank: pop -q should not have extra blank line
+function(qt_scenario_pop_quiet_no_extra_blank)
+    qt_begin_test("pop_quiet_no_extra_blank")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS pop -q)
+    qt_assert_success("${rc}" "pop -q should succeed")
+    # Should be exactly 2 lines: "Removing patch..." and "No patches applied"
+    qt_assert_not_contains("${out}" "\n\n" "pop -q should not have double newline")
+endfunction()
+
+# next_applied_patch_errors: next <applied-patch> should error with "currently applied"
+function(qt_scenario_next_applied_patch_errors)
+    qt_begin_test("next_applied_patch_errors")
+    qt_write_file("${QT_WORK_DIR}/f1.txt" "a\n")
+    qt_write_file("${QT_WORK_DIR}/f2.txt" "b\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add f1.txt MESSAGE "add f1 failed")
+    qt_write_file("${QT_WORK_DIR}/f1.txt" "a1\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add f2.txt MESSAGE "add f2 failed")
+    qt_write_file("${QT_WORK_DIR}/f2.txt" "b2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2 failed")
+    # p1 and p2 are both applied; next p1 should error
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS next p1.patch)
+    qt_assert_equal("${rc}" "2" "next applied patch should exit 2")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "currently applied" "should say currently applied")
+endfunction()
+
+# pop_dirty_hint_message: pop on dirty tree should show hint about quilt diff -z
+function(qt_scenario_pop_dirty_hint_message)
+    qt_begin_test("pop_dirty_hint_message")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "hello\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "hello world\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # Modify the file after refresh to make it dirty
+    qt_write_file("${QT_WORK_DIR}/f.txt" "something completely different\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS pop)
+    qt_assert_failure("${rc}" "pop dirty should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "does not remove cleanly" "should say does not remove cleanly")
+    qt_assert_contains("${combined}" "quilt diff -z" "should show hint about quilt diff -z")
 endfunction()

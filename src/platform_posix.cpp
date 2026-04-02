@@ -458,6 +458,11 @@ void fd_write_stderr(std::string_view s)
     write_all(STDERR_FILENO, s.data(), s.size());
 }
 
+bool stdout_is_tty()
+{
+    return isatty(STDOUT_FILENO) != 0;
+}
+
 std::string read_stdin()
 {
     return read_all_fd(STDIN_FILENO);

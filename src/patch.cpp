@@ -852,8 +852,13 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                 rejected[checked_cast<size_t>(h)] = true;
                 file_has_rejects = true;
                 if (!opts.quiet) {
-                    result.err += std::format("Hunk #{} FAILED at {}.\n",
-                                              h + 1, hunk.old_start);
+                    if (opts.merge) {
+                        result.err += std::format("Hunk #{} NOT MERGED at {}.\n",
+                                                  h + 1, hunk.old_start);
+                    } else {
+                        result.err += std::format("Hunk #{} FAILED at {}.\n",
+                                                  h + 1, hunk.old_start);
+                    }
                 }
             }
         }

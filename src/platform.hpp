@@ -54,6 +54,7 @@ std::string get_system_quiltrc();
 // I/O
 void fd_write_stdout(std::string_view s);
 void fd_write_stderr(std::string_view s);
+bool stdout_is_tty();
 
 // Read all of stdin
 std::string read_stdin();

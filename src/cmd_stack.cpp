@@ -41,23 +41,30 @@ static std::vector<std::string> parse_patch_files(std::string_view content, int 
 
 int cmd_series(QuiltState &q, int argc, char **argv) {
     bool verbose = false;
+    // color: 0=never, 1=auto, 2=always
+    int color_mode = 0;
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
         if (arg == "-v") {
             verbose = true;
-        } else if (arg == "--color" || arg.starts_with("--color=")) {
-            if (arg.starts_with("--color=")) {
-                auto val = arg.substr(8);
-                if (val != "always" && val != "auto" && val != "never") {
-                    err("Invalid --color value: "); err_line(val);
-                    return 1;
-                }
+        } else if (arg == "--color") {
+            color_mode = 1;  // auto
+        } else if (arg.starts_with("--color=")) {
+            auto val = arg.substr(8);
+            if (val == "always") color_mode = 2;
+            else if (val == "auto") color_mode = 1;
+            else if (val == "never") color_mode = 0;
+            else {
+                err("Invalid --color value: "); err_line(val);
+                return 1;
             }
         } else if (arg[0] == '-') {
             err("Unrecognized option: "); err_line(arg);
             return 1;
         }
     }
+
+    bool use_color = (color_mode == 2) || (color_mode == 1 && stdout_is_tty());
 
     for (const auto &patch : q.series) {
         if (verbose) {
@@ -69,7 +76,20 @@ int cmd_series(QuiltState &q, int argc, char **argv) {
                 out("  ");
             }
         }
-        out_line(format_patch(q, patch));
+        std::string name = format_patch(q, patch);
+        if (use_color) {
+            if (!q.applied.empty() && patch == q.applied.back()) {
+                out("\033[33m");  // yellow for top
+            } else if (q.is_applied(patch)) {
+                out("\033[32m");  // green for applied
+            } else {
+                out("\033[00m");  // default for unapplied
+            }
+            out(name);
+            out_line("\033[00m");
+        } else {
+            out_line(name);
+        }
     }
     return 0;
 }
@@ -156,6 +176,11 @@ int cmd_unapplied(QuiltState &q, int argc, char **argv) {
     }
 
     if (start_idx >= std::ssize(q.series)) {
+        // With an explicit target patch, having no patches after it is not
+        // an error — just print nothing.
+        if (!target.empty()) {
+            return 0;
+        }
         std::string_view top_name = q.applied.empty() ? std::string_view("??") : std::string_view(q.applied.back());
         err("File series fully applied, ends at patch "); err_line(format_patch(q, top_name));
         return 1;
@@ -218,7 +243,14 @@ int cmd_next(QuiltState &q, int argc, char **argv) {
             err("Patch "); err(format_patch(q, target)); err_line(" is not in series");
             return 2;
         }
-        after_idx = idx.value() + 1;
+        // Original quilt: if the named patch is applied, error
+        if (q.is_applied(target)) {
+            err("Patch "); err(format_patch(q, target)); err_line(" is currently applied");
+            return 2;
+        }
+        // If unapplied, return the patch itself (it's the "next" to be pushed)
+        out_line(format_patch(q, target));
+        return 0;
     } else {
         ptrdiff_t top = q.top_index();
         after_idx = top + 1;
@@ -269,7 +301,7 @@ int cmd_previous(QuiltState &q, int argc, char **argv) {
 
     if (q.applied.empty()) {
         err_line("No patches applied");
-        return 2;
+        return 1;
     }
 
     if (std::ssize(q.applied) == 1) {
@@ -368,8 +400,8 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
         }
         end_idx = idx.value();
         if (end_idx < start_idx) {
-            err("Patch "); err(format_patch(q, target)); err_line(" is already applied");
-            return 1;
+            err("Patch "); err(format_patch(q, target)); err_line(" is currently applied");
+            return 2;
         }
     } else if (push_count > 0) {
         end_idx = start_idx + push_count - 1;
@@ -504,7 +536,8 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
     }
 
     if (!last_applied.empty()) {
-        out_line("\nNow at patch " + patch_path_display(q, last_applied));
+        if (!quiet) out_line("");
+        out_line("Now at patch " + patch_path_display(q, last_applied));
     }
     return 0;
 }
@@ -570,7 +603,7 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
         // Pop down to (but not including) the target patch
         stop_idx = found_idx + 1;
         if (stop_idx >= std::ssize(q.applied)) {
-            err("Patch "); err(format_patch(q, target)); err_line(" is currently on top");
+            err_line("No patch removed");
             return 2;
         }
     } else if (pop_count > 0) {
@@ -626,6 +659,7 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
                 if (vr.exit_code != 0) {
                     err_line("Patch " + display +
                              " does not remove cleanly (refresh it or enforce with -f)");
+                    err_line("Hint: `quilt diff -z' will show the pending changes.");
                     return 1;
                 }
             }
@@ -660,10 +694,11 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
         write_applied_patches(q);
     }
 
+    if (!quiet) out_line("");
     if (q.applied.empty()) {
-        out_line("\nNo patches applied");
+        out_line("No patches applied");
     } else {
-        out_line("\nNow at patch " + patch_path_display(q, q.applied.back()));
+        out_line("Now at patch " + patch_path_display(q, q.applied.back()));
     }
     return 0;
 }
