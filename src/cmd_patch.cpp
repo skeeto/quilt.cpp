@@ -152,7 +152,7 @@ int cmd_new(QuiltState &q, int argc, char **argv) {
 
     // Store strip level
     if (!p_value.empty() && p_value != "1") {
-        q.patch_strip_level[patch_name] = std::stoi(p_value);
+        q.patch_strip_level[patch_name] = checked_cast<int>(parse_int(p_value));
     }
 
     // Write series file

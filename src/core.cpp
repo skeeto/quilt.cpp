@@ -262,10 +262,10 @@ std::vector<std::string> read_series(std::string_view path,
         bool is_reversed = false;
         for (ptrdiff_t i = 1; i < std::ssize(tokens); ++i) {
             if (tokens[checked_cast<size_t>(i)] == "-p" && i + 1 < std::ssize(tokens)) {
-                strip = std::stoi(tokens[checked_cast<size_t>(i + 1)]);
+                strip = checked_cast<int>(parse_int(tokens[checked_cast<size_t>(i + 1)]));
                 ++i;
             } else if (tokens[checked_cast<size_t>(i)].starts_with("-p") && std::ssize(tokens[checked_cast<size_t>(i)]) > 2) {
-                strip = std::stoi(tokens[checked_cast<size_t>(i)].substr(2));
+                strip = checked_cast<int>(parse_int(tokens[checked_cast<size_t>(i)].substr(2)));
             } else if (tokens[checked_cast<size_t>(i)] == "-R") {
                 is_reversed = true;
             }

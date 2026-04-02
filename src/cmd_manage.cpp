@@ -374,7 +374,7 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
         if (arg == "-p" && i + 1 < argc) {
-            strip_level = std::stoi(std::string(argv[++i]));
+            strip_level = checked_cast<int>(parse_int(argv[++i]));
         } else if (arg == "-R") {
             reversed = true;
         } else if (arg == "-P" && i + 1 < argc) {
@@ -952,10 +952,10 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
         } else if (arg == "-f") {
             opt_force = true;
         } else if (arg == "-p" && i + 1 < argc) {
-            strip_level = std::stoi(std::string(argv[++i]));
+            strip_level = checked_cast<int>(parse_int(argv[++i]));
         } else if (arg.starts_with("-p") && arg.size() > 2 &&
                    arg[2] >= '0' && arg[2] <= '9') {
-            strip_level = std::stoi(std::string(arg.substr(2)));
+            strip_level = checked_cast<int>(parse_int(arg.substr(2)));
         } else if (arg[0] == '-') {
             err("Unrecognized option: "); err_line(arg);
             return 1;

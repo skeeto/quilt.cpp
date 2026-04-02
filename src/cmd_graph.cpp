@@ -62,7 +62,7 @@ static int parse_hunk_count(const std::ssub_match &match) {
     if (!match.matched || match.str().empty()) {
         return 1;
     }
-    return std::stoi(match.str());
+    return checked_cast<int>(parse_int(match.str()));
 }
 
 static LineRanges parse_ranges(std::string_view diff_text) {
@@ -75,9 +75,9 @@ static LineRanges parse_ranges(std::string_view diff_text) {
         std::smatch match;
         if (!std::regex_search(line, match, hunk_regex)) continue;
 
-        int old_start = std::stoi(match[1].str());
+        int old_start = checked_cast<int>(parse_int(match[1].str()));
         int old_count = parse_hunk_count(match[2]);
-        int new_start = std::stoi(match[3].str());
+        int new_start = checked_cast<int>(parse_int(match[3].str()));
         int new_count = parse_hunk_count(match[4]);
 
         ranges.left.push_back(new_start);
@@ -337,7 +337,7 @@ int cmd_graph(QuiltState &q, int argc, char **argv) {
         } else if (arg == "--lines") {
             opt_lines = 2;
             if (i + 1 < argc && is_number(argv[i + 1])) {
-                opt_lines = std::stoi(argv[++i]);
+                opt_lines = checked_cast<int>(parse_int(argv[++i]));
             }
         } else if (arg.starts_with("--lines=")) {
             std::string value(arg.substr(8));
@@ -345,7 +345,7 @@ int cmd_graph(QuiltState &q, int argc, char **argv) {
                 err_line("Usage: quilt graph [--all] [--reduce] [--lines[=num]] [--edge-labels=files] [-T ps] [patch]");
                 return 1;
             }
-            opt_lines = std::stoi(value);
+            opt_lines = checked_cast<int>(parse_int(value));
         } else if (arg == "--edge-labels") {
             if (i + 1 >= argc || std::string_view(argv[i + 1]) != "files") {
                 err_line("Usage: quilt graph [--all] [--reduce] [--lines[=num]] [--edge-labels=files] [-T ps] [patch]");
