@@ -176,13 +176,13 @@ Prints the name of the next patch after the topmost or specified patch in the se
 
 ### Patch content management
 
-#### `quilt refresh [-p n|-p ab] [-u|-U num|-c|-C num] [-z[new_name]] [-f] [--no-timestamps] [--no-index] [--diffstat] [--sort] [--backup] [--strip-trailing-whitespace] [patch]`
+#### `quilt refresh [-p n|-p ab] [-u|-U num|-c|-C num] [-z[new_name]] [-f] [--no-timestamps] [--no-index] [--diffstat] [--sort] [--backup] [--strip-trailing-whitespace] [--diff-algorithm=myers|minimal] [patch]`
 
 Regenerates the specified (or topmost) patch file by running GNU `diff` between backup copies in `.pc/<patchname>/` and current source files. **This is the command that actually writes patch files.**
 
 **Exact behavior**: (1) Determines target patch (default: topmost). (2) For non-topmost patches without `-f`: checks if any patches above modify the same files and aborts if so. With `-f`: only includes changes in files not shadowed by upper patches, warns about shadowed files. (3) For each file tracked by the patch: runs `diff` between `.pc/<patchname>/<file>` (backup) and current `<file>`. (4) Preserves all header text from the existing patch file (everything before the first diff hunk). (5) Writes the combined diff output to `patches/<patchname>`. (6) Updates `.pc/<patchname>/.timestamp`.
 
-**Key flags**: `-p ab` produces `a/file` / `b/file` paths (recommended for Debian). `--no-timestamps` and `--no-index` suppress timestamp and `Index:` lines for cleaner patches. `--diffstat` adds/replaces a diffstat section in the header. `--sort` orders files alphabetically. `--backup` saves old patch as `patch~`. `-z[new_name]` writes changes to a new patch instead of updating the current one (fork-like). `--strip-trailing-whitespace` cleans up whitespace.
+**Key flags**: `-p ab` produces `a/file` / `b/file` paths (recommended for Debian). `--no-timestamps` and `--no-index` suppress timestamp and `Index:` lines for cleaner patches. `--diffstat` adds/replaces a diffstat section in the header. `--sort` orders files alphabetically. `--backup` saves old patch as `patch~`. `-z[new_name]` writes changes to a new patch instead of updating the current one (fork-like). `--strip-trailing-whitespace` cleans up whitespace. `--diff-algorithm` selects the diff algorithm (see below; **quilt.cpp extension**).
 
 **Diff formats**: Unified (`-u`, `-U num`) is the default. Context diff (`-c`, `-C num`) is also supported. Only `-p0`, `-p1`, and `-p ab` are valid strip levels for diff output.
 
@@ -192,13 +192,13 @@ quilt refresh -p ab --no-timestamps        # Clean Debian-style format
 quilt refresh --diffstat --sort            # With statistics, sorted
 ```
 
-#### `quilt diff [-p n|-p ab] [-u|-U num|-c|-C num] [--combine patch|-z] [-R] [-P patch] [--snapshot] [--diff=utility] [--no-timestamps] [--no-index] [--sort] [--color[=always|auto|never]] [file ...]`
+#### `quilt diff [-p n|-p ab] [-u|-U num|-c|-C num] [--combine patch|-z] [-R] [-P patch] [--snapshot] [--diff=utility] [--no-timestamps] [--no-index] [--sort] [--color[=always|auto|never]] [--diff-algorithm=myers|minimal] [file ...]`
 
 Shows differences without writing anything. This is the read-only counterpart to `refresh`.
 
 **Critical distinction**: `quilt diff` (without `-z`) shows the **entire patch content** (backup vs. current file, identical to what `refresh` would write). `quilt diff -z` shows only **uncommitted changes** since the last refresh — the delta between the last-refreshed state and current working state. Think of `quilt diff` as `git diff HEAD` and `quilt diff -z` as `git diff`.
 
-**Key flags**: `--combine patch` produces a combined diff across a range of patches (`-` means first applied patch). `--snapshot` diffs against a previously taken snapshot. `-R` creates a reverse diff. `--diff=utility` uses an alternate diff program. `--color` enables syntax coloring.
+**Key flags**: `--combine patch` produces a combined diff across a range of patches (`-` means first applied patch). `--snapshot` diffs against a previously taken snapshot. `-R` creates a reverse diff. `--diff=utility` uses an alternate diff program. `--color` enables syntax coloring. `--diff-algorithm` selects the diff algorithm (see below; **quilt.cpp extension**).
 
 ```bash
 quilt diff                     # Full diff of topmost patch
@@ -425,11 +425,26 @@ Additional flags: `-s` (silent), `-t` (touch after restore), `-L` (ensure link c
 
 ## Interaction with GNU diff and patch
 
-Quilt delegates all actual patching to **GNU `patch`** and all diff generation to **GNU `diff`**. It does not implement its own diff/patch algorithms.
+Original quilt delegates all patching to **GNU `patch`** and all diff generation to **GNU `diff`**. Quilt.cpp has built-in diff and patch engines that are used by default, with no external dependencies required.
 
-**During `push`**: Quilt invokes `patch` approximately as: `patch -d <source-root> [--backup --prefix=.pc/<patchname>/] [--quoting-style=literal] [-p<N>] [-R] [--fuzz=<N>] [<QUILT_PATCH_OPTS>] < <patch-file>`. Additional options come from `QUILT_PATCH_OPTS`.
+**During `push`**: Original quilt invokes `patch` approximately as: `patch -d <source-root> [--backup --prefix=.pc/<patchname>/] [--quoting-style=literal] [-p<N>] [-R] [--fuzz=<N>] [<QUILT_PATCH_OPTS>] < <patch-file>`. Quilt.cpp uses its built-in patch engine instead, but honors the same options via `QUILT_PATCH_OPTS`.
 
-**During `refresh` and `diff`**: Quilt invokes `diff` for each file, comparing the backup in `.pc/<patchname>/<file>` with the current source file. Additional options come from `QUILT_DIFF_OPTS` (e.g., `-p` shows C function names in hunk headers).
+**During `refresh` and `diff`**: Original quilt invokes `diff` for each file, comparing the backup in `.pc/<patchname>/<file>` with the current source file. Quilt.cpp uses its built-in diff engine by default. An external diff utility can be selected with `--diff=utility`. Additional options come from `QUILT_DIFF_OPTS` (e.g., `-p` shows C function names in hunk headers when using an external diff).
+
+### Diff algorithm selection (quilt.cpp extension)
+
+Quilt.cpp's built-in diff engine supports multiple algorithms, selected with `--diff-algorithm=<name>` on the `diff` and `refresh` commands. This follows the same convention as `git diff --diff-algorithm`.
+
+| Algorithm | Description |
+|-----------|-------------|
+| `myers` (default) | Myers' O(ND) algorithm with speed heuristics. Uses a cost cap at approximately sqrt(N) to avoid quadratic runtime on large, heavily-changed files. May produce slightly suboptimal diffs. |
+| `minimal` | Myers' O(ND) algorithm without heuristics. Guarantees the shortest possible edit script at the expense of potentially longer runtime on large diffs. Equivalent to GNU diff's `--minimal` flag. |
+| `patience` | Not yet implemented. Will anchor on lines unique to both files. |
+| `histogram` | Not yet implemented. Will extend patience to handle non-unique lines. |
+
+For most files, `myers` and `minimal` produce identical output. They diverge only on large files with many scattered changes where the edit distance exceeds approximately 256. See `docs/diff-algorithms.md` for a detailed explanation of all four algorithms.
+
+This option is ignored when using an external diff utility (`--diff=`).
 
 ### Strip levels explained
 
