@@ -596,19 +596,8 @@ bool restore_file(QuiltState &q, std::string_view patch, std::string_view file) 
     }
 
     std::string content = read_file(backup);
-    if (content.empty() && !file_exists(backup)) {
-        // Backup was a placeholder for a file that didn't exist — remove the target
-        if (file_exists(target) && !delete_file(target)) {
-            err_line("Failed to remove " + target);
-            return false;
-        }
-        return true;
-    }
-
     if (content.empty()) {
-        // The backed-up file was empty or didn't exist before the patch
-        // Check if the backup is a zero-length placeholder
-        // If the original file didn't exist, remove the target
+        // Zero-length backup = file didn't exist before the patch — remove target
         if (file_exists(target) && !delete_file(target)) {
             err_line("Failed to remove " + target);
             return false;
