@@ -54,11 +54,20 @@ void err_line(std::string_view s) {
     fd_write_stderr("\n");
 }
 
+static bool is_absolute_path(std::string_view p) {
+    if (!p.empty() && p[0] == '/') return true;
+    // Windows: drive letter (e.g. C:\, D:/)
+    if (p.size() >= 3 && ((p[0] >= 'A' && p[0] <= 'Z') ||
+                           (p[0] >= 'a' && p[0] <= 'z')) &&
+        p[1] == ':' && (p[2] == '/' || p[2] == '\\')) return true;
+    return false;
+}
+
 std::string path_join(std::string_view a, std::string_view b) {
     if (a.empty()) return std::string(b);
     if (b.empty()) return std::string(a);
-    if (!b.empty() && b[0] == '/') return std::string(b);
-    if (a.back() == '/') return std::string(a) + std::string(b);
+    if (is_absolute_path(b)) return std::string(b);
+    if (a.back() == '/' || a.back() == '\\') return std::string(a) + std::string(b);
     return std::string(a) + "/" + std::string(b);
 }
 
@@ -467,7 +476,7 @@ QuiltState load_state() {
     // Only use relative paths for scanning; absolute paths are used as-is.
     std::string cwd = get_cwd();
     std::string scan = cwd;
-    bool patches_dir_is_abs = !q.patches_dir.empty() && q.patches_dir[0] == '/';
+    bool patches_dir_is_abs = is_absolute_path(q.patches_dir);
     while (true) {
         if (is_directory(path_join(scan, q.pc_dir)) ||
             (!patches_dir_is_abs && is_directory(path_join(scan, q.patches_dir)))) {

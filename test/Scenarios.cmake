@@ -343,6 +343,7 @@ set(QUILT_TEST_SCENARIOS
     pop_dirty_tree_force
     pop_dirty_tree_refresh
     refresh_binary_file
+    quilt_patches_absolute_path
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -493,7 +494,6 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     graph_reduce
     merge_markers_per_hunk
     push_verbose_long_option
-    quilt_patches_absolute_path
 )
 
 function(qt_strip_trailing_newlines out_var text)
