@@ -164,22 +164,16 @@ int cmd_delete(QuiltState &q, int argc, char **argv) {
             err_line(" is currently applied");
             return 1;
         }
-        // Pop the topmost patch with progress messages
+        // Pop the topmost patch silently (no per-file messages)
         auto tracked = files_in_patch(q, patch);
         out_line("Removing patch " + patch_path_display(q, patch));
         for (const auto &f : tracked) {
             restore_file(q, patch, f);
-            if (!file_exists(path_join(q.work_dir, f))) {
-                out_line("Removing " + f);
-            } else {
-                out_line("Restoring " + f);
-            }
         }
         std::string pc_dir = pc_patch_dir(q, patch);
         if (is_directory(pc_dir)) delete_dir_recursive(pc_dir);
         q.applied.pop_back();
         if (!write_applied_checked(q, q.applied)) return 1;
-        out_line("");
         if (!q.applied.empty()) {
             out_line("Now at patch " +
                      patch_path_display(q, q.applied.back()));
@@ -959,8 +953,7 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
     std::string stdin_data = read_stdin();
 
     if (stdin_data.empty()) {
-        err_line("No patch data on stdin");
-        return 1;
+        return 0;
     }
 
     // Parse the incoming patch to find affected files
@@ -997,14 +990,13 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
     }
 
     PatchResult r = builtin_patch(stdin_data, patch_opts);
-    if (r.exit_code != 0) {
-        if (!r.out.empty()) err(r.out);
-        if (!r.err.empty()) err(r.err);
-        return 1;
-    }
-
     if (!opt_quiet && !r.out.empty()) {
         out(r.out);
+    }
+    if (!r.err.empty()) err(r.err);
+
+    if (r.exit_code != 0 && !opt_force) {
+        return 1;
     }
 
     return 0;

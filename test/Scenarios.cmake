@@ -205,6 +205,8 @@ set(QUILT_TEST_SCENARIOS
     delete_bad_option
     delete_no_patch
     delete_topmost
+    delete_topmost_output
+    fold_force_rejects
     upgrade_bad_option
     applied_unapplied_target
     add_remove_unapplied_P
@@ -5610,11 +5612,9 @@ function(qt_scenario_fold_empty_stdin)
     qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
     qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
     qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
-    # fold with no stdin data should fail
+    # fold with no stdin data should succeed (no-op, matching original quilt)
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS fold INPUT "")
-    qt_assert_failure("${rc}" "fold with empty stdin should fail")
-    qt_combine_output(combined "${out}" "${err}")
-    qt_assert_contains("${combined}" "No patch data" "fold should explain no patch data on stdin")
+    qt_assert_success("${rc}" "fold with empty stdin should succeed")
 endfunction()
 
 function(qt_scenario_unapplied_unknown_target)
@@ -6039,6 +6039,50 @@ function(qt_scenario_delete_topmost)
     qt_quilt_ok(OUTPUT out ERROR err ARGS delete MESSAGE "delete topmost failed")
     qt_combine_output(combined "${out}" "${err}")
     qt_assert_contains("${combined}" "Removed" "delete topmost should confirm removal")
+endfunction()
+
+# delete_topmost_output: delete should not print per-file "Restoring" messages
+function(qt_scenario_delete_topmost_output)
+    qt_begin_test("delete_topmost_output")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "mod\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS delete -r MESSAGE "delete -r failed")
+    qt_combine_output(combined "${out}" "${err}")
+    # Should NOT contain "Restoring" per-file messages
+    string(FIND "${combined}" "Restoring" restoring_pos)
+    if(NOT restoring_pos EQUAL -1)
+        qt_fail("delete should not print per-file 'Restoring' messages")
+    endif()
+    # Should contain standard messages
+    qt_assert_contains("${combined}" "Removing patch" "should say removing patch")
+    qt_assert_contains("${combined}" "No patches applied" "should say no patches applied")
+    qt_assert_contains("${combined}" "Removed patch" "should say removed patch")
+    # File should be restored
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "base" "file should be restored")
+endfunction()
+
+# fold_force_rejects: fold -f should return 0 even with rejected hunks
+function(qt_scenario_fold_force_rejects)
+    qt_begin_test("fold_force_rejects")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "bbb\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # Fold a conflicting patch with -f: should succeed (exit 0)
+    qt_quilt_ok(
+        ARGS fold -f
+        INPUT [=[--- a/f.txt
++++ b/f.txt
+@@ -1 +1 @@
+-zzz
++yyy
+]=]
+        MESSAGE "fold -f should succeed even with rejects"
+    )
 endfunction()
 
 function(qt_scenario_upgrade_help)
@@ -7103,6 +7147,10 @@ function(qt_run_named_scenario scenario)
         qt_scenario_delete_no_patch()
     elseif(scenario STREQUAL "delete_topmost")
         qt_scenario_delete_topmost()
+    elseif(scenario STREQUAL "delete_topmost_output")
+        qt_scenario_delete_topmost_output()
+    elseif(scenario STREQUAL "fold_force_rejects")
+        qt_scenario_fold_force_rejects()
     elseif(scenario STREQUAL "upgrade_help")
         qt_scenario_upgrade_help()
     elseif(scenario STREQUAL "upgrade_bad_option")
