@@ -76,6 +76,28 @@ static bool write_handle(HANDLE h, const void *data, size_t len)
     return true;
 }
 
+// Write a UTF-8 string to a handle.  When the handle is a console,
+// convert to UTF-16 and use WriteConsoleW so that non-ASCII text
+// displays correctly.  For pipes/files, write raw UTF-8 bytes.
+static bool write_console_or_file(HANDLE h, std::string_view s)
+{
+    DWORD mode;
+    if (GetConsoleMode(h, &mode)) {
+        std::wstring wide = utf8_to_wide(s);
+        const wchar_t *p = wide.data();
+        DWORD remaining = checked_cast<DWORD>(std::ssize(wide));
+        while (remaining > 0) {
+            DWORD written = 0;
+            if (!WriteConsoleW(h, p, remaining, &written, nullptr))
+                return false;
+            p         += written;
+            remaining -= written;
+        }
+        return true;
+    }
+    return write_handle(h, s.data(), s.size());
+}
+
 // Create an inheritable pipe.  read_end and write_end are set.
 // inherit_which: 0 = read end inheritable, 1 = write end inheritable
 static bool create_pipe(HANDLE &read_end, HANDLE &write_end,
@@ -614,14 +636,14 @@ void fd_write_stdout(std::string_view s)
 {
     HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
     if (h != INVALID_HANDLE_VALUE)
-        write_handle(h, s.data(), s.size());
+        write_console_or_file(h, s);
 }
 
 void fd_write_stderr(std::string_view s)
 {
     HANDLE h = GetStdHandle(STD_ERROR_HANDLE);
     if (h != INVALID_HANDLE_VALUE)
-        write_handle(h, s.data(), s.size());
+        write_console_or_file(h, s);
 }
 
 bool stdout_is_tty()
