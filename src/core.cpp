@@ -57,6 +57,7 @@ void err_line(std::string_view s) {
 std::string path_join(std::string_view a, std::string_view b) {
     if (a.empty()) return std::string(b);
     if (b.empty()) return std::string(a);
+    if (!b.empty() && b[0] == '/') return std::string(b);
     if (a.back() == '/') return std::string(a) + std::string(b);
     return std::string(a) + "/" + std::string(b);
 }
@@ -463,11 +464,13 @@ QuiltState load_state() {
     std::string env_series = get_env("QUILT_SERIES");
 
     // Upward directory scan: find project root containing .pc/ or patches/
+    // Only use relative paths for scanning; absolute paths are used as-is.
     std::string cwd = get_cwd();
     std::string scan = cwd;
+    bool patches_dir_is_abs = !q.patches_dir.empty() && q.patches_dir[0] == '/';
     while (true) {
         if (is_directory(path_join(scan, q.pc_dir)) ||
-            is_directory(path_join(scan, q.patches_dir))) {
+            (!patches_dir_is_abs && is_directory(path_join(scan, q.patches_dir)))) {
             break;
         }
         std::string parent = dirname(scan);

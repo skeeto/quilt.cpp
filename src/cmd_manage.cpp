@@ -727,6 +727,7 @@ int cmd_header(QuiltState &q, int argc, char **argv) {
         }
         std::string new_content = replace_header(content, new_header);
         write_file(patch_file, new_content);
+        out_line("Replaced header of patch " + patch_path_display(q, patch));
         return 0;
     }
 

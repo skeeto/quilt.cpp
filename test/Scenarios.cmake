@@ -337,6 +337,7 @@ set(QUILT_TEST_SCENARIOS
     pop_dirty_tree_force
     pop_dirty_tree_refresh
     refresh_binary_file
+    quilt_patches_absolute_path
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -7298,6 +7299,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_refresh_binary_file()
     elseif(scenario STREQUAL "merge_markers_per_hunk")
         qt_scenario_merge_markers_per_hunk()
+    elseif(scenario STREQUAL "quilt_patches_absolute_path")
+        qt_scenario_quilt_patches_absolute_path()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -9450,4 +9453,25 @@ function(qt_scenario_merge_markers_per_hunk)
     if(aaa_pos GREATER marker_start AND aaa_pos LESS separator_pos)
         qt_fail("context line 'aaa' should be outside conflict markers")
     endif()
+endfunction()
+
+# quilt_patches_absolute_path: QUILT_PATCHES with absolute path should work
+function(qt_scenario_quilt_patches_absolute_path)
+    qt_begin_test("quilt_patches_absolute_path")
+    set(abs_patches "${QT_WORK_DIR}/external_patches")
+    file(MAKE_DIRECTORY "${abs_patches}")
+    set(qp_env "QUILT_PATCHES=${abs_patches}")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
+    qt_quilt_ok(ENV "${qp_env}" ARGS new p.patch MESSAGE "new with absolute QUILT_PATCHES failed")
+    qt_quilt_ok(ENV "${qp_env}" ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "mod\n")
+    qt_quilt_ok(ENV "${qp_env}" ARGS refresh MESSAGE "refresh failed")
+    # Verify patch was created in the absolute path
+    if(NOT EXISTS "${abs_patches}/p.patch")
+        qt_fail("patch file should exist in absolute patches dir")
+    endif()
+    qt_quilt_ok(ENV "${qp_env}" ARGS pop MESSAGE "pop failed")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "base" "file should be restored")
+    qt_quilt_ok(ENV "${qp_env}" ARGS push MESSAGE "push failed")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "mod" "file should be patched")
 endfunction()
