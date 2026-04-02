@@ -220,11 +220,18 @@ static std::vector<EditOp> myers_diff(
                 final_d = d;
                 auto ops = backtrack_trace(trace, final_d, best_x, best_y, offset);
 
-                // Append remaining unmatched lines as raw deletes/inserts
-                for (ptrdiff_t i = best_x; i < n; ++i)
-                    ops.push_back({'D', i, -1});
-                for (ptrdiff_t j = best_y; j < m; ++j)
-                    ops.push_back({'I', -1, j});
+                // Recurse on the remaining portion with a fresh search
+                // budget, so matching lines past the cutoff are found.
+                auto tail_old = old_lines.subspan(checked_cast<size_t>(best_x));
+                auto tail_new = new_lines.subspan(checked_cast<size_t>(best_y));
+                auto tail_ops = myers_diff(tail_old, tail_new, algorithm);
+
+                // Adjust indices back to the original coordinate space
+                for (auto &op : tail_ops) {
+                    if (op.old_idx >= 0) op.old_idx += best_x;
+                    if (op.new_idx >= 0) op.new_idx += best_y;
+                    ops.push_back(op);
+                }
                 return ops;
             }
         }

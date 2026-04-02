@@ -521,6 +521,7 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     diff_algorithm_space_form
     refresh_diff_algorithm
     diff_algorithm_minimal_vs_myers
+    diff_algorithm_myers_heuristic_tail
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -7538,6 +7539,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_refresh_diff_algorithm()
     elseif(scenario STREQUAL "diff_algorithm_minimal_vs_myers")
         qt_scenario_diff_algorithm_minimal_vs_myers()
+    elseif(scenario STREQUAL "diff_algorithm_myers_heuristic_tail")
+        qt_scenario_diff_algorithm_myers_heuristic_tail()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -10147,9 +10150,81 @@ function(qt_scenario_diff_algorithm_minimal_vs_myers)
     if(min_edits GREATER myers_edits)
         qt_fail("minimal (${min_edits} edits) should be <= myers (${myers_edits} edits)")
     endif()
+endfunction()
 
-    # On this input the heuristic should actually produce a longer diff
-    if(min_edits EQUAL myers_edits)
-        qt_fail("Expected minimal (${min_edits}) to be strictly shorter than myers (${myers_edits}) on large input")
+# Regression test: myers heuristic must not dump matching tail lines as
+# raw edits.  Changes are concentrated in the first half; the second half
+# is identical in both files.  A broken heuristic would dump the tail as
+# raw deletes/inserts, producing a diff ~2.5x larger than minimal.
+function(qt_scenario_diff_algorithm_myers_heuristic_tail)
+    qt_begin_test("diff_algorithm_myers_heuristic_tail")
+
+    # Build two 500-line files:
+    #   Lines 0-299: alternating shared/unique (150 changes, D=300 > 256 cap)
+    #   Lines 300-499: identical tail section
+    set(original "")
+    set(modified "")
+    foreach(i RANGE 0 299)
+        math(EXPR mod2 "${i} % 2")
+        string(LENGTH "${i}" ilen)
+        if(ilen EQUAL 1)
+            set(pad "00${i}")
+        elseif(ilen EQUAL 2)
+            set(pad "0${i}")
+        else()
+            set(pad "${i}")
+        endif()
+        if(mod2 EQUAL 0)
+            string(APPEND original "shared_${pad}\n")
+            string(APPEND modified "shared_${pad}\n")
+        else()
+            string(APPEND original "unique_old_${pad}\n")
+            string(APPEND modified "unique_new_${pad}\n")
+        endif()
+    endforeach()
+    foreach(i RANGE 0 199)
+        string(LENGTH "${i}" ilen)
+        if(ilen EQUAL 1)
+            set(pad "00${i}")
+        elseif(ilen EQUAL 2)
+            set(pad "0${i}")
+        else()
+            set(pad "${i}")
+        endif()
+        string(APPEND original "tail_${pad}\n")
+        string(APPEND modified "tail_${pad}\n")
+    endforeach()
+
+    qt_write_file("${QT_WORK_DIR}/f.txt" "${original}")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "${modified}")
+
+    qt_quilt(RESULT rc_myers OUTPUT diff_myers ERROR err_myers
+             ARGS diff --diff-algorithm=myers --no-timestamps)
+    qt_assert_success("${rc_myers}" "myers diff should succeed")
+
+    qt_quilt(RESULT rc_min OUTPUT diff_min ERROR err_min
+             ARGS diff --diff-algorithm=minimal --no-timestamps)
+    qt_assert_success("${rc_min}" "minimal diff should succeed")
+
+    # Count edit lines
+    string(REGEX MATCHALL "\n-[^\n]" myers_dels "${diff_myers}")
+    string(REGEX MATCHALL "\n\\+[^\n]" myers_adds "${diff_myers}")
+    list(LENGTH myers_dels myers_del_count)
+    list(LENGTH myers_adds myers_add_count)
+    math(EXPR myers_edits "${myers_del_count} + ${myers_add_count}")
+
+    string(REGEX MATCHALL "\n-[^\n]" min_dels "${diff_min}")
+    string(REGEX MATCHALL "\n\\+[^\n]" min_adds "${diff_min}")
+    list(LENGTH min_dels min_del_count)
+    list(LENGTH min_adds min_add_count)
+    math(EXPR min_edits "${min_del_count} + ${min_add_count}")
+
+    # myers must not be catastrophically worse than minimal.
+    # Without the recursion fix, myers produces ~744 edits vs minimal's ~302.
+    math(EXPR limit "${min_edits} * 2")
+    if(myers_edits GREATER limit)
+        qt_fail("myers (${myers_edits} edits) is more than 2x minimal (${min_edits} edits) -- heuristic tail dump bug")
     endif()
 endfunction()
