@@ -685,7 +685,8 @@ static Command commands[] = {
     {"refresh", cmd_refresh,
      "Usage: quilt refresh [-p n] [-u | -U num | -c | -C num] [-z [new_name]]\n"
      "       [-f] [--no-timestamps] [--no-index] [--diffstat] [--sort]\n"
-     "       [--strip-trailing-whitespace] [--backup] [patch]\n"
+     "       [--strip-trailing-whitespace] [--backup]\n"
+     "       [--diff-algorithm={myers|minimal}] [patch]\n"
      "\n"
      "Regenerate the topmost or named patch by diffing backup copies in\n"
      ".pc/ against the current working tree. This is what actually writes\n"
@@ -707,14 +708,17 @@ static Command commands[] = {
      "  --sort            Sort files alphabetically in the patch.\n"
      "  --strip-trailing-whitespace\n"
      "                    Strip trailing whitespace from each line.\n"
-     "  --backup          Save the old patch file as name~ before updating.\n",
+     "  --backup          Save the old patch file as name~ before updating.\n"
+     "  --diff-algorithm=name\n"
+     "                    Select the diff algorithm: myers (default) or\n"
+     "                    minimal (guaranteed shortest edit script).\n",
      "Regenerate a patch from working tree changes"},
 
     {"diff", cmd_diff,
      "Usage: quilt diff [-p n] [-u | -U num | -c | -C num]\n"
      "       [--combine patch] [-P patch] [-z] [-R] [--snapshot]\n"
      "       [--diff=utility] [--no-timestamps] [--no-index] [--sort]\n"
-     "       [file ...]\n"
+     "       [--diff-algorithm={myers|minimal}] [file ...]\n"
      "\n"
      "Show the diff that quilt refresh would produce for the topmost or\n"
      "named patch. Without -z, shows the full patch content (backup vs.\n"
@@ -738,7 +742,10 @@ static Command commands[] = {
      "                    built-in diff engine.\n"
      "  --no-timestamps   Omit timestamps from diff headers.\n"
      "  --no-index        Omit Index: lines from the output.\n"
-     "  --sort            Sort files alphabetically in the output.\n",
+     "  --sort            Sort files alphabetically in the output.\n"
+     "  --diff-algorithm=name\n"
+     "                    Select the diff algorithm: myers (default) or\n"
+     "                    minimal (guaranteed shortest edit script).\n",
      "Show the diff of the topmost or a specified patch"},
 
     {"series", cmd_series,
