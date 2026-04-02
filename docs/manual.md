@@ -176,7 +176,7 @@ Prints the name of the next patch after the topmost or specified patch in the se
 
 ### Patch content management
 
-#### `quilt refresh [-p n|-p ab] [-u|-U num|-c|-C num] [-z[new_name]] [-f] [--no-timestamps] [--no-index] [--diffstat] [--sort] [--backup] [--strip-trailing-whitespace] [--diff-algorithm=myers|minimal] [patch]`
+#### `quilt refresh [-p n|-p ab] [-u|-U num|-c|-C num] [-z[new_name]] [-f] [--no-timestamps] [--no-index] [--diffstat] [--sort] [--backup] [--strip-trailing-whitespace] [--diff-algorithm=myers|minimal|patience] [patch]`
 
 Regenerates the specified (or topmost) patch file by running GNU `diff` between backup copies in `.pc/<patchname>/` and current source files. **This is the command that actually writes patch files.**
 
@@ -192,7 +192,7 @@ quilt refresh -p ab --no-timestamps        # Clean Debian-style format
 quilt refresh --diffstat --sort            # With statistics, sorted
 ```
 
-#### `quilt diff [-p n|-p ab] [-u|-U num|-c|-C num] [--combine patch|-z] [-R] [-P patch] [--snapshot] [--diff=utility] [--no-timestamps] [--no-index] [--sort] [--color[=always|auto|never]] [--diff-algorithm=myers|minimal] [file ...]`
+#### `quilt diff [-p n|-p ab] [-u|-U num|-c|-C num] [--combine patch|-z] [-R] [-P patch] [--snapshot] [--diff=utility] [--no-timestamps] [--no-index] [--sort] [--color[=always|auto|never]] [--diff-algorithm=myers|minimal|patience] [file ...]`
 
 Shows differences without writing anything. This is the read-only counterpart to `refresh`.
 
@@ -439,7 +439,7 @@ Quilt.cpp's built-in diff engine supports multiple algorithms, selected with `--
 |-----------|-------------|
 | `myers` (default) | Myers' O(ND) algorithm with speed heuristics. Uses a cost cap at approximately sqrt(N) to avoid quadratic runtime on large, heavily-changed files. May produce slightly suboptimal diffs. |
 | `minimal` | Myers' O(ND) algorithm without heuristics. Guarantees the shortest possible edit script at the expense of potentially longer runtime on large diffs. Equivalent to GNU diff's `--minimal` flag. |
-| `patience` | Not yet implemented. Will anchor on lines unique to both files. |
+| `patience` | Anchors on lines unique to both files, computes their longest increasing subsequence, and recurses on gaps. Produces more readable diffs for code, especially when functions are reordered. Falls back to minimal Myers for regions with no unique lines. |
 | `histogram` | Not yet implemented. Will extend patience to handle non-unique lines. |
 
 For most files, `myers` and `minimal` produce identical output. They diverge only on large files with many scattered changes where the edit distance exceeds approximately 256. See `docs/diff-algorithms.md` for a detailed explanation of all four algorithms.

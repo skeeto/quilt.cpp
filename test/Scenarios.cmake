@@ -522,6 +522,9 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     refresh_diff_algorithm
     diff_algorithm_minimal_vs_myers
     diff_algorithm_myers_heuristic_tail
+    diff_algorithm_patience_basic
+    diff_algorithm_patience_function_insert
+    diff_algorithm_patience_no_unique
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -7541,6 +7544,12 @@ function(qt_run_named_scenario scenario)
         qt_scenario_diff_algorithm_minimal_vs_myers()
     elseif(scenario STREQUAL "diff_algorithm_myers_heuristic_tail")
         qt_scenario_diff_algorithm_myers_heuristic_tail()
+    elseif(scenario STREQUAL "diff_algorithm_patience_basic")
+        qt_scenario_diff_algorithm_patience_basic()
+    elseif(scenario STREQUAL "diff_algorithm_patience_function_insert")
+        qt_scenario_diff_algorithm_patience_function_insert()
+    elseif(scenario STREQUAL "diff_algorithm_patience_no_unique")
+        qt_scenario_diff_algorithm_patience_no_unique()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -10059,9 +10068,6 @@ function(qt_scenario_diff_algorithm_not_implemented)
     qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
     qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
     qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
-    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS diff --diff-algorithm=patience)
-    qt_assert_failure("${rc}" "patience should fail as unimplemented")
-    qt_assert_contains("${err}" "not yet implemented" "should say not implemented")
     qt_quilt(RESULT rc2 OUTPUT out2 ERROR err2 ARGS diff --diff-algorithm=histogram)
     qt_assert_failure("${rc2}" "histogram should fail as unimplemented")
     qt_assert_contains("${err2}" "not yet implemented" "should say not implemented")
@@ -10227,4 +10233,81 @@ function(qt_scenario_diff_algorithm_myers_heuristic_tail)
     if(myers_edits GREATER limit)
         qt_fail("myers (${myers_edits} edits) is more than 2x minimal (${min_edits} edits) -- heuristic tail dump bug")
     endif()
+endfunction()
+
+# Patience diff tests
+
+function(qt_scenario_diff_algorithm_patience_basic)
+    qt_begin_test("diff_algorithm_patience_basic")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nbbb\nccc\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nBBB\nccc\n")
+    qt_quilt(RESULT rc OUTPUT diff_out ERROR diff_err ARGS diff --diff-algorithm=patience)
+    qt_assert_success("${rc}" "diff --diff-algorithm=patience should succeed")
+    qt_assert_contains("${diff_out}" "-bbb" "should show removed line")
+    qt_assert_contains("${diff_out}" "+BBB" "should show added line")
+    qt_assert_contains("${diff_out}" " aaa" "should show context")
+    qt_assert_contains("${diff_out}" " ccc" "should show context")
+endfunction()
+
+# Classic patience diff motivating example: inserting a new function
+# between two existing ones.  Patience anchors on unique function
+# signatures so the closing brace stays with its function body.
+function(qt_scenario_diff_algorithm_patience_function_insert)
+    qt_begin_test("diff_algorithm_patience_function_insert")
+
+    # Two functions, each with a duplicated closing brace.
+    set(old_content [=[void func1() {
+    x += 1
+}
+void func2() {
+    x += 2
+}
+]=])
+    # Insert a new function between them.
+    set(new_content [=[void func1() {
+    x += 1
+}
+void func_new() {
+    x += 1.5
+}
+void func2() {
+    x += 2
+}
+]=])
+
+    qt_write_file("${QT_WORK_DIR}/f.txt" "${old_content}")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "${new_content}")
+
+    qt_quilt(RESULT rc OUTPUT diff_out ERROR diff_err
+             ARGS diff --diff-algorithm=patience --no-timestamps)
+    qt_assert_success("${rc}" "patience diff should succeed")
+
+    # The diff should show func_new as a clean insertion block.
+    # Patience must NOT detach the closing brace from func1.
+    # A clean insertion looks like "+void func_new" with the closing
+    # brace of func1 on a context line before it.
+    qt_assert_contains("${diff_out}" " }" "closing brace should be context, not detached")
+    qt_assert_contains("${diff_out}" "+void func_new" "new function should be added")
+    qt_assert_contains("${diff_out}" "+    x += 1.5" "new function body should be added")
+endfunction()
+
+# When no lines are unique in either file, patience falls back to Myers.
+function(qt_scenario_diff_algorithm_patience_no_unique)
+    qt_begin_test("diff_algorithm_patience_no_unique")
+
+    # Both files share the same set of lines, just reordered.
+    # No line is unique — all appear in both files.
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nb\nc\na\nb\nc\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nb\nc\nX\na\nb\nc\n")
+
+    qt_quilt(RESULT rc OUTPUT diff_out ERROR diff_err
+             ARGS diff --diff-algorithm=patience --no-timestamps)
+    qt_assert_success("${rc}" "patience with no unique lines should succeed")
+    qt_assert_contains("${diff_out}" "+X" "should show the inserted line")
 endfunction()

@@ -1,6 +1,6 @@
 // This is free and unencumbered software released into the public domain.
 //
-// Built-in diff engine using Myers' O(ND) algorithm.
+// Built-in diff engine: Myers, minimal, and patience algorithms.
 // Produces unified or context diff output, replacing the need for an
 // external diff binary.
 
@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <optional>
+#include <unordered_map>
 
 std::optional<DiffAlgorithm> parse_diff_algorithm(std::string_view name)
 {
@@ -239,6 +240,209 @@ static std::vector<EditOp> myers_diff(
 found:
 
     return backtrack_trace(trace, final_d, n, m, offset);
+}
+
+// Patience diff algorithm.
+//
+// Anchors on lines that appear exactly once in each file, computes their
+// longest increasing subsequence (LIS) via patience sorting, and recurses
+// on the gaps between anchors.  Falls back to Myers (minimal) when no
+// unique common lines exist.
+static std::vector<EditOp> patience_diff(
+    std::span<const std::string_view> old_lines,
+    std::span<const std::string_view> new_lines)
+{
+    ptrdiff_t n = std::ssize(old_lines);
+    ptrdiff_t m = std::ssize(new_lines);
+
+    if (n == 0 && m == 0) return {};
+    if (n == 0) {
+        std::vector<EditOp> ops;
+        for (ptrdiff_t j = 0; j < m; ++j)
+            ops.push_back({'I', -1, j});
+        return ops;
+    }
+    if (m == 0) {
+        std::vector<EditOp> ops;
+        for (ptrdiff_t i = 0; i < n; ++i)
+            ops.push_back({'D', i, -1});
+        return ops;
+    }
+
+    // Step 1: Match common prefix and suffix.
+    ptrdiff_t prefix = 0;
+    while (prefix < n && prefix < m &&
+           old_lines[checked_cast<size_t>(prefix)] == new_lines[checked_cast<size_t>(prefix)])
+        ++prefix;
+
+    ptrdiff_t suffix = 0;
+    while (suffix < (n - prefix) && suffix < (m - prefix) &&
+           old_lines[checked_cast<size_t>(n - 1 - suffix)] == new_lines[checked_cast<size_t>(m - 1 - suffix)])
+        ++suffix;
+
+    ptrdiff_t inner_old_len = n - prefix - suffix;
+    ptrdiff_t inner_new_len = m - prefix - suffix;
+
+    // If prefix + suffix covers everything, no interior to diff.
+    if (inner_old_len <= 0 && inner_new_len <= 0) {
+        std::vector<EditOp> ops;
+        for (ptrdiff_t i = 0; i < n; ++i)
+            ops.push_back({'E', i, i});
+        return ops;
+    }
+
+    // Step 2: Find unique common lines in the interior.
+    // Map line content → (count_in_old, old_idx, count_in_new, new_idx).
+    struct LineInfo {
+        int old_count = 0;
+        ptrdiff_t old_idx = -1;
+        int new_count = 0;
+        ptrdiff_t new_idx = -1;
+    };
+    std::unordered_map<std::string_view, LineInfo> line_map;
+
+    for (ptrdiff_t i = 0; i < inner_old_len; ++i) {
+        auto &info = line_map[old_lines[checked_cast<size_t>(prefix + i)]];
+        info.old_count++;
+        info.old_idx = i;  // keeps last occurrence, but we only care when count==1
+    }
+    for (ptrdiff_t j = 0; j < inner_new_len; ++j) {
+        auto &info = line_map[new_lines[checked_cast<size_t>(prefix + j)]];
+        info.new_count++;
+        info.new_idx = j;
+    }
+
+    // Collect unique matches, sorted by old_idx (natural insertion order
+    // from scanning, but we sort explicitly to be safe).
+    struct Match { ptrdiff_t old_idx; ptrdiff_t new_idx; };
+    std::vector<Match> unique_matches;
+    for (const auto &[line, info] : line_map) {
+        if (info.old_count == 1 && info.new_count == 1) {
+            unique_matches.push_back({info.old_idx, info.new_idx});
+        }
+    }
+    std::ranges::sort(unique_matches, {}, &Match::old_idx);
+
+    // Step 3: LIS of new_idx values via patience sorting.
+    // Each pile stores (new_idx, back_pointer into flat list).
+    struct Card {
+        ptrdiff_t new_idx;
+        ptrdiff_t old_idx;
+        ptrdiff_t back;  // index into cards[] of predecessor, or -1
+    };
+    std::vector<Card> cards;
+    std::vector<ptrdiff_t> pile_tops;  // indices into cards[] for top of each pile
+
+    for (const auto &match : unique_matches) {
+        // Binary search: find leftmost pile whose top new_idx >= match.new_idx
+        ptrdiff_t lo = 0, hi = std::ssize(pile_tops);
+        while (lo < hi) {
+            ptrdiff_t mid = lo + (hi - lo) / 2;
+            if (cards[checked_cast<size_t>(pile_tops[checked_cast<size_t>(mid)])].new_idx < match.new_idx)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+
+        ptrdiff_t back = (lo > 0) ? pile_tops[checked_cast<size_t>(lo - 1)] : ptrdiff_t{-1};
+        ptrdiff_t card_idx = std::ssize(cards);
+        cards.push_back({match.new_idx, match.old_idx, back});
+
+        if (lo == std::ssize(pile_tops))
+            pile_tops.push_back(card_idx);
+        else
+            pile_tops[checked_cast<size_t>(lo)] = card_idx;
+    }
+
+    // Reconstruct LIS by walking back-pointers from the last pile's top.
+    std::vector<Match> anchors;
+    if (!pile_tops.empty()) {
+        ptrdiff_t idx = pile_tops.back();
+        while (idx >= 0) {
+            const auto &c = cards[checked_cast<size_t>(idx)];
+            anchors.push_back({c.old_idx, c.new_idx});
+            idx = c.back;
+        }
+        std::ranges::reverse(anchors);
+    }
+
+    // If no unique anchors found, fall back to Myers (minimal) on the interior.
+    if (anchors.empty()) {
+        auto inner_old = old_lines.subspan(checked_cast<size_t>(prefix),
+                                           checked_cast<size_t>(inner_old_len));
+        auto inner_new = new_lines.subspan(checked_cast<size_t>(prefix),
+                                           checked_cast<size_t>(inner_new_len));
+        auto inner_ops = myers_diff(inner_old, inner_new, DiffAlgorithm::minimal);
+
+        // Assemble: prefix + inner + suffix
+        std::vector<EditOp> ops;
+        for (ptrdiff_t i = 0; i < prefix; ++i)
+            ops.push_back({'E', i, i});
+        for (auto &op : inner_ops) {
+            if (op.old_idx >= 0) op.old_idx += prefix;
+            if (op.new_idx >= 0) op.new_idx += prefix;
+            ops.push_back(op);
+        }
+        for (ptrdiff_t i = 0; i < suffix; ++i)
+            ops.push_back({'E', n - suffix + i, m - suffix + i});
+        return ops;
+    }
+
+    // Step 4: Recurse on gaps between anchors.
+    std::vector<EditOp> ops;
+
+    // Emit prefix
+    for (ptrdiff_t i = 0; i < prefix; ++i)
+        ops.push_back({'E', i, i});
+
+    ptrdiff_t prev_old = 0;  // interior-relative
+    ptrdiff_t prev_new = 0;
+
+    for (const auto &anchor : anchors) {
+        // Gap before this anchor
+        ptrdiff_t gap_old_len = anchor.old_idx - prev_old;
+        ptrdiff_t gap_new_len = anchor.new_idx - prev_new;
+
+        if (gap_old_len > 0 || gap_new_len > 0) {
+            auto gap_old = old_lines.subspan(checked_cast<size_t>(prefix + prev_old),
+                                             checked_cast<size_t>(gap_old_len));
+            auto gap_new = new_lines.subspan(checked_cast<size_t>(prefix + prev_new),
+                                             checked_cast<size_t>(gap_new_len));
+            auto gap_ops = patience_diff(gap_old, gap_new);
+            for (auto &op : gap_ops) {
+                if (op.old_idx >= 0) op.old_idx += prefix + prev_old;
+                if (op.new_idx >= 0) op.new_idx += prefix + prev_new;
+                ops.push_back(op);
+            }
+        }
+
+        // Emit the anchor as an equal match
+        ops.push_back({'E', prefix + anchor.old_idx, prefix + anchor.new_idx});
+        prev_old = anchor.old_idx + 1;
+        prev_new = anchor.new_idx + 1;
+    }
+
+    // Gap after last anchor
+    ptrdiff_t tail_old_len = inner_old_len - prev_old;
+    ptrdiff_t tail_new_len = inner_new_len - prev_new;
+    if (tail_old_len > 0 || tail_new_len > 0) {
+        auto tail_old = old_lines.subspan(checked_cast<size_t>(prefix + prev_old),
+                                          checked_cast<size_t>(tail_old_len));
+        auto tail_new = new_lines.subspan(checked_cast<size_t>(prefix + prev_new),
+                                          checked_cast<size_t>(tail_new_len));
+        auto tail_ops = patience_diff(tail_old, tail_new);
+        for (auto &op : tail_ops) {
+            if (op.old_idx >= 0) op.old_idx += prefix + prev_old;
+            if (op.new_idx >= 0) op.new_idx += prefix + prev_new;
+            ops.push_back(op);
+        }
+    }
+
+    // Emit suffix
+    for (ptrdiff_t i = 0; i < suffix; ++i)
+        ops.push_back({'E', n - suffix + i, m - suffix + i});
+
+    return ops;
 }
 
 // A hunk groups consecutive edits with surrounding context lines.
@@ -583,7 +787,11 @@ DiffResult builtin_diff(std::string_view old_path, std::string_view new_path,
     auto new_fl = split_file_lines(new_content);
 
     // Run diff algorithm
-    auto ops = myers_diff(old_fl.lines, new_fl.lines, algorithm);
+    std::vector<EditOp> ops;
+    if (algorithm == DiffAlgorithm::patience)
+        ops = patience_diff(old_fl.lines, new_fl.lines);
+    else
+        ops = myers_diff(old_fl.lines, new_fl.lines, algorithm);
 
     // Check if there are any differences
     bool has_diff = false;

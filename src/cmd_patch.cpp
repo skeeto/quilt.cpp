@@ -1144,7 +1144,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
                 err("Unknown diff algorithm: "); err_line(name);
                 return 1;
             }
-            if (*algo == DiffAlgorithm::patience || *algo == DiffAlgorithm::histogram) {
+            if (*algo == DiffAlgorithm::histogram) {
                 err("Diff algorithm not yet implemented: "); err_line(name);
                 return 1;
             }
@@ -1159,7 +1159,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
                 err("Unknown diff algorithm: "); err_line(name);
                 return 1;
             }
-            if (*algo == DiffAlgorithm::patience || *algo == DiffAlgorithm::histogram) {
+            if (*algo == DiffAlgorithm::histogram) {
                 err("Diff algorithm not yet implemented: "); err_line(name);
                 return 1;
             }
@@ -1708,7 +1708,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                 err("Unknown diff algorithm: "); err_line(name);
                 return 1;
             }
-            if (*algo == DiffAlgorithm::patience || *algo == DiffAlgorithm::histogram) {
+            if (*algo == DiffAlgorithm::histogram) {
                 err("Diff algorithm not yet implemented: "); err_line(name);
                 return 1;
             }
@@ -1723,7 +1723,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                 err("Unknown diff algorithm: "); err_line(name);
                 return 1;
             }
-            if (*algo == DiffAlgorithm::patience || *algo == DiffAlgorithm::histogram) {
+            if (*algo == DiffAlgorithm::histogram) {
                 err("Diff algorithm not yet implemented: "); err_line(name);
                 return 1;
             }
