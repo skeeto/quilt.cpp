@@ -888,8 +888,9 @@ static std::string generate_diffstat(std::string_view diff)
         max_changes = std::max(max_changes, s.added + s.removed);
     }
 
-    // Format change count to find its width
-    auto num_width = std::ssize(std::to_string(max_changes));
+    // Format change count to find its width (minimum 4, matching diffstat)
+    auto num_width = std::max(std::ssize(std::to_string(max_changes)),
+                              static_cast<ptrdiff_t>(4));
 
     // Bar graph width: fit in ~72 columns after " name | num "
     //   1 (leading space) + max_name + 3 (" | ") + num_width + 1 (space)
