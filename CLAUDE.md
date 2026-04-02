@@ -110,26 +110,112 @@ All internal strings are UTF-8. Indices and counts use `ptrdiff_t` (signed) with
 
 ## Systematic Feature Testing
 
-To audit quilt.cpp for behavioral correctness, build in Debug mode (enables ASan), then systematically test every command and flag combination by comparing with original quilt. The workflow:
+To audit quilt.cpp for behavioral correctness, build in Debug mode (enables ASan), then systematically test every command and flag combination by comparing with original quilt.
 
-1. **Build Debug**: `cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build`
-2. **Baseline**: `ctest --test-dir build -j8` — all existing tests should pass
-3. **Hands-on testing**: For each command, create a temp dir under `/tmp`, set up a patch stack, run the same operation with both `build/quilt` and the system `quilt`, and compare output/exit codes
-4. **When a bug is found**:
-   - Write a failing test scenario in `test/Scenarios.cmake`
-   - Add to `QUILT_TEST_SCENARIOS` (shared) or `QUILT_TEST_SCENARIOS_NATIVE`
-   - Add dispatch entry in `qt_run_named_scenario`
-   - Confirm test fails: `ctest --test-dir build -R scenario_name`
-   - If shared, confirm it passes on original quilt: `ctest --test-dir build-external -R scenario_name`
-   - Fix the bug in the appropriate `src/cmd_*.cpp`
-   - Rebuild and confirm all tests pass
-5. **External validation**: `cmake -B build-external -DQUILT_TEST_EXECUTABLE=$(which quilt) && ctest --test-dir build-external -j8`
+### Setup
 
-**Parallel agent strategy**: Launch multiple agents to test different command groups simultaneously (e.g., stack navigation, patch management, environment variables). Each agent creates temp dirs, exercises flags, and reports bugs as structured lists.
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build
+ctest --test-dir build -j8                    # baseline — all tests should pass
+cmake -B build-external -DQUILT_TEST_EXECUTABLE=$(which quilt)
+ctest --test-dir build-external -j8           # shared tests against original quilt
+```
 
-**Test placement rules**:
-- `QUILT_TEST_SCENARIOS` — tests that pass against both quilt.cpp and upstream quilt
-- `QUILT_TEST_SCENARIOS_NATIVE` — tests for quilt.cpp-specific behavior, Debian extensions (init, --dep3), features not in upstream quilt (--verbose long option), or platform-specific tests (Unix absolute paths)
+### Agent-based testing
+
+Launch 3-4 parallel `general-purpose` agents, each focused on a command group. This is the core technique — agents do the tedious comparison work and report structured findings.
+
+**Agent prompt template** (adapt per group):
+> You are testing quilt.cpp, a C++20 reimplementation of quilt.
+> Working directory: /path/to/worktree
+> The quilt binary is at: build/quilt (use absolute path)
+> Original quilt is at: /path/to/system/quilt
+>
+> Test the following commands thoroughly, comparing with original quilt:
+> [list commands and flags to test]
+>
+> For each test: create a temp dir under /tmp, set up a patch stack,
+> run the command with both quilt.cpp and original quilt, compare
+> output messages and exit codes.
+>
+> Report findings as a structured list: what works, what's broken
+> (with source file and line number for the root cause), what differs
+> cosmetically.
+
+**Command groups that work well as test units:**
+- **Stack navigation**: push (-a, -f, -q, -v, --fuzz=N, --merge, --leave-rejects, --refresh, numeric arg, patch arg), pop (-a, -f, -q, -v, --refresh, numeric arg, patch arg), series (-v, --color), applied/unapplied, top/next/previous
+- **Patch content**: refresh (-p0/1/ab, -u, -U N, -c, -C N, -z, -f, --no-timestamps, --no-index, --diffstat, --sort, --backup, --strip-trailing-whitespace), diff (-P, -p, -u, -U, -c, -C, --combine, -z, -R, --snapshot, --no-timestamps, --no-index, --sort, file args), header (-a, -r, -e, --backup, --strip-diffstat, --strip-trailing-whitespace, patch arg), revert (-P, multiple files)
+- **Management**: delete (-r, --backup, -n, topmost), rename (-P), import (-p N, -R, -P name, -f, -d o/a/n, multiple files), fold (-R, -q, -f, -p N), fork (with/without name)
+- **Special**: snapshot (basic, -d), annotate (-P, multi-patch), graph (--all, --reduce, --lines=N, --edge-labels=files)
+- **Environment variables**: QUILT_SERIES, QUILT_PC, QUILT_DIFF_OPTS, QUILT_PATCH_OPTS, QUILT_DIFF_ARGS, QUILT_REFRESH_ARGS, QUILT_PUSH_ARGS, QUILT_NO_DIFF_INDEX, QUILT_NO_DIFF_TIMESTAMPS, QUILT_PATCHES_PREFIX, --quiltrc file, --quiltrc -
+
+### Bug fix workflow
+
+When an agent reports a bug:
+1. **Write a test** in `test/Scenarios.cmake` — three parts needed:
+   - Add scenario name to `QUILT_TEST_SCENARIOS` or `QUILT_TEST_SCENARIOS_NATIVE`
+   - Write the `function(qt_scenario_<name>)` implementation
+   - Add `elseif(scenario STREQUAL "<name>")` dispatch entry in `qt_run_named_scenario`
+2. **Confirm test fails**: `ctest --test-dir build -R scenario_name`
+3. **If shared, confirm it passes on original quilt**: `ctest --test-dir build-external -R scenario_name`
+4. **Fix the bug** in the appropriate `src/cmd_*.cpp` or `src/core.cpp`
+5. **Rebuild and run full suite**: `cmake --build build && ctest --test-dir build -j8`
+6. **Commit** each logical group of related fixes together
+
+### Test placement rules
+
+- `QUILT_TEST_SCENARIOS` — tests that pass against both quilt.cpp and upstream quilt. Prefer this list.
+- `QUILT_TEST_SCENARIOS_NATIVE` — tests for quilt.cpp-specific behavior: Debian extensions (init, --dep3), quilt.cpp extensions (--verbose long option on push/pop), builtin patch/diff engine internals, mail command format, shell_split internals, or tests whose error messages intentionally differ from upstream. **These also run on Windows** — do not use this list for platform skipping.
+
+### Writing test scenarios
+
+Test infrastructure lives in `test/TestHarness.cmake` (helpers), `test/RunScenario.cmake` (dispatcher), and `test/Scenarios.cmake` (all scenarios). A complete scenario looks like:
+
+```cmake
+function(qt_scenario_revert_file_delete)
+    qt_begin_test("revert_file_delete")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "content\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    file(REMOVE "${QT_WORK_DIR}/f.txt")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "recreated\n")
+    qt_quilt_ok(ARGS revert f.txt MESSAGE "revert failed")
+    if(EXISTS "${QT_WORK_DIR}/f.txt")
+        qt_fail("revert should delete file when patch deletes it")
+    endif()
+endfunction()
+```
+
+**Available helpers** (defined in `test/TestHarness.cmake`):
+
+| Function | Purpose |
+|----------|---------|
+| `qt_begin_test("name")` | Create isolated work directory, set `QT_WORK_DIR` |
+| `qt_quilt_ok(ARGS ... [MESSAGE msg] [ENV "V=x"] [INPUT data])` | Run quilt, assert exit 0 |
+| `qt_quilt(RESULT rc OUTPUT out ERROR err ARGS ...)` | Run quilt, capture everything |
+| `qt_write_file(path content)` | Write file (creates parent dirs) |
+| `qt_append_file(path content)` | Append to file |
+| `qt_read_file_raw(out_var path)` | Read file contents into variable |
+| `qt_read_file_strip(out_var path)` | Read file, strip trailing whitespace |
+| `qt_combine_output(out_var stdout stderr)` | Concatenate stdout+stderr for searching |
+| `qt_assert_success(rc msg)` / `qt_assert_failure(rc msg)` | Check exit codes |
+| `qt_assert_equal(actual expected msg)` | String equality |
+| `qt_assert_contains(text needle msg)` | Substring search |
+| `qt_assert_not_contains(text needle msg)` | Negative substring search |
+| `qt_assert_matches(text regex msg)` | Regex match |
+| `qt_assert_file_text(path expected msg)` | File contents equal (stripped) |
+| `qt_assert_file_contains(path needle msg)` | File contains substring |
+| `qt_assert_file_not_contains(path needle msg)` | File doesn't contain substring |
+| `qt_assert_exists(path msg)` / `qt_assert_not_exists(path msg)` | File existence |
+| `qt_assert_line_count(text N msg)` | Count newlines |
+| `qt_fail(msg)` | Unconditional failure |
+
+**Patterns:**
+- **Environment variables**: `qt_quilt_ok(ENV "QUILT_PATCHES=/abs/path" ARGS series)`
+- **Stdin data**: `qt_quilt_ok(ARGS fold -f INPUT "--- a/f.txt\n+++ b/f.txt\n...")` — for multi-line patches use CMake bracket syntax: `INPUT [=[ ... ]=]`
+- **Binary data**: CMake can't handle null bytes in strings. Use `execute_process(COMMAND printf "\\0\\001")` to write binary files.
+- **Combined output checking**: `qt_combine_output(combined "${out}" "${err}")` then `qt_assert_contains("${combined}" "error text" "msg")` — use this when you don't know if output goes to stdout or stderr.
 
 ## Design decisions
 
@@ -138,6 +224,4 @@ To audit quilt.cpp for behavioral correctness, build in Debug mode (enables ASan
 - **`quilt upgrade` is a no-op**: Only the version 2 `.pc/` format is supported. The command succeeds silently.
 - **Commands that are implemented move out of `cmd_stubs.cpp`**: Stubs are only for truly unimplemented commands. Once a command has real behavior (even trivial like `upgrade`), it belongs in the appropriate `cmd_*.cpp` file.
 - **Tests must not depend on user environment**: The test harness (`test/TestHarness.cmake`) sets `HOME` to a per-test temp directory on every invocation, preventing `~/.quiltrc` from interfering. Tests that need a quiltrc create one explicitly.
-- **Tests should pass against both quilt.cpp and original quilt where possible**: Scenarios in `QUILT_TEST_SCENARIOS` run against both. Scenarios in `QUILT_TEST_SCENARIOS_NATIVE` (like `mail_*`) only run against quilt.cpp. When writing tests for shared scenarios, use options both implementations accept.
-- **Test harness patterns**: Use `qt_begin_test("name")` to start, `qt_quilt_ok(ARGS ...)` for expected-success calls, `qt_quilt(RESULT rc OUTPUT out ERROR err ARGS ...)` for checking exit codes, `qt_assert_contains`, `qt_assert_file_contains`, `qt_assert_file_text` for assertions. Pass environment variables with `qt_quilt_ok(ENV "VAR=val" ARGS ...)`. Pass stdin with `INPUT "data"`. Write files with `qt_write_file("${QT_WORK_DIR}/f.txt" "content\n")`. Every scenario function must be added to the dispatch function `qt_run_named_scenario`.
-- **Windows test considerations**: Tests using absolute paths work on both platforms (`path_join` and `is_absolute_path` handle both Unix `/` and Windows `C:\` styles). Tests that depend on Unix-only tools or symlinks should go in `QUILT_TEST_SCENARIOS_NATIVE`. `QUILT_TEST_SCENARIOS_NATIVE` tests also run on Windows — use them for quilt.cpp-specific behavior, not platform skipping.
+- **Tests should pass against both quilt.cpp and original quilt where possible**: Scenarios in `QUILT_TEST_SCENARIOS` run against both. Scenarios in `QUILT_TEST_SCENARIOS_NATIVE` (like `mail_*`) only run against quilt.cpp. When writing tests for shared scenarios, use options both implementations accept. See "Systematic Feature Testing" above for the full test harness API and scenario-writing guide.
