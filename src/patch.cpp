@@ -109,10 +109,24 @@ static std::vector<PatchFile> parse_patch(std::string_view text, int strip_level
         pf.is_deletion = (raw_new == "/dev/null");
 
         // Determine target path
+        // Prefer new path like GNU patch does for the common -p0 case
+        // where old has a .orig suffix (e.g., "--- f.txt.orig" / "+++ f.txt")
         if (pf.is_creation) {
             pf.target_path = strip_path(raw_new, strip_level);
-        } else {
+        } else if (pf.is_deletion) {
             pf.target_path = strip_path(raw_old, strip_level);
+        } else {
+            std::string stripped_old = strip_path(raw_old, strip_level);
+            std::string stripped_new = strip_path(raw_new, strip_level);
+            // Use new path when old has .orig suffix, otherwise use
+            // the shorter path (GNU patch heuristic)
+            if (stripped_old.ends_with(".orig")) {
+                pf.target_path = stripped_new;
+            } else if (stripped_new.size() <= stripped_old.size()) {
+                pf.target_path = stripped_new;
+            } else {
+                pf.target_path = stripped_old;
+            }
         }
 
         i += 2;  // skip --- and +++ lines

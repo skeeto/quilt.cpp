@@ -555,7 +555,7 @@ static std::string generate_path_diff(const QuiltState &q,
         old_label = "a/" + std::string(file);
         new_label = "b/" + std::string(file);
     } else if (p_format == "0") {
-        old_label = std::string(file);
+        old_label = std::string(file) + ".orig";
         new_label = std::string(file);
     } else {
         std::string work_base = basename(q.work_dir);
@@ -1169,6 +1169,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     // The original patch keeps its content. The fork captures only the
     // delta between the original's refreshed state and the current working
     // tree.
+    bool did_fork = false;
     if (opt_fork) {
         if (patch != q.applied.back()) {
             err_line("Can only use -z with the topmost applied patch");
@@ -1273,6 +1274,8 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         out_line("Fork of patch " + patch_path_display(q, old_name) +
                  " created as " + patch_path_display(q, new_name));
         patch = new_name;
+        // Suppress the "Refreshed patch" message; the fork message is sufficient
+        did_fork = true;
     }
 
     // Compute shadowed files (files modified by patches above this one)
@@ -1353,10 +1356,60 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
             }
             continue;
         }
-        // Strip trailing whitespace from working file before diffing
+        // Strip trailing whitespace from lines modified by this patch
         if (opt_strip_whitespace) {
             std::string working_path = path_join(q.work_dir, file);
             if (file_exists(working_path)) {
+                // Find which lines are modified by diffing backup vs working
+                std::set<int> modified_lines;
+                std::string diff_check = generate_file_diff(
+                    q, patch, file, "1", false, {}, 0,
+                    DiffFormat::unified, true);
+                if (!diff_check.empty()) {
+                    auto dlines = split_lines(diff_check);
+                    int new_lineno = 0;
+                    for (const auto &dl : dlines) {
+                        if (dl.starts_with("---") || dl.starts_with("+++")) {
+                            continue;
+                        }
+                        if (dl.starts_with("@@")) {
+                            // Parse @@ -X,Y +N,M @@
+                            auto plus = str_find(dl, '+');
+                            if (plus >= 0) {
+                                auto comma = str_find(
+                                    std::string_view(dl).substr(
+                                        checked_cast<size_t>(plus)), ',');
+                                std::string_view num_str;
+                                if (comma >= 0) {
+                                    num_str = std::string_view(dl).substr(
+                                        checked_cast<size_t>(plus) + 1,
+                                        checked_cast<size_t>(comma) - 1);
+                                } else {
+                                    auto sp = str_find(
+                                        std::string_view(dl).substr(
+                                            checked_cast<size_t>(plus)), ' ');
+                                    if (sp >= 0) {
+                                        num_str = std::string_view(dl).substr(
+                                            checked_cast<size_t>(plus) + 1,
+                                            checked_cast<size_t>(sp) - 1);
+                                    }
+                                }
+                                if (!num_str.empty()) {
+                                    int n = 0;
+                                    std::from_chars(num_str.data(),
+                                        num_str.data() + num_str.size(), n);
+                                    new_lineno = n - 1;  // will be incremented
+                                }
+                            }
+                        } else if (dl.starts_with("+")) {
+                            new_lineno++;
+                            modified_lines.insert(new_lineno);
+                        } else if (!dl.starts_with("-")) {
+                            new_lineno++;  // context line
+                        }
+                    }
+                }
+
                 std::string content = read_file(working_path);
                 std::string stripped;
                 auto lines = split_lines(content);
@@ -1364,14 +1417,16 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
                 for (const auto &line : lines) {
                     lineno++;
                     std::string_view l = line;
+                    bool is_modified = modified_lines.contains(lineno);
                     auto end = l.find_last_not_of(" \t");
-                    if (end == std::string::npos) {
+                    if (is_modified && end == std::string::npos) {
                         if (!l.empty()) {
                             out_line("Removing trailing whitespace from line "
                                      + std::to_string(lineno) + " of " + file);
                         }
                         stripped += '\n';
-                    } else if (static_cast<ptrdiff_t>(end) + 1 < std::ssize(l)) {
+                    } else if (is_modified &&
+                               static_cast<ptrdiff_t>(end) + 1 < std::ssize(l)) {
                         out_line("Removing trailing whitespace from line "
                                  + std::to_string(lineno) + " of " + file);
                         stripped += l.substr(0, end + 1);
@@ -1477,10 +1532,12 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         delete_file(nr);
     }
 
-    if (!has_diff) {
-        out("Nothing in patch "); out_line(patch_path_display(q, patch));
-    } else {
-        out("Refreshed patch "); out_line(patch_path_display(q, patch));
+    if (!did_fork) {
+        if (!has_diff) {
+            out("Nothing in patch "); out_line(patch_path_display(q, patch));
+        } else {
+            out("Refreshed patch "); out_line(patch_path_display(q, patch));
+        }
     }
     return 0;
 }

@@ -66,6 +66,16 @@ int cmd_series(QuiltState &q, int argc, char **argv) {
 
     bool use_color = (color_mode == 2) || (color_mode == 1 && stdout_is_tty());
 
+    if (q.series.empty()) {
+        if (q.series_file_exists) {
+            // Empty series file: nothing to print, success
+            return 0;
+        } else {
+            err_line("No series file found");
+            return 1;
+        }
+    }
+
     for (const auto &patch : q.series) {
         if (verbose) {
             if (!q.applied.empty() && patch == q.applied.back()) {
@@ -203,10 +213,11 @@ int cmd_top(QuiltState &q, int argc, char **argv) {
     if (q.series.empty()) {
         if (q.series_file_exists) {
             err_line("No patches in series");
+            return 2;
         } else {
             err_line("No series file found");
+            return 1;
         }
-        return 2;
     }
     if (q.applied.empty()) {
         err_line("No patches applied");
@@ -230,10 +241,11 @@ int cmd_next(QuiltState &q, int argc, char **argv) {
     if (q.series.empty()) {
         if (q.series_file_exists) {
             err_line("No patches in series");
+            return 2;
         } else {
             err_line("No series file found");
+            return 1;
         }
-        return 2;
     }
 
     ptrdiff_t after_idx;
@@ -293,10 +305,11 @@ int cmd_previous(QuiltState &q, int argc, char **argv) {
     if (q.series.empty()) {
         if (q.series_file_exists) {
             err_line("No patches in series");
+            return 2;
         } else {
             err_line("No series file found");
+            return 1;
         }
-        return 2;
     }
 
     if (q.applied.empty()) {

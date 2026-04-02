@@ -427,14 +427,14 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
 
         // Check if target exists in series
         auto existing = q.find_in_series(name);
+        if (existing && q.is_applied(name)) {
+            err_line("Patch " + patch_path_display(q, name) +
+                     " is applied");
+            return 1;
+        }
         if (existing && !force) {
             err_line("Patch " + patch_path_display(q, name) +
                      " exists. Replace with -f.");
-            return 1;
-        }
-        if (existing && force && q.is_applied(name)) {
-            err_line("Patch " + patch_path_display(q, name) +
-                     " is applied");
             return 1;
         }
 
@@ -475,7 +475,7 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
             std::string new_content = read_file(patchfile);
             std::string old_hdr = extract_header(old_content);
             std::string new_hdr = extract_header(new_content);
-            if (!old_hdr.empty() && !new_hdr.empty()) {
+            if (!old_hdr.empty() && !new_hdr.empty() && old_hdr != new_hdr) {
                 err_line("Patch headers differ:");
                 err_line("@@ -1 +1 @@");
                 err_line("-" + old_hdr);
@@ -573,6 +573,11 @@ static std::string strip_diffstat(std::string_view header) {
                     break;
             }
             if (found_summary) {
+                // Keep the "---" separator if the diffstat followed it
+                if (ds_start != i) {
+                    result += line;
+                    result += '\n';
+                }
                 i = summary_end;
                 if (i + 1 < std::ssize(lines) && lines[checked_cast<size_t>(i + 1)].empty())
                     i++;
@@ -1039,13 +1044,33 @@ int cmd_fork(QuiltState &q, int argc, char **argv) {
         break;
     }
 
-    // Generate default name if none given: add "-2" before extension
+    // Generate default name if none given: increment "-N" suffix before extension
     if (new_name.empty()) {
         auto dot = str_rfind(old_name, '.');
+        std::string base;
+        std::string ext;
         if (dot > 0) {
-            new_name = old_name.substr(0, checked_cast<size_t>(dot)) + "-2" + old_name.substr(checked_cast<size_t>(dot));
+            base = old_name.substr(0, checked_cast<size_t>(dot));
+            ext = old_name.substr(checked_cast<size_t>(dot));
         } else {
-            new_name = old_name + "-2";
+            base = old_name;
+        }
+        // Check for existing -N suffix and increment it
+        auto dash = str_rfind(base, '-');
+        if (dash >= 0) {
+            std::string_view suffix = std::string_view(base).substr(
+                checked_cast<size_t>(dash) + 1);
+            int n = 0;
+            auto [ptr, ec] = std::from_chars(suffix.data(),
+                suffix.data() + suffix.size(), n);
+            if (ec == std::errc{} && ptr == suffix.data() + suffix.size()) {
+                new_name = base.substr(0, checked_cast<size_t>(dash) + 1)
+                    + std::to_string(n + 1) + ext;
+            } else {
+                new_name = base + "-2" + ext;
+            }
+        } else {
+            new_name = base + "-2" + ext;
         }
     }
 

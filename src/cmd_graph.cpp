@@ -269,6 +269,15 @@ static std::string render_dot(const std::vector<GraphNode> &nodes,
             used_nodes.insert(key.first);
             used_nodes.insert(key.second);
         }
+        // Preserve the selected node (style=bold) even if it has no edges
+        for (const auto &node : nodes) {
+            for (const auto &attr : node.attrs) {
+                if (attr == "style=bold") {
+                    used_nodes.insert(node.number);
+                    break;
+                }
+            }
+        }
     }
 
     std::string dot = "digraph dependencies {\n";

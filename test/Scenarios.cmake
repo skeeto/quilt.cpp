@@ -351,6 +351,17 @@ set(QUILT_TEST_SCENARIOS
     pop_quiet_no_extra_blank
     next_applied_patch_errors
     pop_dirty_hint_message
+    series_no_series_file
+    top_no_series_exit1
+    diff_p0_orig_label
+    refresh_p0_orig_label
+    header_strip_diffstat_keeps_separator
+    import_force_identical
+    import_applied_no_force
+    fork_increment_suffix
+    refresh_strip_ws_only_modified
+    next_no_series_exit1
+    previous_no_series_exit1
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -479,6 +490,8 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     graph_lines_identical_content
     graph_empty_series
     graph_prune_unreachable_edge
+    graph_reduce_preserves_selected
+    refresh_fork_no_extra_message
     annotate_bad_option
     annotate_two_files
     annotate_nonexistent_file
@@ -5942,10 +5955,11 @@ function(qt_scenario_refresh_strip_ws_blank_context)
     qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
     # Modify line1 so the whitespace-only line appears as context
     qt_write_file("${QT_WORK_DIR}/f.txt" "changed\n   \nline3\n")
-    # --strip-trailing-whitespace: all-whitespace context line triggers warning path
+    # --strip-trailing-whitespace should NOT strip context lines
     qt_quilt(RESULT rc OUTPUT refresh_out ERROR refresh_err ARGS refresh --strip-trailing-whitespace)
     qt_assert_success("${rc}" "refresh --strip-trailing-whitespace should succeed")
-    qt_assert_contains("${refresh_out}" "Removing trailing whitespace" "should warn about whitespace-only line")
+    # The whitespace-only line is context (not modified), so should not be stripped
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "   " "context whitespace-only line should be preserved")
 endfunction()
 
 function(qt_scenario_refresh_diffstat_padding)
@@ -7373,6 +7387,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_refresh_diffstat_bare_header()
     elseif(scenario STREQUAL "refresh_diffstat_bare_false_positive")
         qt_scenario_refresh_diffstat_bare_false_positive()
+    elseif(scenario STREQUAL "graph_reduce_preserves_selected")
+        qt_scenario_graph_reduce_preserves_selected()
     elseif(scenario STREQUAL "graph_prune_unreachable_edge")
         qt_scenario_graph_prune_unreachable_edge()
     elseif(scenario STREQUAL "graph_empty_backup_files")
@@ -7477,6 +7493,30 @@ function(qt_run_named_scenario scenario)
         qt_scenario_next_applied_patch_errors()
     elseif(scenario STREQUAL "pop_dirty_hint_message")
         qt_scenario_pop_dirty_hint_message()
+    elseif(scenario STREQUAL "refresh_fork_no_extra_message")
+        qt_scenario_refresh_fork_no_extra_message()
+    elseif(scenario STREQUAL "fork_increment_suffix")
+        qt_scenario_fork_increment_suffix()
+    elseif(scenario STREQUAL "refresh_strip_ws_only_modified")
+        qt_scenario_refresh_strip_ws_only_modified()
+    elseif(scenario STREQUAL "import_applied_no_force")
+        qt_scenario_import_applied_no_force()
+    elseif(scenario STREQUAL "import_force_identical")
+        qt_scenario_import_force_identical()
+    elseif(scenario STREQUAL "header_strip_diffstat_keeps_separator")
+        qt_scenario_header_strip_diffstat_keeps_separator()
+    elseif(scenario STREQUAL "diff_p0_orig_label")
+        qt_scenario_diff_p0_orig_label()
+    elseif(scenario STREQUAL "refresh_p0_orig_label")
+        qt_scenario_refresh_p0_orig_label()
+    elseif(scenario STREQUAL "series_no_series_file")
+        qt_scenario_series_no_series_file()
+    elseif(scenario STREQUAL "top_no_series_exit1")
+        qt_scenario_top_no_series_exit1()
+    elseif(scenario STREQUAL "next_no_series_exit1")
+        qt_scenario_next_no_series_exit1()
+    elseif(scenario STREQUAL "previous_no_series_exit1")
+        qt_scenario_previous_no_series_exit1()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -8782,6 +8822,20 @@ function(qt_scenario_graph_prune_unreachable_edge)
     qt_assert_not_contains("${graph_out}" "patchD" "patchD should be pruned (unreachable edge at line 504)")
 endfunction()
 
+# graph_reduce_preserves_selected: --reduce should keep the selected node even if isolated
+function(qt_scenario_graph_reduce_preserves_selected)
+    qt_begin_test("graph_reduce_preserves_selected")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "hello\n")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "world\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # graph --reduce with a single patch should still show the selected node
+    qt_quilt_ok(OUTPUT graph_out ARGS graph --reduce MESSAGE "graph --reduce failed")
+    qt_assert_contains("${graph_out}" "p1.patch" "selected node should be preserved after reduce")
+    qt_assert_contains("${graph_out}" "style=bold" "selected node should have bold style")
+endfunction()
+
 # graph_empty_backup_files: cmd_graph.cpp line 125
 # When compute_ranges is called for a file that is zero-length both before and after
 # a patch (old_path and new_path are both zero-byte files), the function returns early
@@ -9774,4 +9828,166 @@ function(qt_scenario_pop_dirty_hint_message)
     qt_combine_output(combined "${out}" "${err}")
     qt_assert_contains("${combined}" "does not remove cleanly" "should say does not remove cleanly")
     qt_assert_contains("${combined}" "quilt diff -z" "should show hint about quilt diff -z")
+endfunction()
+
+# refresh_strip_ws_only_modified: --strip-trailing-whitespace should only strip
+# lines actually modified by the patch, not all lines with trailing whitespace
+function(qt_scenario_refresh_strip_ws_only_modified)
+    qt_begin_test("refresh_strip_ws_only_modified")
+    # Create file where lines 1 and 3 have trailing whitespace
+    qt_write_file("${QT_WORK_DIR}/f.txt" "line1 \nline2\nline3 \n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    # Modify only line 2 (add trailing whitespace too)
+    qt_write_file("${QT_WORK_DIR}/f.txt" "line1 \nline2-modified  \nline3 \n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh --strip-trailing-whitespace)
+    qt_assert_success("${rc}" "refresh should succeed")
+    # Only line 2 should be stripped (the one the patch modifies)
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "line 2" "should strip line 2")
+    qt_assert_not_contains("${combined}" "line 1" "should NOT strip line 1")
+    qt_assert_not_contains("${combined}" "line 3" "should NOT strip line 3")
+    # Verify file: lines 1 and 3 should still have trailing whitespace
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "line1 " "line 1 should keep trailing space")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "line3 " "line 3 should keep trailing space")
+    qt_assert_file_not_contains("${QT_WORK_DIR}/f.txt" "modified  " "line 2 trailing ws stripped")
+endfunction()
+
+# refresh_fork_no_extra_message: refresh -z should only print fork message, not "Refreshed patch"
+function(qt_scenario_refresh_fork_no_extra_message)
+    qt_begin_test("refresh_fork_no_extra_message")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "hello\n")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "world\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh -znew.patch)
+    qt_assert_success("${rc}" "refresh -z should succeed")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Fork of patch" "should print fork message")
+    qt_assert_not_contains("${combined}" "Refreshed patch" "should NOT print Refreshed patch")
+endfunction()
+
+# fork_increment_suffix: fork should increment -N suffix (p1-2 -> p1-3, not p1-2-2)
+function(qt_scenario_fork_increment_suffix)
+    qt_begin_test("fork_increment_suffix")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "hello\n")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "world\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    # First fork: p1.patch -> p1-2.patch
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS fork)
+    qt_assert_success("${rc}" "first fork failed")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "p1-2.patch" "first fork should be p1-2")
+    # Second fork: p1-2.patch -> p1-3.patch (not p1-2-2.patch)
+    qt_quilt(RESULT rc2 OUTPUT out2 ERROR err2 ARGS fork)
+    qt_assert_success("${rc2}" "second fork failed")
+    qt_combine_output(combined2 "${out2}" "${err2}")
+    qt_assert_contains("${combined2}" "p1-3.patch" "second fork should be p1-3, not p1-2-2")
+endfunction()
+
+# import_applied_no_force: import -P with applied patch name should say "is applied" not "exists"
+function(qt_scenario_import_applied_no_force)
+    qt_begin_test("import_applied_no_force")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "hello\n")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/ext.patch" "--- a/g.txt\n+++ b/g.txt\n@@ -0,0 +1 @@\n+new\n")
+    # Without -f: should say "is applied", not "exists"
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS import -P p.patch "${QT_WORK_DIR}/ext.patch")
+    qt_assert_failure("${rc}" "import applied should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "is applied" "should say is applied, not exists")
+endfunction()
+
+# import_force_identical: import -f with byte-identical patches should succeed
+function(qt_scenario_import_force_identical)
+    qt_begin_test("import_force_identical")
+    set(patch_content "Description: test\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-old\n+new\n")
+    qt_write_file("${QT_WORK_DIR}/ext/p.patch" "${patch_content}")
+    qt_quilt_ok(ARGS import "${QT_WORK_DIR}/ext/p.patch" MESSAGE "first import failed")
+    # Import the same patch again with -f
+    qt_quilt_ok(ARGS import -f "${QT_WORK_DIR}/ext/p.patch" MESSAGE "import -f identical should succeed")
+endfunction()
+
+# header_strip_diffstat_keeps_separator: --strip-diffstat should keep --- separator
+function(qt_scenario_header_strip_diffstat_keeps_separator)
+    qt_begin_test("header_strip_diffstat_keeps_separator")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "hello\n")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "hello\nworld\n")
+    qt_quilt_ok(ARGS refresh --diffstat MESSAGE "refresh failed")
+    # Read header before strip
+    qt_quilt_ok(OUTPUT hdr_before ARGS header MESSAGE "header read failed")
+    qt_assert_contains("${hdr_before}" "---" "header should have --- separator")
+    qt_assert_contains("${hdr_before}" "file changed" "header should have diffstat")
+    # Strip diffstat and verify --- remains
+    qt_quilt_ok(OUTPUT hdr_after ARGS header --strip-diffstat MESSAGE "strip-diffstat failed")
+    qt_assert_contains("${hdr_after}" "---" "--- separator should be preserved")
+    qt_assert_not_contains("${hdr_after}" "file changed" "diffstat should be removed")
+endfunction()
+
+# diff_p0_orig_label: diff -p0 should use .orig suffix on old file label
+function(qt_scenario_diff_p0_orig_label)
+    qt_begin_test("diff_p0_orig_label")
+    qt_quilt_ok(ARGS new -p0 p.patch MESSAGE "new failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "hello\n")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "hello\nworld\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS diff -p0)
+    qt_assert_success("${rc}" "diff should succeed")
+    qt_assert_contains("${out}" "--- f.txt.orig" "old label should have .orig suffix")
+    qt_assert_contains("${out}" "+++ f.txt" "new label should be plain filename")
+endfunction()
+
+# refresh_p0_orig_label: refresh -p0 should produce .orig suffix on old file label
+function(qt_scenario_refresh_p0_orig_label)
+    qt_begin_test("refresh_p0_orig_label")
+    qt_quilt_ok(ARGS new -p0 p.patch MESSAGE "new failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "hello\n")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "hello\nworld\n")
+    qt_quilt_ok(ARGS refresh -p0 MESSAGE "refresh failed")
+    qt_read_file_strip(patch "${QT_WORK_DIR}/patches/p.patch")
+    qt_assert_contains("${patch}" "--- f.txt.orig" "old label should have .orig suffix")
+    qt_assert_contains("${patch}" "+++ f.txt" "new label should be plain filename")
+endfunction()
+
+# series_no_series_file: series with no series file should exit 1
+function(qt_scenario_series_no_series_file)
+    qt_begin_test("series_no_series_file")
+    # No patches/ dir, no series file
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS series)
+    qt_assert_equal("${rc}" "1" "series with no series file should exit 1")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "No series file found" "should say no series file")
+endfunction()
+
+# top_no_series_exit1: top with no series file should exit 1, not 2
+function(qt_scenario_top_no_series_exit1)
+    qt_begin_test("top_no_series_exit1")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS top)
+    qt_assert_equal("${rc}" "1" "top with no series file should exit 1")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "No series file found" "should say no series file")
+endfunction()
+
+# next_no_series_exit1: next with no series file should exit 1, not 2
+function(qt_scenario_next_no_series_exit1)
+    qt_begin_test("next_no_series_exit1")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS next)
+    qt_assert_equal("${rc}" "1" "next with no series file should exit 1")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "No series file found" "should say no series file")
+endfunction()
+
+# previous_no_series_exit1: previous with no series file should exit 1, not 2
+function(qt_scenario_previous_no_series_exit1)
+    qt_begin_test("previous_no_series_exit1")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS previous)
+    qt_assert_equal("${rc}" "1" "previous with no series file should exit 1")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "No series file found" "should say no series file")
 endfunction()
