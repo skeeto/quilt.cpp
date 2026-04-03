@@ -99,8 +99,18 @@ static std::string format_rfc2822_date(int64_t t) {
                        tz_hours, tz_mins);
 }
 
+// FNV-1a 64-bit hash
+static uint64_t fnv1a_64(std::string_view data) {
+    uint64_t h = 0xcbf29ce484222325ULL;
+    for (char ch : data)
+        h = (h ^ static_cast<uint64_t>(static_cast<unsigned char>(ch))) * 0x100000001b3ULL;
+    return h;
+}
+
 // Generate a Message-ID
-static std::string make_message_id(int64_t t, int seq, std::string_view from) {
+static std::string make_message_id(int64_t t, int seq,
+                                   std::string_view from,
+                                   std::string_view content) {
     // Extract domain from the from address
     std::string domain = "localhost";
     auto at = str_find(from, '@');
@@ -110,7 +120,8 @@ static std::string make_message_id(int64_t t, int seq, std::string_view from) {
         domain = std::string(from.substr(checked_cast<size_t>(at + 1), checked_cast<size_t>(end - at - 1)));
     }
 
-    return std::format("<{}.{}@{}>", t, seq, domain);
+    uint64_t h = fnv1a_64(content);
+    return std::format("<{}.{}.{:016x}@{}>", t, seq, h, domain);
 }
 
 // Compute the width needed for zero-padded patch numbers
@@ -337,7 +348,7 @@ int cmd_mail(QuiltState &q, int argc, char **argv) {
         msg += subject_header + "\n";
 
         // Message-ID
-        msg += "Message-ID: " + make_message_id(msg_time, seq, effective_from) + "\n";
+        msg += "Message-ID: " + make_message_id(msg_time, seq, effective_from, content) + "\n";
 
         // MIME headers if non-ASCII in body
         if (has_non_ascii(header) || has_non_ascii(diff) || has_non_ascii(full_subject)) {
