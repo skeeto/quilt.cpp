@@ -299,6 +299,7 @@ set(QUILT_TEST_SCENARIOS
     quiltrc_leading_whitespace
     quiltrc_export_extra_space
     quiltrc_explicit_empty
+    quiltrc_comments
     push_count_clamp
     push_quilt_patch_opts
     push_quilt_patch_opts_fuzz
@@ -7372,6 +7373,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_quiltrc_export_extra_space()
     elseif(scenario STREQUAL "quiltrc_explicit_empty")
         qt_scenario_quiltrc_explicit_empty()
+    elseif(scenario STREQUAL "quiltrc_comments")
+        qt_scenario_quiltrc_comments()
     elseif(scenario STREQUAL "refresh_diffstat_twice")
         qt_scenario_refresh_diffstat_twice()
     elseif(scenario STREQUAL "refresh_diffstat_header_replace")
@@ -8472,6 +8475,28 @@ function(qt_scenario_quiltrc_explicit_empty)
     # No QUILT_PATCHES_PREFIX set → bare patch name (no patches/ prefix)
     qt_assert_not_contains("${series_out}" "patches/" "empty quiltrc should not set prefix")
     qt_assert_contains("${series_out}" "test.patch" "series output should list patch")
+endfunction()
+
+# quiltrc_comments: verify that comment lines and blank lines are ignored
+function(qt_scenario_quiltrc_comments)
+    qt_begin_test("quiltrc_comments")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "hello\n")
+    qt_quilt_ok(ARGS new test.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # quiltrc with comments, blank lines, and a real assignment
+    qt_write_file("${QT_TEST_BASE}/.quiltrc" [=[
+# This is a comment
+#QUILT_PATCHES_PREFIX=1
+
+QUILT_PATCHES_PREFIX=1
+# Another comment
+]=])
+    qt_quilt_ok(DEFAULT_QUILTRC OUTPUT series_out ARGS series
+        MESSAGE "series with commented quiltrc failed")
+    # The commented-out line should be ignored; only the real assignment applies
+    qt_assert_contains("${series_out}" "patches/" "QUILT_PATCHES_PREFIX should be active")
 endfunction()
 
 # refresh_diffstat_twice: cmd_patch.cpp remove_diffstat_section lines 921,926,928-936,942,944,946-948
