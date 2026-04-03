@@ -433,7 +433,7 @@ Original quilt delegates all patching to **GNU `patch`** and all diff generation
 
 ### Diff algorithm selection (quilt.cpp extension)
 
-Quilt.cpp's built-in diff engine supports multiple algorithms, selected with `--diff-algorithm=<name>` on the `diff` and `refresh` commands. This follows the same convention as `git diff --diff-algorithm`.
+Quilt.cpp's built-in diff engine supports multiple algorithms, selected with `--diff-algorithm=<name>` on the `diff` and `refresh` commands, or by setting the `QUILT_DIFF_ALGORITHM` environment variable (e.g. `QUILT_DIFF_ALGORITHM=patience` in `.quiltrc`). The command-line flag overrides the environment variable. This follows the same convention as `git diff --diff-algorithm`.
 
 | Algorithm | Description |
 |-----------|-------------|
@@ -497,6 +497,7 @@ QUILT_PATCH_OPTS="--reject-format=unified"
 | `QUILT_PUSH_ARGS` | (none) | Default args for `quilt push` |
 | `QUILT_NO_DIFF_INDEX` | (unset) | Suppress `Index:` lines in patches |
 | `QUILT_NO_DIFF_TIMESTAMPS` | (unset) | Suppress timestamps in patch headers |
+| `QUILT_DIFF_ALGORITHM` | `myers` | Default diff algorithm for `diff` and `refresh` (**quilt.cpp extension**) |
 | `QUILT_PATCHES_PREFIX` | (unset) | Prefix patch names with QUILT_PATCHES directory |
 | `QUILT_PAGER` | Falls back to `GIT_PAGER`, `PAGER`, then `less -R` | Pager for output |
 | `QUILT_COLORS` | (per-context defaults) | ANSI SGR color codes for output |

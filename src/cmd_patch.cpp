@@ -1045,6 +1045,17 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     bool opt_backup = false;
     bool opt_strip_whitespace = false;
     DiffAlgorithm diff_algorithm = DiffAlgorithm::myers;
+    {
+        auto env_algo = get_env("QUILT_DIFF_ALGORITHM");
+        if (!env_algo.empty()) {
+            auto parsed = parse_diff_algorithm(env_algo);
+            if (!parsed) {
+                err("Unknown diff algorithm: "); err_line(env_algo);
+                return 1;
+            }
+            diff_algorithm = *parsed;
+        }
+    }
 
     while (i < argc) {
         std::string_view arg = argv[i];
@@ -1593,6 +1604,17 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
     std::string diff_type = "u";
     std::string context_num;
     DiffAlgorithm diff_algorithm = DiffAlgorithm::myers;
+    {
+        auto env_algo = get_env("QUILT_DIFF_ALGORITHM");
+        if (!env_algo.empty()) {
+            auto parsed = parse_diff_algorithm(env_algo);
+            if (!parsed) {
+                err("Unknown diff algorithm: "); err_line(env_algo);
+                return 1;
+            }
+            diff_algorithm = *parsed;
+        }
+    }
     int i = 1;
 
     while (i < argc) {

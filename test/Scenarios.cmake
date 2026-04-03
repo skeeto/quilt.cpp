@@ -527,6 +527,10 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     diff_algorithm_histogram_basic
     diff_algorithm_histogram_function_insert
     diff_algorithm_histogram_no_unique
+    diff_algorithm_env
+    diff_algorithm_env_override
+    diff_algorithm_env_invalid
+    diff_algorithm_env_diff_cmd
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -7556,6 +7560,14 @@ function(qt_run_named_scenario scenario)
         qt_scenario_diff_algorithm_histogram_function_insert()
     elseif(scenario STREQUAL "diff_algorithm_histogram_no_unique")
         qt_scenario_diff_algorithm_histogram_no_unique()
+    elseif(scenario STREQUAL "diff_algorithm_env")
+        qt_scenario_diff_algorithm_env()
+    elseif(scenario STREQUAL "diff_algorithm_env_override")
+        qt_scenario_diff_algorithm_env_override()
+    elseif(scenario STREQUAL "diff_algorithm_env_invalid")
+        qt_scenario_diff_algorithm_env_invalid()
+    elseif(scenario STREQUAL "diff_algorithm_env_diff_cmd")
+        qt_scenario_diff_algorithm_env_diff_cmd()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -10375,4 +10387,78 @@ function(qt_scenario_diff_algorithm_histogram_no_unique)
              ARGS diff --diff-algorithm=histogram --no-timestamps)
     qt_assert_success("${rc}" "histogram with no unique lines should succeed")
     qt_assert_contains("${diff_out}" "+X" "should show the inserted line")
+endfunction()
+
+function(qt_scenario_diff_algorithm_env)
+    qt_begin_test("diff_algorithm_env")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nbbb\nccc\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nBBB\nccc\n")
+
+    # QUILT_DIFF_ALGORITHM sets the default for refresh
+    qt_quilt_ok(ENV "QUILT_DIFF_ALGORITHM=minimal"
+                ARGS refresh MESSAGE "refresh with QUILT_DIFF_ALGORITHM failed")
+    qt_read_file_strip(patch_content "${QT_WORK_DIR}/patches/p.patch")
+    qt_assert_contains("${patch_content}" "-bbb" "patch should contain removed line")
+    qt_assert_contains("${patch_content}" "+BBB" "patch should contain added line")
+
+    # Also works for diff command — pop, re-push, then diff unresfreshed change
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nXXX\nccc\n")
+    qt_quilt(RESULT rc OUTPUT diff_out ERROR diff_err
+             ENV "QUILT_DIFF_ALGORITHM=patience"
+             ARGS diff --no-timestamps)
+    qt_assert_success("${rc}" "diff with QUILT_DIFF_ALGORITHM should succeed")
+    qt_assert_contains("${diff_out}" "-bbb" "diff should show original line")
+    qt_assert_contains("${diff_out}" "+XXX" "diff should show new line")
+endfunction()
+
+function(qt_scenario_diff_algorithm_env_override)
+    qt_begin_test("diff_algorithm_env_override")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nbbb\nccc\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\nBBB\nccc\n")
+
+    # --diff-algorithm on command line overrides the env var
+    qt_quilt_ok(ENV "QUILT_DIFF_ALGORITHM=patience"
+                ARGS refresh --diff-algorithm=minimal
+                MESSAGE "refresh with CLI override failed")
+    qt_read_file_strip(patch_content "${QT_WORK_DIR}/patches/p.patch")
+    qt_assert_contains("${patch_content}" "-bbb" "patch should contain removed line")
+    qt_assert_contains("${patch_content}" "+BBB" "patch should contain added line")
+endfunction()
+
+function(qt_scenario_diff_algorithm_env_invalid)
+    qt_begin_test("diff_algorithm_env_invalid")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "bbb\n")
+
+    # Invalid algorithm name in env var should fail
+    qt_quilt(RESULT rc OUTPUT out ERROR err
+             ENV "QUILT_DIFF_ALGORITHM=bogus"
+             ARGS refresh)
+    qt_assert_failure("${rc}" "refresh with invalid QUILT_DIFF_ALGORITHM should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Unknown diff algorithm" "should report bad algorithm")
+endfunction()
+
+function(qt_scenario_diff_algorithm_env_diff_cmd)
+    qt_begin_test("diff_algorithm_env_diff_cmd")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "aaa\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "bbb\n")
+
+    # Invalid algorithm name in env var should also fail for diff command
+    qt_quilt(RESULT rc OUTPUT out ERROR err
+             ENV "QUILT_DIFF_ALGORITHM=bogus"
+             ARGS diff)
+    qt_assert_failure("${rc}" "diff with invalid QUILT_DIFF_ALGORITHM should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Unknown diff algorithm" "should report bad algorithm")
 endfunction()

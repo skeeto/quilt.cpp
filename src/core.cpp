@@ -711,7 +711,10 @@ static Command commands[] = {
      "  --backup          Save the old patch file as name~ before updating.\n"
      "  --diff-algorithm=name\n"
      "                    Select the diff algorithm: myers (default),\n"
-     "                    minimal, patience, or histogram.\n",
+     "                    minimal, patience, or histogram.\n"
+     "\n"
+     "The QUILT_DIFF_ALGORITHM environment variable sets the default\n"
+     "algorithm (overridden by --diff-algorithm on the command line).\n",
      "Regenerate a patch from working tree changes"},
 
     {"diff", cmd_diff,
@@ -745,7 +748,10 @@ static Command commands[] = {
      "  --sort            Sort files alphabetically in the output.\n"
      "  --diff-algorithm=name\n"
      "                    Select the diff algorithm: myers (default),\n"
-     "                    minimal, patience, or histogram.\n",
+     "                    minimal, patience, or histogram.\n"
+     "\n"
+     "The QUILT_DIFF_ALGORITHM environment variable sets the default\n"
+     "algorithm (overridden by --diff-algorithm on the command line).\n",
      "Show the diff of the topmost or a specified patch"},
 
     {"series", cmd_series,

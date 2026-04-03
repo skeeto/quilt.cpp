@@ -62,6 +62,20 @@ To avoid passing `--from` every invocation, set a default in `~/.quiltrc`:
 
     QUILT_MAIL_ARGS='--from "First Last <user@example.com>" --mbox patches.mbox'
 
+### Built-in diff engine and `--diff-algorithm`
+
+Quilt.cpp includes a built-in diff engine and does not require an
+external `diff` program. The `diff` and `refresh` commands accept
+`--diff-algorithm={myers|minimal|patience|histogram}` to select the
+algorithm, following the same convention as `git diff --diff-algorithm`.
+
+The `QUILT_DIFF_ALGORITHM` environment variable sets the default
+algorithm, overridden by the command-line flag. Unlike putting
+`--diff-algorithm` in `QUILT_REFRESH_ARGS`, this variable is safely
+ignored by the original Quilt, so it can be set in `~/.quiltrc`:
+
+    QUILT_DIFF_ALGORITHM=patience
+
 ### Shell-like splitting for `QUILT_*_ARGS`
 
 The original Quilt is a Bash script, and variables like `QUILT_MAIL_ARGS`
