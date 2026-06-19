@@ -641,6 +641,8 @@ static std::map<std::string, std::string> split_patch_by_file(std::string_view c
     auto lines = split_lines(content);
     std::string current_file;
     std::string current_section;
+    bool section_has_file_header = false;
+    bool section_has_hunk = false;
 
     auto flush = [&]() {
         if (!current_file.empty() && !current_section.empty()) {
@@ -648,11 +650,38 @@ static std::map<std::string, std::string> split_patch_by_file(std::string_view c
         }
         current_file.clear();
         current_section.clear();
+        section_has_file_header = false;
+        section_has_hunk = false;
     };
 
     for (const auto &line : lines) {
         if (line.starts_with("Index:") || line.starts_with("diff ")) {
             flush();
+            current_section += line + "\n";
+        } else if (line.starts_with("--- ")) {
+            // A new file section starts at "---" after we've already seen
+            // a complete file body in the current section.
+            if (section_has_file_header && section_has_hunk) {
+                flush();
+            }
+
+            // For file deletions (+++ /dev/null), we get the name from ---
+            if (current_file.empty()) {
+                std::string_view rest = std::string_view(line).substr(4);
+                if (!rest.starts_with("/dev/null")) {
+                    if (rest.starts_with("a/")) rest = rest.substr(2);
+                    auto tab = str_find(rest, '\t');
+                    if (tab >= 0) rest = rest.substr(0, checked_cast<size_t>(tab));
+                    auto slash = str_find(rest, '/');
+                    if (slash >= 0) {
+                        current_file = trim(rest.substr(checked_cast<size_t>(slash + 1)));
+                    } else {
+                        current_file = trim(rest);
+                    }
+                }
+            }
+
+            section_has_file_header = true;
             current_section += line + "\n";
         } else if (line.starts_with("+++ ")) {
             // Extract filename from +++ line
@@ -672,25 +701,12 @@ static std::map<std::string, std::string> split_patch_by_file(std::string_view c
                     current_file = trim(rest);
                 }
             }
+            section_has_file_header = true;
+            current_section += line + "\n";
+        } else if (line.starts_with("@@")) {
+            section_has_hunk = true;
             current_section += line + "\n";
         } else if (line.starts_with("===")) {
-            current_section += line + "\n";
-        } else if (line.starts_with("--- ")) {
-            // For file deletions (+++ /dev/null), we get the name from ---
-            if (current_file.empty()) {
-                std::string_view rest = std::string_view(line).substr(4);
-                if (!rest.starts_with("/dev/null")) {
-                    if (rest.starts_with("a/")) rest = rest.substr(2);
-                    auto tab = str_find(rest, '\t');
-                    if (tab >= 0) rest = rest.substr(0, checked_cast<size_t>(tab));
-                    auto slash = str_find(rest, '/');
-                    if (slash >= 0) {
-                        current_file = trim(rest.substr(checked_cast<size_t>(slash + 1)));
-                    } else {
-                        current_file = trim(rest);
-                    }
-                }
-            }
             current_section += line + "\n";
         } else {
             current_section += line + "\n";

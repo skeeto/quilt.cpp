@@ -155,7 +155,6 @@ When an agent reports a bug:
 1. **Write a test** in `test/Scenarios.cmake` — three parts needed:
    - Add scenario name to `QUILT_TEST_SCENARIOS` or `QUILT_TEST_SCENARIOS_NATIVE`
    - Write the `function(qt_scenario_<name>)` implementation
-   - Add `elseif(scenario STREQUAL "<name>")` dispatch entry in `qt_run_named_scenario`
 2. **Confirm test fails**: `ctest --test-dir build -R scenario_name`
 3. **If shared, confirm it passes on original quilt**: `ctest --test-dir build-external -R scenario_name`
 4. **Fix the bug** in the appropriate `src/cmd_*.cpp` or `src/core.cpp`
