@@ -554,12 +554,10 @@ std::vector<std::string> files_in_patch(const QuiltState &q, std::string_view pa
     auto all = find_files_recursive(dir);
     std::vector<std::string> result;
     for (auto &f : all) {
-        // Skip quilt metadata files (e.g. .timestamp, .needs_refresh)
-        auto slash = str_rfind(std::string_view(f), '/');
-        std::string_view base = (slash >= 0)
-            ? std::string_view(f).substr(checked_cast<size_t>(slash + 1))
-            : std::string_view(f);
-        if (!base.empty() && base[0] == '.') continue;
+        // Skip quilt metadata, which lives only at the top level of
+        // .pc/<patch>/. Other dotfiles (.gitignore, sub/.hidden) are
+        // tracked files.
+        if (f == ".timestamp" || f == ".needs_refresh") continue;
         result.push_back(std::move(f));
     }
     return result;

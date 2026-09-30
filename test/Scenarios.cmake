@@ -363,6 +363,8 @@ set(QUILT_TEST_SCENARIOS
     refresh_strip_ws_only_modified
     next_no_series_exit1
     previous_no_series_exit1
+    dotfile_toplevel
+    dotfile_subdir
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -7537,6 +7539,10 @@ function(qt_run_named_scenario scenario)
         qt_scenario_next_no_series_exit1()
     elseif(scenario STREQUAL "previous_no_series_exit1")
         qt_scenario_previous_no_series_exit1()
+    elseif(scenario STREQUAL "dotfile_toplevel")
+        qt_scenario_dotfile_toplevel()
+    elseif(scenario STREQUAL "dotfile_subdir")
+        qt_scenario_dotfile_subdir()
     elseif(scenario STREQUAL "diff_algorithm_myers")
         qt_scenario_diff_algorithm_myers()
     elseif(scenario STREQUAL "diff_algorithm_minimal")
@@ -10066,6 +10072,58 @@ function(qt_scenario_previous_no_series_exit1)
     qt_assert_equal("${rc}" "1" "previous with no series file should exit 1")
     qt_combine_output(combined "${out}" "${err}")
     qt_assert_contains("${combined}" "No series file found" "should say no series file")
+endfunction()
+
+# dotfile_toplevel: a tracked dotfile at the top level must be refreshed
+# into the patch and restored on pop, not mistaken for quilt metadata
+function(qt_scenario_dotfile_toplevel)
+    qt_begin_test("dotfile_toplevel")
+    qt_write_file("${QT_WORK_DIR}/.hidden" "a\n")
+    qt_quilt_ok(ARGS new d.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add .hidden MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/.hidden" "b\n")
+    qt_quilt_ok(OUTPUT refresh_out ERROR refresh_err ARGS refresh MESSAGE "refresh failed")
+    qt_combine_output(refresh_combined "${refresh_out}" "${refresh_err}")
+    qt_assert_not_contains("${refresh_combined}" "Nothing in patch" "refresh should capture .hidden")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/d.patch" "/.hidden" "patch should contain .hidden")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/d.patch" "\n+b\n" "patch should contain .hidden change")
+    qt_quilt_ok(OUTPUT files_out ERROR files_err ARGS files MESSAGE "files failed")
+    qt_assert_equal("${files_out}" ".hidden\n" "files should list .hidden")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_assert_file_text("${QT_WORK_DIR}/.hidden" "a" "pop should restore .hidden")
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_assert_file_text("${QT_WORK_DIR}/.hidden" "b" "push should reapply .hidden")
+endfunction()
+
+# dotfile_subdir: dotfiles in subdirectories are tracked, including names
+# that match quilt metadata (.timestamp, .needs_refresh) below the top level
+function(qt_scenario_dotfile_subdir)
+    qt_begin_test("dotfile_subdir")
+    qt_write_file("${QT_WORK_DIR}/sub/.hidden" "s\n")
+    qt_write_file("${QT_WORK_DIR}/sub/.timestamp" "t\n")
+    qt_write_file("${QT_WORK_DIR}/sub/.needs_refresh" "n\n")
+    qt_quilt_ok(ARGS new d.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add sub/.hidden sub/.timestamp sub/.needs_refresh MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/sub/.hidden" "S\n")
+    qt_write_file("${QT_WORK_DIR}/sub/.timestamp" "T\n")
+    qt_write_file("${QT_WORK_DIR}/sub/.needs_refresh" "N\n")
+    qt_quilt_ok(OUTPUT refresh_out ERROR refresh_err ARGS refresh MESSAGE "refresh failed")
+    qt_combine_output(refresh_combined "${refresh_out}" "${refresh_err}")
+    qt_assert_not_contains("${refresh_combined}" "Nothing in patch" "refresh should capture sub/ dotfiles")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/d.patch" "/sub/.hidden" "patch should contain sub/.hidden")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/d.patch" "/sub/.timestamp" "patch should contain sub/.timestamp")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/d.patch" "/sub/.needs_refresh" "patch should contain sub/.needs_refresh")
+    qt_quilt_ok(OUTPUT files_out ERROR files_err ARGS files MESSAGE "files failed")
+    qt_assert_contains("${files_out}" "sub/.hidden\n" "files should list sub/.hidden")
+    qt_assert_contains("${files_out}" "sub/.timestamp\n" "files should list sub/.timestamp")
+    qt_assert_contains("${files_out}" "sub/.needs_refresh\n" "files should list sub/.needs_refresh")
+    qt_assert_line_count("${files_out}" 3 "files should list exactly three files")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/.hidden" "s" "pop should restore sub/.hidden")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/.timestamp" "t" "pop should restore sub/.timestamp")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/.needs_refresh" "n" "pop should restore sub/.needs_refresh")
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/.hidden" "S" "push should reapply sub/.hidden")
 endfunction()
 
 # --diff-algorithm tests
