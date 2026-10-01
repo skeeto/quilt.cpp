@@ -28,19 +28,34 @@ static void apply_quilt_patch_opts(PatchOptions &opts, std::span<const std::stri
     }
 }
 
-// Drop the " -- saving rejects to file X" ending from patch's messages, as
-// upstream push's cleanup_patch_output does with -q.
-static std::string strip_reject_file_names(std::string_view text)
+// Rewrite the " -- saving rejects to file X" ending of patch's messages for
+// a reject file that push removes, as upstream push's cleanup_patch_output
+// does: name the file with the rejects, from the last "patching file" line,
+// or with -q, which hides those lines, drop the ending.
+static std::string cleanup_patch_output(std::string_view text, bool quiet)
 {
-    std::string_view ending = " -- saving rejects to ";
     std::string result;
-    for (ptrdiff_t at; (at = str_find(text, ending)) >= 0;) {
-        result += text.substr(0, checked_cast<size_t>(at));
-        ptrdiff_t nl = str_find(text, '\n', at);
-        text.remove_prefix(nl < 0 ? text.size() : checked_cast<size_t>(nl));
+    std::string_view file;
+    for (;;) {
+        ptrdiff_t nl = str_find(text, '\n');
+        std::string_view line = nl < 0 ? text : text.substr(0, checked_cast<size_t>(nl));
+        if (line.starts_with("patching file ")) {
+            file = line.substr(14);
+        }
+        ptrdiff_t at = str_find(line, " -- saving rejects to ");
+        if (at < 0) {
+            result += line;
+        } else {
+            result += line.substr(0, checked_cast<size_t>(at));
+            if (!quiet) {
+                result += " -- rejects in file ";
+                result += file;
+            }
+        }
+        if (nl < 0) return result;
+        result += '\n';
+        text.remove_prefix(checked_cast<size_t>(nl + 1));
     }
-    result += text;
-    return result;
 }
 
 // Check that the patch file accounts for every change to the patch's files,
@@ -522,26 +537,22 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
             std::erase(affected, file);
         }
 
-        if (!result.out.empty()) {
-            out(result.out);
+        // Like upstream, which runs patch with 2>&1, show all of patch's
+        // output on stdout
+        if (!force && !leave_rejects) {
+            result.out = cleanup_patch_output(result.out, quiet);
         }
+        out(result.out);
+        out(result.err);
 
         bool failed = result.exit_code != 0;
         if (failed) {
-            // Like upstream with -q, do not name a reject file that push
-            // will remove
-            if (quiet && !force && !leave_rejects) {
-                result.err = strip_reject_file_names(result.err);
-            }
-            if (!result.err.empty()) {
-                err(result.err);
-            }
             if (!force) {
                 // Not forced: restore files from backups and clean up
                 for (const auto &file : affected) {
                     restore_file(q, name, file);
                 }
-                err_line("Patch " + display + " does not apply (enforce with -f)");
+                out_line("Patch " + display + " does not apply (enforce with -f)");
                 if (!leave_rejects) {
                     for (const auto &file : affected) {
                         std::string rej = path_join(q.work_dir, file + ".rej");

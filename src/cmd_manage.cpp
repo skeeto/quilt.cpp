@@ -1017,10 +1017,8 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
             delete_file(path_join(pc_patch_dir(q, top), f));
         }
     }
-    if (!opt_quiet && !r.out.empty()) {
-        out(r.out);
-    }
-    if (!r.err.empty()) err(r.err);
+    out(r.out);
+    err(r.err);
 
     if (r.exit_code != 0 && !opt_force) {
         // Like upstream, restore the pre-fold state and drop the backups

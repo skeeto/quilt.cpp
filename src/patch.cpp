@@ -37,6 +37,10 @@ struct PatchFile {
     // after the previous file's last hunk, as GNU patch quotes it
     ptrdiff_t text_line = 0;
     ptrdiff_t hunk_line = 0;   // 1-based line of the first hunk header
+    // 1-based line whose CRLF ending has GNU patch strip the CRs from the
+    // hunks: the "+++ " line of a unified diff, or the first hunk's
+    // "*** N ****" line of a context diff
+    ptrdiff_t crlf_line = 0;
     std::vector<PatchHunk> hunks;
 };
 
@@ -515,6 +519,7 @@ static std::vector<PatchFile> parse_patch(std::span<const std::string> lines,
         i += 2;  // skip the file header lines
         pf.text_line = text_line;
         pf.hunk_line = i + 1;
+        pf.crlf_line = unified ? i : i + 2;
 
         std::string_view hunk_start = unified ? "@@ " : "***************";
         while (i < n && at(i).starts_with(hunk_start)) {
@@ -1057,6 +1062,19 @@ static std::string format_rejects(const PatchFile &pf,
 
 // ── Main patch engine ──────────────────────────────────────────────────
 
+// Line k (from 1) of text as given, with its line ending, or empty
+static std::string_view raw_line(std::string_view text, ptrdiff_t k)
+{
+    if (k < 1) return {};
+    for (; k > 1; --k) {
+        ptrdiff_t nl = str_find(text, '\n');
+        if (nl < 0) return {};
+        text.remove_prefix(checked_cast<size_t>(nl + 1));
+    }
+    ptrdiff_t nl = str_find(text, '\n');
+    return nl < 0 ? text : text.substr(0, checked_cast<size_t>(nl + 1));
+}
+
 PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
 {
     PatchResult result;
@@ -1128,6 +1146,12 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                                                             : "already exists");
         }
 
+        // Like GNU patch, note a CRLF ending on the line it goes by.  The
+        // patch is read with its CRs stripped in any case.
+        if (!opts.quiet && raw_line(patch_text, pf.crlf_line).ends_with("\r\n")) {
+            result.out += "(Stripping trailing CRs from patch; use --binary to disable.)\n";
+        }
+
         // A missing file is patched as empty when the patch creates it, or
         // when GNU patch would have warned above.  Otherwise, like GNU patch
         // given -f, as quilt always does, quote the text leading up to the
@@ -1135,12 +1159,12 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
         // quiet drops only the first two lines.
         if (!file_existed && !pf.old_absent && !looks_reversed) {
             if (!opts.quiet) {
-                result.err += std::format(
+                result.out += std::format(
                     "can't find file to patch at input line {}\n"
                     "Perhaps you used the wrong -p or --strip option?\n",
                     pf.hunk_line);
             }
-            result.err += "The text leading up to this was:\n"
+            result.out += "The text leading up to this was:\n"
                           "--------------------------\n";
             // Quote the lines as given, carriage returns and all
             std::string_view text = patch_text;
@@ -1148,13 +1172,13 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                 // Every line before a hunk header ends with a newline
                 ptrdiff_t len = str_find(text, '\n') + 1;
                 if (k >= pf.text_line) {
-                    result.err += '|';
-                    result.err += text.substr(0, checked_cast<size_t>(len));
+                    result.out += '|';
+                    result.out += text.substr(0, checked_cast<size_t>(len));
                 }
                 text.remove_prefix(checked_cast<size_t>(len));
             }
             ptrdiff_t nhunks = std::ssize(pf.hunks);
-            result.err += std::format(
+            result.out += std::format(
                 "--------------------------\n"
                 "No file to patch.  Skipping patch.\n"
                 "{} out of {} {} ignored\n",
@@ -1244,10 +1268,10 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                 file_has_rejects = true;
                 if (!opts.quiet) {
                     if (opts.merge) {
-                        result.err += std::format("Hunk #{} NOT MERGED at {}.\n",
+                        result.out += std::format("Hunk #{} NOT MERGED at {}.\n",
                                                   h + 1, hunk.old_start);
                     } else {
-                        result.err += std::format("Hunk #{} FAILED at {}.\n",
+                        result.out += std::format("Hunk #{} FAILED at {}.\n",
                                                   h + 1, refused ? pos + 1 : hunk.old_start);
                     }
                 }
@@ -1313,7 +1337,7 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                         !(opts.merge && file_has_rejects)) {
                         result.exit_code = 1;
                         if (!opts.quiet) {
-                            result.err += "Not deleting file " + pf.target_path +
+                            result.out += "Not deleting file " + pf.target_path +
                                           " as content differs from patch\n";
                         }
                     }
@@ -1330,7 +1354,7 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                 // Like GNU patch, even with -s
                 ptrdiff_t rej_count = 0;
                 for (bool r : rejected) if (r) ++rej_count;
-                result.err += std::format(
+                result.out += std::format(
                     "{} out of {} {} FAILED -- saving rejects to file {}.rej\n",
                     rej_count, std::ssize(pf.hunks),
                     std::ssize(pf.hunks) == 1 ? "hunk" : "hunks",

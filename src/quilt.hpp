@@ -111,8 +111,10 @@ struct PatchOptions {
 
 struct PatchResult {
     int exit_code;             // 0=success, 1=rejects, 2=fatal
-    std::string out;           // stdout-equivalent messages
-    std::string err;           // stderr-equivalent messages
+    // Like GNU patch, every message in order on stdout, and only a fatal
+    // error, which ends the patch, on stderr
+    std::string out;
+    std::string err;
     // Missing files left alone because the patch does not create them,
     // which GNU patch would not have backed up
     std::vector<std::string> skipped;

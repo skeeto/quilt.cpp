@@ -482,6 +482,9 @@ set(QUILT_TEST_SCENARIOS
     push_verbose_patch_output
     fold_quiet_patch_output
     push_missing_file_crlf_text
+    push_failed_hunk_output
+    fold_failed_hunk_output
+    push_crlf_patch_output
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -8191,6 +8194,12 @@ function(qt_run_named_scenario scenario)
         qt_scenario_fold_quiet_patch_output()
     elseif(scenario STREQUAL "push_missing_file_crlf_text")
         qt_scenario_push_missing_file_crlf_text()
+    elseif(scenario STREQUAL "push_failed_hunk_output")
+        qt_scenario_push_failed_hunk_output()
+    elseif(scenario STREQUAL "fold_failed_hunk_output")
+        qt_scenario_fold_failed_hunk_output()
+    elseif(scenario STREQUAL "push_crlf_patch_output")
+        qt_scenario_push_crlf_patch_output()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -13648,4 +13657,102 @@ function(qt_scenario_push_missing_file_crlf_text)
     qt_assert_file_contains_hex("${QT_WORK_DIR}/push.out"
         "2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d0a7c6a756e6b0d0a7c2d2d2d20612f6e65772e7478740d0a7c2b2b2b20622f6e65772e7478740d0a2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d0a"
         "push -q should quote the CRLF lines as given")
+endfunction()
+
+# push_failed_hunk_output: upstream push runs patch with 2>&1, so patch's
+# messages show on stdout in the order patch prints them, followed by push's
+# own. Unless the rejects are kept, by -f or --leave-rejects, upstream's
+# cleanup_patch_output names the file with the rejects, from the last
+# "patching file" line, in place of the temporary reject file.
+function(qt_scenario_push_failed_hunk_output)
+    qt_begin_test("push_failed_hunk_output")
+    qt_write_file("${QT_WORK_DIR}/f.txt"
+        "zero\nzero\none\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "a\nb\nc\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\n")
+    # f.txt: the first hunk fails, and the second applies at an offset
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n one\n-TWO\n+2\n three\n@@ -8,3 +8,3 @@\n eight\n-nine\n+9\n ten\n--- a/g.txt\n+++ b/g.txt\n@@ -1,3 +1,3 @@\n a\n-B\n+b2\n c\n")
+    set(f_hunks "patching file f.txt\nHunk #1 FAILED at 1.\nHunk #2 succeeded at 10 (offset 2 lines).\n")
+    set(g_hunks "patching file g.txt\nHunk #1 FAILED at 1.\n")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_failure("${rc}" "push of a patch with failed hunks should fail")
+    qt_assert_equal("${out}"
+        "Applying patch p.diff\n${f_hunks}1 out of 2 hunks FAILED -- rejects in file f.txt\n${g_hunks}1 out of 1 hunk FAILED -- rejects in file g.txt\nPatch p.diff does not apply (enforce with -f)\n"
+        "push should report each hunk in order and name the files with rejects")
+    qt_assert_equal("${err}" "" "push should print nothing on stderr")
+    qt_assert_not_exists("${QT_WORK_DIR}/f.txt.rej" "push should remove the rejects")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "nine" "push should restore f.txt")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --leave-rejects)
+    qt_assert_failure("${rc}" "push --leave-rejects of a patch with failed hunks should fail")
+    qt_assert_equal("${out}"
+        "Applying patch p.diff\n${f_hunks}1 out of 2 hunks FAILED -- saving rejects to file f.txt.rej\n${g_hunks}1 out of 1 hunk FAILED -- saving rejects to file g.txt.rej\nPatch p.diff does not apply (enforce with -f)\n"
+        "push --leave-rejects should name the reject files")
+    qt_assert_equal("${err}" "" "push --leave-rejects should print nothing on stderr")
+    qt_assert_exists("${QT_WORK_DIR}/f.txt.rej" "push --leave-rejects should keep the rejects")
+    file(REMOVE "${QT_WORK_DIR}/f.txt.rej" "${QT_WORK_DIR}/g.txt.rej")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -f)
+    qt_assert_failure("${rc}" "push -f of a patch with failed hunks should fail")
+    qt_assert_equal("${out}"
+        "Applying patch p.diff\n${f_hunks}1 out of 2 hunks FAILED -- saving rejects to file f.txt.rej\n${g_hunks}1 out of 1 hunk FAILED -- saving rejects to file g.txt.rej\nApplied patch p.diff (forced; needs refresh)\n"
+        "push -f should name the reject files")
+    qt_assert_equal("${err}" "" "push -f should print nothing on stderr")
+    qt_assert_exists("${QT_WORK_DIR}/g.txt.rej" "push -f should keep the rejects")
+endfunction()
+
+# fold_failed_hunk_output: upstream fold runs patch as is, which prints
+# its messages on stdout in order, and keeps the rejects
+function(qt_scenario_fold_failed_hunk_output)
+    qt_begin_test("fold_failed_hunk_output")
+    qt_write_file("${QT_WORK_DIR}/f.txt"
+        "zero\nzero\none\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "a\nb\nc\n")
+    qt_quilt_ok(ARGS new p.diff MESSAGE "new failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS fold
+        INPUT "--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n one\n-TWO\n+2\n three\n@@ -8,3 +8,3 @@\n eight\n-nine\n+9\n ten\n--- a/g.txt\n+++ b/g.txt\n@@ -1,3 +1,3 @@\n a\n-B\n+b2\n c\n")
+    qt_assert_failure("${rc}" "fold of a patch with failed hunks should fail")
+    qt_assert_equal("${out}"
+        "patching file f.txt\nHunk #1 FAILED at 1.\nHunk #2 succeeded at 10 (offset 2 lines).\n1 out of 2 hunks FAILED -- saving rejects to file f.txt.rej\npatching file g.txt\nHunk #1 FAILED at 1.\n1 out of 1 hunk FAILED -- saving rejects to file g.txt.rej\n"
+        "fold should report each hunk in order")
+    qt_assert_equal("${err}" "" "fold should print nothing on stderr")
+    qt_assert_exists("${QT_WORK_DIR}/g.txt.rej" "fold should keep the rejects")
+endfunction()
+
+# push_crlf_patch_output: before each file of a patch whose lines end in
+# CRLF, GNU patch says that it strips the CRs, unless given -s. It goes by
+# the "+++ " line of a unified diff, and by the first "*** N ****" line of
+# a context diff.
+function(qt_scenario_push_crlf_patch_output)
+    qt_begin_test("push_crlf_patch_output")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "f1\nf2\nf3\n")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "g1\ng2\ng3\n")
+    qt_write_file("${QT_WORK_DIR}/h.txt" "h1\nh2\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\n")
+    set(patch "Header\r\n--- a/f.txt\r\n+++ b/f.txt\r\n@@ -1,3 +1,3 @@\r\n f1\r\n-f2\r\n+F2\r\n f3\r\n--- a/g.txt\r\n+++ b/g.txt\n@@ -1,3 +1,3 @@\n g1\n-g2\n+G2\n g3\n*** a/h.txt\n--- b/h.txt\n***************\n*** 1,2 ****\r\n  h1\r\n! h2\r\n--- 1,2 ----\r\n  h1\r\n! H2\r\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff" "${patch}")
+    set(notice "(Stripping trailing CRs from patch; use --binary to disable.)\n")
+    set(patched "${notice}patching file f.txt\npatching file g.txt\n${notice}patching file h.txt\n")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_success("${rc}" "push of a CRLF patch should succeed")
+    qt_assert_equal("${out}" "Applying patch p.diff\n${patched}\nNow at patch p.diff\n"
+        "push should note the CRs it strips for f.txt and h.txt")
+    qt_assert_equal("${err}" "" "push should print nothing on stderr")
+    qt_assert_file_text("${QT_WORK_DIR}/h.txt" "h1\nH2" "the context diff should apply")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -q)
+    qt_assert_success("${rc}" "push -q of a CRLF patch should succeed")
+    qt_assert_equal("${out}" "Applying patch p.diff\nNow at patch p.diff\n"
+        "push -q should not note the CRs")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+
+    qt_quilt_ok(ARGS new top.diff MESSAGE "new failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS fold INPUT "${patch}")
+    qt_assert_success("${rc}" "fold of a CRLF patch should succeed")
+    qt_assert_equal("${out}" "${patched}" "fold should note the CRs it strips")
+    qt_assert_equal("${err}" "" "fold should print nothing on stderr")
 endfunction()
