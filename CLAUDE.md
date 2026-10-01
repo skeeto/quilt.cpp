@@ -91,7 +91,7 @@ All internal strings are UTF-8. Indices and counts use `ptrdiff_t` (signed) with
 - `cmd_mail.cpp` — mbox generation for emailing patches (`quilt mail`).
 - `cmd_annotate.cpp` — annotated file listing showing which patches modify which lines.
 - `cmd_graph.cpp` — dependency graph generation in dot(1) format.
-- `patch.cpp` — built-in patch engine for applying unified diffs (fuzz, reverse, merge conflicts, reject files).
+- `patch.cpp` — built-in patch engine for applying unified and context diffs (fuzz, reverse, merge conflicts, reject files).
 - `cmd_stubs.cpp` — unimplemented commands that return "not yet implemented": grep, setup, shell.
 - `platform_posix.cpp` — POSIX implementation (fork/exec, POSIX file I/O). Contains `main()`.
 - `platform_win32.cpp` — Win32 implementation (`CreateProcess`, wide-char APIs, UTF-16 conversion). Contains `main()`.
@@ -99,7 +99,7 @@ All internal strings are UTF-8. Indices and counts use `ptrdiff_t` (signed) with
 ### Key design patterns
 
 - **Platform selection at build time**: `CMakeLists.txt` links exactly one of `platform_posix.cpp` or `platform_win32.cpp`. No `#ifdef` in shared code.
-- **Backup-based patch tracking**: Push/pop works by backing up files into `.pc/<patchname>/` before applying patches. Pop restores from these backups. A built-in patch engine (`patch.cpp`) applies unified diffs; the external `diff` command is used for generating them.
+- **Backup-based patch tracking**: Push/pop works by backing up files into `.pc/<patchname>/` before applying patches. Pop restores from these backups. A built-in patch engine (`patch.cpp`) applies unified and context diffs; the external `diff` command is used for generating them.
 - **Metadata files in `.pc/<patch>/`**: The `.timestamp` and `.needs_refresh` files are quilt metadata, not tracked files. `files_in_patch()` filters out exactly these two names at the top level of `.pc/<patch>/`; other dotfiles (e.g. `.gitignore`, `sub/.timestamp`) are tracked files.
 - **Core helpers accessed via extern**: Functions like `ensure_pc_dir`, `backup_file`, `restore_file`, `write_applied`, `pc_patch_dir`, and `files_in_patch` are defined in `core.cpp` but not declared in headers — command files use `extern` forward declarations.
 - **Line-preserving series edits**: The series file is never rewritten from `q.series`. Commands change it only through `insert_in_series`, `remove_from_series`, `rename_in_series`, and `set_series_strip_level` (`core.cpp`), which, like upstream, touch only the affected patch's line so comments, blank lines, unknown options, and line endings survive. Each reloads `q.series`, `q.patch_strip_level`, and `q.patch_reversed` from the result, so never hold references into `q.series` across these calls. New patches go in front of `q.patch_after_top()`, as upstream does.

@@ -1,6 +1,6 @@
 // This is free and unencumbered software released into the public domain.
 //
-// Built-in patch engine for applying unified diffs.
+// Built-in patch engine for applying unified and context diffs.
 // Implements spiral search with offset tracking, fuzz matching,
 // reverse application, merge conflict markers, and reject files.
 
@@ -71,33 +71,326 @@ static std::string extract_path(std::string_view line)
     return std::string(rest);
 }
 
-// ── Unified diff parser ────────────────────────────────────────────────
+// ── Diff parser ────────────────────────────────────────────────────────
 
-// Parse a complete unified diff into a list of per-file patch descriptions.
-static std::vector<PatchFile> parse_patch(std::string_view text, int strip_level,
-                                           bool reverse)
+// Remove prefix from the front of s, returning whether it was there.
+static bool take(std::string_view &s, std::string_view prefix)
 {
-    std::vector<PatchFile> files;
-    auto lines = split_lines(text);
-    ptrdiff_t n = std::ssize(lines);
-    ptrdiff_t i = 0;
+    if (!s.starts_with(prefix)) return false;
+    s.remove_prefix(prefix.size());
+    return true;
+}
 
+// Remove a decimal number from the front of s.
+static bool take_number(std::string_view &s, ptrdiff_t &n)
+{
+    if (s.empty() || s[0] < '0' || s[0] > '9') return false;
+    auto [end, ec] = std::from_chars(s.data(), s.data() + s.size(), n);
+    if (ec != std::errc{}) return false;
+    s.remove_prefix(checked_cast<size_t>(end - s.data()));
+    return true;
+}
+
+static bool is_no_newline_marker(std::string_view line)
+{
+    return line.starts_with("\\ No newline at end of file") ||
+           line.starts_with("\\ no newline at end of file");
+}
+
+// GNU patch's message for a line it cannot parse.  It prints the line with
+// its newline, so the message ends in a blank line.
+static std::string malformed(std::span<const std::string> lines, ptrdiff_t i)
+{
+    return std::format("malformed patch at line {}: {}\n",
+                       i + 1, lines[checked_cast<size_t>(i)]);
+}
+
+// Parse a unified hunk header "@@ -start[,count] +start[,count] @@" as
+// leniently as GNU patch: the spaces are optional, and anything may follow
+// the first '@' of the closing "@@".
+static bool parse_unified_range(std::string_view s, PatchHunk &hunk)
+{
+    hunk.old_count = hunk.new_count = 1;
+    if (!take(s, "@@ -") || !take_number(s, hunk.old_start)) return false;
+    if (take(s, ",") && !take_number(s, hunk.old_count)) return false;
+    take(s, " ");
+    if (!take(s, "+") || !take_number(s, hunk.new_start)) return false;
+    if (take(s, ",") && !take_number(s, hunk.new_count)) return false;
+    take(s, " ");
+    return s.starts_with("@");
+}
+
+// Parse the unified hunk whose header is lines[i], advancing i past it.
+static bool parse_unified_hunk(std::span<const std::string> lines, ptrdiff_t &i,
+                               PatchHunk &hunk, std::string &error)
+{
+    if (!parse_unified_range(lines[checked_cast<size_t>(i)], hunk)) {
+        error = malformed(lines, i);
+        return false;
+    }
+    ++i;
+
+    ptrdiff_t n = std::ssize(lines);
+    ptrdiff_t old_seen = 0, new_seen = 0;
     while (i < n) {
-        // Look for "--- " header
-        if (!lines[checked_cast<size_t>(i)].starts_with("--- ")) {
+        std::string_view ln = lines[checked_cast<size_t>(i)];
+
+        if (is_no_newline_marker(ln)) {
+            // Applies to the preceding line
+            if (!hunk.lines.empty()) {
+                char prev_prefix = hunk.lines.back()[0];
+                if (prev_prefix == '-')
+                    hunk.old_no_newline = true;
+                else if (prev_prefix == '+')
+                    hunk.new_no_newline = true;
+                else
+                    hunk.old_no_newline = hunk.new_no_newline = true;
+            }
             ++i;
             continue;
         }
 
-        // Peek ahead for "+++ "
-        if (i + 1 >= n || !lines[checked_cast<size_t>(i + 1)].starts_with("+++ ")) {
+        if (ln.empty()) {
+            // Empty line in diff = context line (space was stripped)
+            if (old_seen >= hunk.old_count && new_seen >= hunk.new_count) break;
+            hunk.lines.push_back(" ");
+            old_seen++;
+            new_seen++;
+            ++i;
+            continue;
+        }
+
+        char prefix = ln[0];
+        if (prefix == ' ') {
+            if (old_seen >= hunk.old_count && new_seen >= hunk.new_count) break;
+            old_seen++;
+            new_seen++;
+        } else if (prefix == '-') {
+            if (old_seen >= hunk.old_count) break;
+            old_seen++;
+        } else if (prefix == '+') {
+            if (new_seen >= hunk.new_count) break;
+            new_seen++;
+        } else {
+            // Start of next file section or unknown line
+            break;
+        }
+        hunk.lines.emplace_back(ln);
+        ++i;
+    }
+    return true;
+}
+
+// Parse a context hunk range "*** start[,end] ****" or "--- start[,end] ----",
+// where mark is "***" or "---".  A lone number names one line, or none if
+// it is 0.
+static bool parse_context_range(std::string_view s, std::string_view mark,
+                                ptrdiff_t &start, ptrdiff_t &count)
+{
+    if (!take(s, mark) || !take(s, " ") || !take_number(s, start)) return false;
+    count = start ? 1 : 0;
+    if (take(s, ",")) {
+        ptrdiff_t end = 0;
+        if (!take_number(s, end) || end < start) return false;
+        count = end - start + 1;
+    }
+    return take(s, " ") && s.starts_with(mark);
+}
+
+// One section of a context hunk: lines with their markers (' ', '-', '+'
+// or '!'), and whether the last line lacks a newline.
+struct ContextLine {
+    char mark;
+    std::string_view text;
+};
+
+struct ContextSection {
+    std::vector<ContextLine> lines;
+    bool no_newline = false;
+};
+
+// Split a context hunk line "m text" whose marker m is one of marks.  diff -T
+// puts a tab after the marker instead of a space, and a blank line can lose
+// its trailing whitespace, leaving just the marker or nothing at all.
+static bool split_context_line(std::string_view ln, std::string_view marks,
+                               ContextLine &cl)
+{
+    if (ln.empty()) {
+        cl = {' ', {}};
+        return true;
+    }
+    if (str_find(marks, ln[0]) < 0) return false;
+    if (std::ssize(ln) > 1 && ln[1] != ' ' && ln[1] != '\t') return false;
+    cl = {ln[0], ln.substr(std::ssize(ln) > 1 ? 2 : 1)};
+    return true;
+}
+
+// Parse the context hunk whose "***************" line is lines[i], advancing
+// i past it, and convert it to unified form.  diff omits a section that has
+// no changes, in which case the section is the other one's context lines.
+static bool parse_context_hunk(std::span<const std::string> lines, ptrdiff_t &i,
+                               PatchHunk &hunk, std::string &error)
+{
+    ptrdiff_t n = std::ssize(lines);
+    auto at = [&](ptrdiff_t k) -> std::string_view {
+        return lines[checked_cast<size_t>(k)];
+    };
+
+    ++i;
+    ptrdiff_t range_line = i;
+    if (i >= n) {
+        error = "unexpected end of file in patch";
+        return false;
+    }
+    if (!parse_context_range(at(i), "***", hunk.old_start, hunk.old_count)) {
+        error = malformed(lines, i);
+        return false;
+    }
+
+    ContextSection old_sec, new_sec;
+    for (++i; i < n && !at(i).starts_with("--- "); ++i) {
+        ContextLine cl;
+        if (is_no_newline_marker(at(i))) {
+            old_sec.no_newline = true;
+        } else if (split_context_line(at(i), " -!", cl)) {
+            old_sec.lines.push_back(cl);
+        } else {
+            error = malformed(lines, i);
+            return false;
+        }
+    }
+    if (i >= n) {
+        error = "unexpected end of file in patch";
+        return false;
+    }
+    if (!parse_context_range(at(i), "---", hunk.new_start, hunk.new_count)) {
+        error = malformed(lines, i);
+        return false;
+    }
+
+    // Unlike the old section, the new section has no terminator, so stop
+    // after the lines its range names.  A first line that is not part of
+    // it means the section was omitted.  That includes a blank line, unless
+    // a change ('!') in the old section requires a new section.
+    bool may_omit = std::ranges::none_of(old_sec.lines, [](const ContextLine &cl) {
+        return cl.mark == '!';
+    });
+    for (++i; i < n && std::ssize(new_sec.lines) < hunk.new_count; ++i) {
+        ContextLine cl;
+        if (is_no_newline_marker(at(i))) {
+            new_sec.no_newline = true;
+            continue;
+        }
+        if (new_sec.lines.empty() && at(i).empty() && may_omit) break;
+        if (!split_context_line(at(i), " +!", cl)) {
+            if (new_sec.lines.empty()) break;
+            error = malformed(lines, i);
+            return false;
+        }
+        new_sec.lines.push_back(cl);
+    }
+    if (i < n && is_no_newline_marker(at(i))) {
+        new_sec.no_newline = true;
+        ++i;
+    }
+
+    auto context_of = [](const ContextSection &sec) {
+        ContextSection ctx;
+        for (const auto &cl : sec.lines) {
+            if (cl.mark == ' ') ctx.lines.push_back(cl);
+        }
+        ctx.no_newline = sec.no_newline && !sec.lines.empty() &&
+                         sec.lines.back().mark == ' ';
+        return ctx;
+    };
+    if (old_sec.lines.empty()) {
+        old_sec = context_of(new_sec);
+    } else if (new_sec.lines.empty()) {
+        new_sec = context_of(old_sec);
+    }
+
+    // A lone line number with no lines names the empty range after that
+    // line, as diff -C0 writes for a pure insertion or deletion
+    auto fits = [](ptrdiff_t &count, ptrdiff_t actual) {
+        if (actual == 0 && count == 1) count = 0;
+        return actual == count;
+    };
+    if (!fits(hunk.old_count, std::ssize(old_sec.lines)) ||
+        !fits(hunk.new_count, std::ssize(new_sec.lines))) {
+        error = std::format("replacement text or line numbers mangled in hunk at line {}",
+                            range_line + 1);
+        return false;
+    }
+
+    // Interleave the sections, pairing up their context lines
+    ptrdiff_t old_n = std::ssize(old_sec.lines);
+    ptrdiff_t new_n = std::ssize(new_sec.lines);
+    ptrdiff_t o = 0, w = 0;
+    for (;;) {
+        for (; o < old_n && old_sec.lines[checked_cast<size_t>(o)].mark != ' '; ++o) {
+            hunk.lines.push_back("-" + std::string(old_sec.lines[checked_cast<size_t>(o)].text));
+        }
+        for (; w < new_n && new_sec.lines[checked_cast<size_t>(w)].mark != ' '; ++w) {
+            hunk.lines.push_back("+" + std::string(new_sec.lines[checked_cast<size_t>(w)].text));
+        }
+        if (o == old_n && w == new_n) break;
+        if (o == old_n || w == new_n ||
+            old_sec.lines[checked_cast<size_t>(o)].text !=
+                new_sec.lines[checked_cast<size_t>(w)].text) {
+            error = std::format("context mangled in hunk at line {}", range_line + 1);
+            return false;
+        }
+        hunk.lines.push_back(" " + std::string(old_sec.lines[checked_cast<size_t>(o)].text));
+        ++o;
+        ++w;
+    }
+    hunk.old_no_newline = old_sec.no_newline;
+    hunk.new_no_newline = new_sec.no_newline;
+    return true;
+}
+
+// Swap a hunk's old and new sides, as patch -R does.
+static void reverse_hunk(PatchHunk &hunk)
+{
+    std::swap(hunk.old_start, hunk.new_start);
+    std::swap(hunk.old_count, hunk.new_count);
+    std::swap(hunk.old_no_newline, hunk.new_no_newline);
+    for (auto &line : hunk.lines) {
+        if (line[0] == '-') line[0] = '+';
+        else if (line[0] == '+') line[0] = '-';
+    }
+}
+
+// Parse a complete unified or context diff into a list of per-file patch
+// descriptions.  A hunk that does not parse ends parsing, with GNU patch's
+// message for it in error.
+static std::vector<PatchFile> parse_patch(std::string_view text, int strip_level,
+                                           bool reverse, std::string &error)
+{
+    std::vector<PatchFile> files;
+    auto lines = split_lines(text);
+    ptrdiff_t n = std::ssize(lines);
+    auto at = [&](ptrdiff_t k) -> std::string_view {
+        return lines[checked_cast<size_t>(k)];
+    };
+
+    ptrdiff_t i = 0;
+    while (i < n) {
+        // A unified diff names the files on "--- " and "+++ " lines, and a
+        // context diff on "*** " and "--- " lines before its first hunk
+        bool unified = at(i).starts_with("--- ") &&
+                       i + 1 < n && at(i + 1).starts_with("+++ ");
+        bool context = at(i).starts_with("*** ") &&
+                       i + 2 < n && at(i + 1).starts_with("--- ") &&
+                       at(i + 2).starts_with("***************");
+        if (!unified && !context) {
             ++i;
             continue;
         }
 
         PatchFile pf;
-        std::string raw_old = extract_path(std::string_view(lines[checked_cast<size_t>(i)]).substr(4));
-        std::string raw_new = extract_path(std::string_view(lines[checked_cast<size_t>(i + 1)]).substr(4));
+        std::string raw_old = extract_path(at(i).substr(4));
+        std::string raw_new = extract_path(at(i + 1).substr(4));
 
         if (reverse) {
             std::swap(raw_old, raw_new);
@@ -129,123 +422,15 @@ static std::vector<PatchFile> parse_patch(std::string_view text, int strip_level
             }
         }
 
-        i += 2;  // skip --- and +++ lines
+        i += 2;  // skip the file header lines
 
-        // Parse hunks
-        while (i < n && lines[checked_cast<size_t>(i)].starts_with("@@ ")) {
+        std::string_view hunk_start = unified ? "@@ " : "***************";
+        while (i < n && at(i).starts_with(hunk_start)) {
             PatchHunk hunk;
-
-            // Parse @@ -old_start[,old_count] +new_start[,new_count] @@
-            std::string_view hdr = std::string_view(lines[checked_cast<size_t>(i)]);
-            ptrdiff_t at1 = str_find(hdr, '-', 3);
-            if (at1 < 0) { ++i; continue; }
-
-            // Parse old range
-            ptrdiff_t pos = at1 + 1;
-            ptrdiff_t comma = str_find(hdr, ',', pos);
-            ptrdiff_t space = str_find(hdr, ' ', pos);
-            ptrdiff_t plus_pos = str_find(hdr, '+', pos);
-
-            // Need '+' marker and a space or comma delimiter before it
-            if (plus_pos < 0) { ++i; continue; }
-
-            if (comma >= 0 && comma < plus_pos && plus_pos - comma >= 2) {
-                hunk.old_start = parse_int(hdr.substr(checked_cast<size_t>(pos), checked_cast<size_t>(comma - pos)));
-                hunk.old_count = parse_int(hdr.substr(checked_cast<size_t>(comma + 1), checked_cast<size_t>(plus_pos - comma - 2)));
-            } else if (space >= 0 && space < plus_pos) {
-                hunk.old_start = parse_int(hdr.substr(checked_cast<size_t>(pos), checked_cast<size_t>(space - pos)));
-                hunk.old_count = 1;
-            } else {
-                ++i; continue;
-            }
-
-            // Parse new range
-            pos = plus_pos + 1;
-            comma = str_find(hdr, ',', pos);
-            ptrdiff_t end_at = str_find(hdr, ' ', pos);
-            if (end_at < 0) end_at = std::ssize(hdr);
-
-            if (end_at <= pos) { ++i; continue; }
-
-            if (comma >= 0 && comma < end_at) {
-                hunk.new_start = parse_int(hdr.substr(checked_cast<size_t>(pos), checked_cast<size_t>(comma - pos)));
-                hunk.new_count = parse_int(hdr.substr(checked_cast<size_t>(comma + 1), checked_cast<size_t>(end_at - comma - 1)));
-            } else {
-                hunk.new_start = parse_int(hdr.substr(checked_cast<size_t>(pos), checked_cast<size_t>(end_at - pos)));
-                hunk.new_count = 1;
-            }
-
-            if (reverse) {
-                std::swap(hunk.old_start, hunk.new_start);
-                std::swap(hunk.old_count, hunk.new_count);
-            }
-
-            ++i;  // skip @@ line
-
-            // Collect hunk body
-            ptrdiff_t old_seen = 0, new_seen = 0;
-            while (i < n) {
-                std::string_view ln = lines[checked_cast<size_t>(i)];
-
-                if (ln.starts_with("\\ No newline at end of file") ||
-                    ln.starts_with("\\ no newline at end of file")) {
-                    // Applies to the preceding line
-                    if (!hunk.lines.empty()) {
-                        // Prefixes are already swapped if reverse=true, so
-                        // '-' is always the old side and '+' the new side.
-                        char prev_prefix = hunk.lines.back()[0];
-                        if (prev_prefix == '-')
-                            hunk.old_no_newline = true;
-                        else if (prev_prefix == '+')
-                            hunk.new_no_newline = true;
-                        else
-                            hunk.old_no_newline = hunk.new_no_newline = true;
-                    }
-                    ++i;
-                    continue;
-                }
-
-                if (ln.empty()) {
-                    // Empty line in diff = context line (space was stripped)
-                    if (old_seen >= hunk.old_count && new_seen >= hunk.new_count) break;
-                    std::string line_str = " ";
-                    hunk.lines.push_back(line_str);
-                    old_seen++;
-                    new_seen++;
-                    ++i;
-                    continue;
-                }
-
-                char prefix = ln[0];
-                if (prefix == ' ' || prefix == '-' || prefix == '+') {
-                    std::string line_str(ln);
-
-                    if (reverse) {
-                        if (prefix == '-') line_str[0] = '+';
-                        else if (prefix == '+') line_str[0] = '-';
-                    }
-
-                    char actual_prefix = line_str[0];
-                    if (actual_prefix == ' ') {
-                        if (old_seen >= hunk.old_count && new_seen >= hunk.new_count) break;
-                        old_seen++;
-                        new_seen++;
-                    } else if (actual_prefix == '-') {
-                        if (old_seen >= hunk.old_count) break;
-                        old_seen++;
-                    } else { // '+'
-                        if (new_seen >= hunk.new_count) break;
-                        new_seen++;
-                    }
-
-                    hunk.lines.push_back(std::move(line_str));
-                    ++i;
-                } else {
-                    // Start of next file section or unknown line
-                    break;
-                }
-            }
-
+            bool ok = unified ? parse_unified_hunk(lines, i, hunk, error)
+                              : parse_context_hunk(lines, i, hunk, error);
+            if (!ok) return files;
+            if (reverse) reverse_hunk(hunk);
             pf.hunks.push_back(std::move(hunk));
         }
 
@@ -259,7 +444,8 @@ std::vector<std::string> patch_target_files(std::string_view patch_text,
                                             int strip_level, bool reverse)
 {
     std::vector<std::string> result;
-    for (auto &pf : parse_patch(patch_text, strip_level, reverse)) {
+    std::string error;  // a patch that does not parse will not apply anyway
+    for (auto &pf : parse_patch(patch_text, strip_level, reverse, error)) {
         if (pf.target_path.empty()) continue;
         if (std::ranges::find(result, pf.target_path) != result.end()) continue;
         result.push_back(std::move(pf.target_path));
@@ -780,7 +966,15 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
         return delete_file(p);
     };
 
-    auto files = parse_patch(patch_text, opts.strip_level, opts.reverse);
+    std::string parse_error;
+    auto files = parse_patch(patch_text, opts.strip_level, opts.reverse, parse_error);
+
+    // A hunk that does not parse is fatal, so apply none of the patch
+    if (!parse_error.empty()) {
+        result.exit_code = 2;
+        result.err = "patch: **** " + parse_error + "\n";
+        return result;
+    }
 
     if (files.empty()) {
         return result;

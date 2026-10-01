@@ -442,6 +442,9 @@ set(QUILT_TEST_SCENARIOS
     rename_preserves_series_comments
     fork_preserves_series_comments
     refresh_z_preserves_series_comments
+    push_context_diff
+    push_context_diff_strip
+    push_malformed_hunk
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -7950,6 +7953,12 @@ function(qt_run_named_scenario scenario)
         qt_scenario_refresh_z_fork_series_args()
     elseif(scenario STREQUAL "series_insert_crlf")
         qt_scenario_series_insert_crlf()
+    elseif(scenario STREQUAL "push_context_diff")
+        qt_scenario_push_context_diff()
+    elseif(scenario STREQUAL "push_context_diff_strip")
+        qt_scenario_push_context_diff_strip()
+    elseif(scenario STREQUAL "push_malformed_hunk")
+        qt_scenario_push_malformed_hunk()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -12435,4 +12444,90 @@ function(qt_scenario_series_insert_crlf)
     qt_assert_file_hex("${QT_WORK_DIR}/patches/series"
         "2320630d0a622e70617463680d0a612e70617463680d0a632e70617463680d0a"
         "inserted lines should use CRLF")
+endfunction()
+
+# push_context_diff: push applies a context diff written by refresh -c,
+# including hunks that omit the old section (lines only added) or the new
+# section (lines only removed), and pop restores every file afterward.
+function(qt_scenario_push_context_diff)
+    qt_begin_test("push_context_diff")
+    qt_write_file("${QT_WORK_DIR}/add.txt" "x\n")
+    qt_write_file("${QT_WORK_DIR}/del.txt" "x\nz\n")
+    qt_write_file("${QT_WORK_DIR}/chg.txt" "1\n2\n3\n")
+    qt_write_file("${QT_WORK_DIR}/gone.txt" "bye\n")
+    qt_quilt_ok(ARGS new q.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add add.txt del.txt chg.txt gone.txt made.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/add.txt" "x\nz\n")
+    qt_write_file("${QT_WORK_DIR}/del.txt" "x\n")
+    qt_write_file("${QT_WORK_DIR}/chg.txt" "1\nTWO\n3\n")
+    file(REMOVE "${QT_WORK_DIR}/gone.txt")
+    qt_write_file("${QT_WORK_DIR}/made.txt" "hi\n")
+    qt_quilt_ok(ARGS refresh -c MESSAGE "refresh -c failed")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/q.patch" "***************"
+        "refresh -c should write a context diff")
+    # The first pop checks the patch against the backups from add, and the
+    # second against the backups push made
+    foreach(round 1 2)
+        qt_quilt_ok(ARGS pop MESSAGE "pop ${round} failed")
+        qt_assert_file_text("${QT_WORK_DIR}/add.txt" "x" "pop ${round} should restore add.txt")
+        qt_assert_file_text("${QT_WORK_DIR}/del.txt" "x\nz" "pop ${round} should restore del.txt")
+        qt_assert_file_text("${QT_WORK_DIR}/chg.txt" "1\n2\n3" "pop ${round} should restore chg.txt")
+        qt_assert_file_text("${QT_WORK_DIR}/gone.txt" "bye" "pop ${round} should restore gone.txt")
+        qt_assert_not_exists("${QT_WORK_DIR}/made.txt" "pop ${round} should remove made.txt")
+        qt_quilt_ok(OUTPUT out ERROR err ARGS push MESSAGE "push ${round} failed")
+        qt_assert_contains("${out}" "patching file add.txt" "push ${round} should patch add.txt")
+        qt_assert_contains("${out}" "patching file del.txt" "push ${round} should patch del.txt")
+        qt_assert_file_text("${QT_WORK_DIR}/add.txt" "x\nz" "push ${round} should add a line to add.txt")
+        qt_assert_file_text("${QT_WORK_DIR}/del.txt" "x" "push ${round} should remove a line from del.txt")
+        qt_assert_file_text("${QT_WORK_DIR}/chg.txt" "1\nTWO\n3" "push ${round} should change chg.txt")
+        qt_assert_not_exists("${QT_WORK_DIR}/gone.txt" "push ${round} should delete gone.txt")
+        qt_assert_file_text("${QT_WORK_DIR}/made.txt" "hi" "push ${round} should create made.txt")
+    endforeach()
+endfunction()
+
+# push_context_diff_strip: push applies the context diffs written by
+# refresh -p0 -c and refresh -pab -c.
+function(qt_scenario_push_context_diff_strip)
+    qt_begin_test("push_context_diff_strip")
+    qt_write_file("${QT_WORK_DIR}/add.txt" "x\n")
+    qt_write_file("${QT_WORK_DIR}/del.txt" "x\nz\n")
+    qt_quilt_ok(ARGS new q.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add add.txt del.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/add.txt" "x\nz\n")
+    qt_write_file("${QT_WORK_DIR}/del.txt" "x\n")
+    foreach(p -p0 -pab)
+        qt_quilt_ok(ARGS refresh ${p} -c MESSAGE "refresh ${p} -c failed")
+        qt_quilt_ok(ARGS pop MESSAGE "pop after refresh ${p} -c failed")
+        qt_assert_file_text("${QT_WORK_DIR}/add.txt" "x" "pop should restore add.txt (${p})")
+        qt_assert_file_text("${QT_WORK_DIR}/del.txt" "x\nz" "pop should restore del.txt (${p})")
+        qt_quilt_ok(ARGS push MESSAGE "push after refresh ${p} -c failed")
+        qt_assert_file_text("${QT_WORK_DIR}/add.txt" "x\nz" "push should add a line to add.txt (${p})")
+        qt_assert_file_text("${QT_WORK_DIR}/del.txt" "x" "push should remove a line from del.txt (${p})")
+    endforeach()
+endfunction()
+
+# push_malformed_hunk: a hunk that does not parse fails the push with GNU
+# patch's message and leaves the file alone, instead of being skipped while
+# push reports success.
+function(qt_scenario_push_malformed_hunk)
+    qt_begin_test("push_malformed_hunk")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nb\nc\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "m.patch\n")
+    # Each case: patch text, then the message expected for it
+    set(patch_1 "*** a/f.txt\n--- b/f.txt\n***************\n*** 1,2 ****\n  a\n? b\n--- 1,2 ----\n")
+    set(error_1 "malformed patch at line 6: ? b")
+    # The old section is omitted, but the new section has too few context
+    # lines to stand in for the two lines it names
+    set(patch_2 "*** a/f.txt\n--- b/f.txt\n***************\n*** 1,2 ****\n--- 1,2 ----\n  a\n+ X\n")
+    set(error_2 "line numbers mangled in hunk at line 4")
+    set(patch_3 "--- a/f.txt\n+++ b/f.txt\n@@ -1,1 +1,1 x@@\n-a\n+A\n")
+    set(error_3 "malformed patch at line 3: @@ -1,1 +1,1 x@@")
+    foreach(n 1 2 3)
+        qt_write_file("${QT_WORK_DIR}/patches/m.patch" "${patch_${n}}")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+        qt_assert_failure("${rc}" "push of malformed patch ${n} should fail")
+        qt_combine_output(combined "${out}" "${err}")
+        qt_assert_contains("${combined}" "${error_${n}}" "push should explain malformed patch ${n}")
+        qt_assert_file_text("${QT_WORK_DIR}/f.txt" "a\nb\nc" "malformed patch ${n} should leave f.txt alone")
+    endforeach()
 endfunction()
