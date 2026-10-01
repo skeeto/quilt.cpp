@@ -796,15 +796,53 @@ int cmd_snapshot(QuiltState &q, int argc, char **argv) {
     return 0;
 }
 
-// Built-in diffstat: parse unified diff, produce a summary matching
-// the output of the external diffstat(1) utility with its default
-// options and 80 columns.
+// A context diff hunk's "*** N[,M] ****" or "--- N[,M] ----" line, for
+// a mark of '*' or '-'
+static bool is_context_range(std::string_view line, char mark)
+{
+    std::string head = std::string(3, mark) + ' ';
+    std::string tail = ' ' + std::string(4, mark);
+    if (std::ssize(line) <= std::ssize(head) + std::ssize(tail) ||
+        !line.starts_with(head) || !line.ends_with(tail)) {
+        return false;
+    }
+    line.remove_prefix(head.size());
+    line.remove_suffix(tail.size());
+    return std::ranges::all_of(line, [](char c) {
+        return (c >= '0' && c <= '9') || c == ',';
+    });
+}
+
+// The name diffstat(1) lists a file under, given the labels of its old
+// and new versions in the diff's file header: the new label, or the old
+// one for a deleted file, without its timestamp and first path component
+static std::string diffstat_name(std::string_view old_label,
+                                 std::string_view new_label)
+{
+    auto strip = [](std::string_view label) {
+        ptrdiff_t tab = str_find(label, '\t');
+        if (tab >= 0) label = label.substr(0, checked_cast<size_t>(tab));
+        ptrdiff_t slash = str_find(label, '/');
+        if (slash >= 0) label.remove_prefix(checked_cast<size_t>(slash + 1));
+        return std::string(label);
+    };
+    std::string name = strip(new_label);
+    if (name == "dev/null" || new_label.starts_with("/dev/null")) {
+        name = strip(old_label);
+    }
+    return name;
+}
+
+// Built-in diffstat: parse a unified or context diff, produce a summary
+// matching the output of the external diffstat(1) utility with its
+// default options and 80 columns.
 static std::string generate_diffstat(std::string_view diff)
 {
     struct FileStat {
         std::string name;
-        ptrdiff_t added   = 0;
-        ptrdiff_t removed = 0;
+        ptrdiff_t added    = 0;
+        ptrdiff_t removed  = 0;
+        ptrdiff_t modified = 0;  // "! " lines of a context diff, both sides
     };
 
     // diffstat(1) lists files in byte order by name, the order refresh
@@ -813,33 +851,20 @@ static std::string generate_diffstat(std::string_view diff)
     auto lines = split_lines(diff);
 
     for (ptrdiff_t i = 0; i < std::ssize(lines); ++i) {
-        const auto &line = lines[checked_cast<size_t>(i)];
+        const std::string &line = lines[checked_cast<size_t>(i)];
+        std::string_view next;
+        if (i + 1 < std::ssize(lines)) next = lines[checked_cast<size_t>(i + 1)];
 
-        // Detect file header: "--- a/file" followed by "+++ b/file"
-        if (line.starts_with("--- ") &&
-            i + 1 < std::ssize(lines) &&
-            lines[checked_cast<size_t>(i + 1)].starts_with("+++ ")) {
-            const auto &plus_line = lines[checked_cast<size_t>(i + 1)];
-
-            // Extract filename from +++ line, strip "b/" prefix
-            auto name = plus_line.substr(4);
-            // Strip trailing timestamp (tab-separated)
-            auto tab = str_find(name, '\t');
-            if (tab >= 0) name = name.substr(0, checked_cast<size_t>(tab));
-            // Strip one leading path component (a/ or b/ prefix)
-            auto slash = str_find(name, '/');
-            if (slash >= 0) name = name.substr(checked_cast<size_t>(slash + 1));
-            // /dev/null means new or deleted file — use --- line instead
-            if (name == "dev/null" || plus_line.substr(4).starts_with("/dev/null")) {
-                name = lines[checked_cast<size_t>(i)].substr(4);
-                tab = str_find(name, '\t');
-                if (tab >= 0) name = name.substr(0, checked_cast<size_t>(tab));
-                slash = str_find(name, '/');
-                if (slash >= 0) name = name.substr(checked_cast<size_t>(slash + 1));
-            }
-
-            stats.push_back({std::string(name), 0, 0});
-            i += 1;  // skip +++ line
+        // A file header: "--- old" then "+++ new" in a unified diff, or
+        // "*** old" then "--- new" in a context diff, unlike a context
+        // hunk's "*** N,M ****" and "--- N,M ----" lines
+        bool unified = line.starts_with("--- ") && next.starts_with("+++ ");
+        bool context = line.starts_with("*** ") && next.starts_with("--- ") &&
+                       !is_context_range(line, '*') && !is_context_range(next, '-');
+        if (unified || context) {
+            stats.push_back({diffstat_name(std::string_view(line).substr(4),
+                                           next.substr(4))});
+            i += 1;  // skip the new version's label
             continue;
         }
 
@@ -849,6 +874,8 @@ static std::string generate_diffstat(std::string_view diff)
             stats.back().added++;
         else if (line.starts_with("-") && !line.starts_with("---"))
             stats.back().removed++;
+        else if (line.starts_with("!"))
+            stats.back().modified++;
     }
 
     // Like diffstat(1), an empty diff gives just the summary
@@ -861,24 +888,25 @@ static std::string generate_diffstat(std::string_view diff)
     ptrdiff_t plot_scale = 0;
     for (const auto &s : stats) {
         name_width = std::max(name_width, std::ssize(s.name) + 1);
-        plot_scale = std::max(plot_scale, s.added + s.removed);
+        plot_scale = std::max(plot_scale, s.added + s.removed + s.modified);
     }
     ptrdiff_t plot_width = std::max(80 - name_width - 8, ptrdiff_t{10});
     plot_scale = std::max(plot_scale, plot_width);
 
     std::string result;
-    ptrdiff_t total_added = 0, total_removed = 0;
+    ptrdiff_t total_added = 0, total_removed = 0, total_modified = 0;
     ptrdiff_t total_files = std::ssize(stats);
 
     for (const auto &s : stats) {
         total_added += s.added;
         total_removed += s.removed;
+        total_modified += s.modified;
 
         result += ' ';
         result += s.name;
         result.append(checked_cast<size_t>(name_width - std::ssize(s.name)), ' ');
         result += '|';
-        std::string total = std::to_string(s.added + s.removed);
+        std::string total = std::to_string(s.added + s.removed + s.modified);
         result.append(checked_cast<size_t>(std::max(5 - std::ssize(total), ptrdiff_t{0})), ' ');
         result += total;
         result += ' ';
@@ -886,7 +914,8 @@ static std::string generate_diffstat(std::string_view diff)
         // diffstat(1)'s plot_num, including how it carries the remainder
         // from one mark to the next
         ptrdiff_t extra = 0;
-        for (auto [count, mark] : {std::pair{s.added, '+'}, std::pair{s.removed, '-'}}) {
+        for (auto [count, mark] : {std::pair{s.added, '+'}, std::pair{s.removed, '-'},
+                                   std::pair{s.modified, '!'}}) {
             if (count == 0) continue;
             ptrdiff_t product = plot_width * count;
             ptrdiff_t bars = (product + extra) / plot_scale;
@@ -909,6 +938,11 @@ static std::string generate_diffstat(std::string_view diff)
         result += ", ";
         result += std::to_string(total_removed);
         result += (total_removed == 1) ? " deletion(-)" : " deletions(-)";
+    }
+    if (total_modified > 0) {
+        result += ", ";
+        result += std::to_string(total_modified);
+        result += (total_modified == 1) ? " modification(!)" : " modifications(!)";
     }
     result += '\n';
 

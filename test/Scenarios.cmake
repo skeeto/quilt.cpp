@@ -262,6 +262,7 @@ set(QUILT_TEST_SCENARIOS
     refresh_diffstat_delete_file
     refresh_diffstat_padding
     refresh_diffstat_scale
+    refresh_diffstat_context
     refresh_diffstat_twice
     refresh_diffstat_header_replace
     refresh_diffstat_double_newline
@@ -7975,6 +7976,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_push_missing_file()
     elseif(scenario STREQUAL "refresh_diffstat_scale")
         qt_scenario_refresh_diffstat_scale()
+    elseif(scenario STREQUAL "refresh_diffstat_context")
+        qt_scenario_refresh_diffstat_context()
     elseif(scenario STREQUAL "diff_combine_shadowing")
         qt_scenario_diff_combine_shadowing()
     elseif(scenario STREQUAL "fold_patch_opts_fuzz")
@@ -8832,6 +8835,62 @@ function(qt_scenario_refresh_diffstat_scale)
  4 files changed, 209 insertions(+), 9 deletions(-)
 
 " "diffstat should be scaled like diffstat(1)")
+endfunction()
+
+# refresh --diffstat counts a context diff like diffstat(1): "!" lines on
+# both sides are modifications, drawn and summed after insertions and
+# deletions, and a second refresh replaces the diffstat where it stands
+function(qt_scenario_refresh_diffstat_context)
+    qt_begin_test("refresh_diffstat_context")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nb\n")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "1\n2\n3\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt g.txt MESSAGE "add failed")
+    qt_quilt_ok(ARGS header -r INPUT "Desc\n" MESSAGE "header -r failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nB\n")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "1\n3\n4\n")
+    set(refresh_args refresh -p ab -c --no-index --no-timestamps --diffstat)
+    qt_quilt_ok(ARGS ${refresh_args} MESSAGE "refresh -c --diffstat failed")
+    qt_read_file_raw(patch_text "${QT_WORK_DIR}/patches/p.patch")
+    qt_assert_equal("${patch_text}" [=[Desc
+---
+ f.txt |    2 !!
+ g.txt |    2 +-
+ 2 files changed, 1 insertion(+), 1 deletion(-), 2 modifications(!)
+
+*** a/f.txt
+--- b/f.txt
+***************
+*** 1,2 ****
+  a
+! b
+--- 1,2 ----
+  a
+! B
+*** a/g.txt
+--- b/g.txt
+***************
+*** 1,3 ****
+  1
+- 2
+  3
+--- 1,3 ----
+  1
+  3
++ 4
+]=] "refresh -c should add a diffstat of the context diff")
+
+    qt_write_file("${QT_WORK_DIR}/g.txt" "1\n3\n4\n5\n")
+    qt_quilt_ok(ARGS ${refresh_args} MESSAGE "second refresh -c --diffstat failed")
+    qt_read_file_raw(patch_text "${QT_WORK_DIR}/patches/p.patch")
+    qt_assert_contains("${patch_text}" [=[Desc
+---
+ f.txt |    2 !!
+ g.txt |    3 ++-
+ 2 files changed, 2 insertions(+), 1 deletion(-), 2 modifications(!)
+
+*** a/f.txt
+]=] "refresh -c should replace the diffstat")
 endfunction()
 
 # diff_combine_shadowing: quilt diff --combine -P patch2 when patch3 (above) also tracks the file
