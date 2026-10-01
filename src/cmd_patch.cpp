@@ -2240,7 +2240,7 @@ static bool revert_file_in_patch(const QuiltState &q, std::string_view patch,
 }
 
 // Lexically normalize a relative path ("./f", "d//f", "d/../f" become
-// "f"), the form builtin_patch uses for file names.
+// "f"), so that two names for the same file compare equal.
 static std::string normalize_relative_path(std::string_view path) {
     std::vector<std::string_view> parts;
     while (!path.empty()) {
@@ -2324,17 +2324,27 @@ int cmd_revert(QuiltState &q, int argc, char **argv) {
     std::string patch_text = read_file(patch_file);
     int strip_level = q.patch_strip_level.count(patch)
         ? q.patch_strip_level.at(patch) : 1;
+    bool reverse = q.patch_reversed.contains(patch);
+    auto targets = patch_target_files(patch_text, strip_level, reverse);
 
     for (const auto &file : files) {
         // Build the clean post-patch state by applying patch to backup,
-        // under the name the patch uses for the file
+        // under the name the patch uses for the file. builtin_patch keys
+        // files by their names in the patch headers, which may be spelled
+        // differently from the name given ("./f" for "f").
         std::string backup_content = read_file(revert_backup_path(q, patch, file));
         std::string name = normalize_relative_path(file);
+        for (const auto &target : targets) {
+            if (normalize_relative_path(target) == name) {
+                name = target;
+                break;
+            }
+        }
         std::map<std::string, std::string> memfs;
         memfs[name] = backup_content;
         PatchOptions opts;
         opts.strip_level = strip_level;
-        opts.reverse = q.patch_reversed.contains(patch);
+        opts.reverse = reverse;
         opts.quiet = true;
         opts.fs = &memfs;
         builtin_patch(patch_text, opts);

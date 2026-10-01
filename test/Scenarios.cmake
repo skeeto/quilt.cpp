@@ -529,6 +529,7 @@ set(QUILT_TEST_SCENARIOS
     revert_patch_resolution
     revert_no_series
     revert_reversed_patch
+    revert_dot_slash_headers
     getopt_push_pop
     getopt_stack_queries
 )
@@ -8449,6 +8450,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_revert_no_series()
     elseif(scenario STREQUAL "revert_reversed_patch")
         qt_scenario_revert_reversed_patch()
+    elseif(scenario STREQUAL "revert_dot_slash_headers")
+        qt_scenario_revert_dot_slash_headers()
     elseif(scenario STREQUAL "refresh_z_strip_migration")
         qt_scenario_refresh_z_strip_migration()
     elseif(scenario STREQUAL "annotate_P_missing_arg")
@@ -15208,6 +15211,44 @@ function(qt_scenario_revert_reversed_patch)
     qt_assert_success("${rc}" "second revert failed")
     qt_assert_equal("${out}" "File a.txt is unchanged\n"
                     "a reverted file should be unchanged")
+endfunction()
+
+# revert finds a file in a patch whose headers spell its name with "./",
+# however the file is named on the command line
+function(qt_scenario_revert_dot_slash_headers)
+    qt_begin_test("revert_dot_slash_headers")
+    qt_write_file("${QT_TEST_BASE}/d.diff" [=[--- ./a.txt
++++ ./a.txt
+@@ -1 +1 @@
+-a1
++a2
+--- ./sub/s.txt
++++ ./sub/s.txt
+@@ -1 +1 @@
+-s1
++s2
+]=])
+    qt_write_file("${QT_WORK_DIR}/a.txt" "a1\n")
+    qt_write_file("${QT_WORK_DIR}/sub/s.txt" "s1\n")
+    qt_quilt_ok(ARGS import -p0 "${QT_TEST_BASE}/d.diff" MESSAGE "import failed")
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+
+    foreach(name a.txt ./a.txt)
+        qt_write_file("${QT_WORK_DIR}/a.txt" "dirty\n")
+        qt_quilt_ok(OUTPUT out ARGS revert ${name} MESSAGE "revert ${name} failed")
+        qt_assert_equal("${out}" "Changes to ${name} in patch d.diff reverted\n"
+                        "revert ${name} should report the change")
+        qt_assert_file_text("${QT_WORK_DIR}/a.txt" "a2"
+                            "revert ${name} should restore the post-patch content")
+    endforeach()
+
+    qt_write_file("${QT_WORK_DIR}/sub/s.txt" "dirty\n")
+    qt_quilt_ok(OUTPUT out ARGS revert s.txt WORKING_DIRECTORY "${QT_WORK_DIR}/sub"
+                MESSAGE "revert s.txt in sub failed")
+    qt_assert_equal("${out}" "Changes to sub/s.txt in patch d.diff reverted\n"
+                    "revert from a subdirectory should report the change")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/s.txt" "s2"
+                        "revert from a subdirectory should restore the post-patch content")
 endfunction()
 
 # Like upstream patch_header and patch_body, only "Index: x", "diff -",
