@@ -176,6 +176,14 @@ std::optional<std::string> find_applied_patch(const QuiltState &q, std::string_v
     return std::string(patch);
 }
 
+bool valid_color_option(std::string_view arg) {
+    if (arg == "--color") return true;
+    if (!arg.starts_with("--color=")) return false;
+    std::string_view when = arg.substr(8);
+    return when.empty() || when == "always" || when == "auto" ||
+           when == "tty" || when == "never";
+}
+
 std::string trim(std::string_view s) {
     while (!s.empty() && (s.front() == ' ' || s.front() == '\t' ||
                           s.front() == '\r' || s.front() == '\n'))

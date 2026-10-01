@@ -1877,12 +1877,12 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
             continue;
         }
         if (arg == "--color" || arg.starts_with("--color=")) {
-            if (arg.starts_with("--color=")) {
-                auto val = arg.substr(8);
-                if (val != "always" && val != "auto" && val != "never") {
-                    err("Invalid --color value: "); err_line(val);
-                    return 1;
-                }
+            if (!valid_color_option(arg)) {
+                err_line("Usage: quilt diff [-p n|-p ab] [-u|-U num|-c|-C num] "
+                         "[--combine patch|-z] [-R] [-P patch] [--snapshot] "
+                         "[--diff=utility] [--no-timestamps] [--no-index] [--sort] "
+                         "[--color[=always|auto|never]] [file ...]");
+                return 1;
             }
             i += 1;
             continue;

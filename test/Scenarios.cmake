@@ -280,6 +280,7 @@ set(QUILT_TEST_SCENARIOS
     header_edit_backup
     header_replace_no_newline
     color_option_accepted
+    color_option_invalid
     trace_option_accepted
     fold_reverse_no_newline
     fold_patch_opts
@@ -424,7 +425,7 @@ set(QUILT_TEST_SCENARIOS
     revert_P_unapplied
     snapshot_no_series
     series_empty_and_comments
-    series_color_always
+    color_option_forms
     files_all_no_applied
     delete_n_explicit
     delete_backup_without_r
@@ -613,7 +614,7 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     header_no_patch_applied
     header_empty_series
     unknown_option_rejected
-    color_option_invalid
+    color_option_no_escapes
     fold_empty_stdin
     diff_external_context_format
     diff_external_context_multiline
@@ -5396,30 +5397,106 @@ function(qt_scenario_color_option_accepted)
     qt_quilt_ok(ARGS push --color=auto MESSAGE "push --color=auto should succeed")
 endfunction()
 
+# Three patches on f.txt for the --color scenarios: a.patch applied, an
+# empty b.patch on top, and c.patch unapplied, whose hunk applies one line
+# away from where it says (upstream colors the offset in push output).
+function(qt_setup_color_stack)
+    qt_write_file("${QT_WORK_DIR}/f.txt" "head\nx\nl2\nl3\n")
+    qt_quilt_ok(ARGS new a.patch MESSAGE "new a failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add a failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "head\na\nl2\nl3\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh a failed")
+    qt_quilt_ok(ARGS new b.patch MESSAGE "new b failed")
+    qt_write_file("${QT_WORK_DIR}/patches/c.patch"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n a\n l2\n-l3\n+c\n")
+    qt_append_file("${QT_WORK_DIR}/patches/series" "c.patch\n")
+endfunction()
+
+# Run each command that takes --color with the given form and QUILT_COLORS,
+# requiring success, and return everything they printed in out_var.
+function(qt_run_color_commands out_var form colors)
+    set(all "")
+    foreach(args IN ITEMS "series" "series;-v" "patches;f.txt" "patches;-v;f.txt"
+                          "diff;-P;a.patch" "push")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ENV "QUILT_COLORS=${colors}"
+                 ARGS ${args} ${form})
+        string(REPLACE ";" " " shown "${args} ${form}")
+        qt_assert_success("${rc}" "${shown} should succeed")
+        string(APPEND all "${out}${err}")
+    endforeach()
+    qt_assert_contains("${all}" "Now at patch c.patch" "push ${form} should push c.patch")
+    qt_quilt_ok(ARGS pop MESSAGE "pop after push ${form} failed")
+    set(${out_var} "${all}" PARENT_SCOPE)
+endfunction()
+
+# Every --color form upstream accepts: none, an empty value, always, auto,
+# tty, and never. Upstream colors some of these, so only success is checked.
+function(qt_scenario_color_option_forms)
+    qt_begin_test("color_option_forms")
+    qt_setup_color_stack()
+    foreach(form IN ITEMS "--color" "--color=" "--color=always" "--color=auto"
+                          "--color=tty" "--color=never")
+        qt_run_color_commands(out "${form}" "")
+    endforeach()
+endfunction()
+
+# Quilt.cpp accepts --color but never colors (README), whatever the form or
+# QUILT_COLORS says
+function(qt_scenario_color_option_no_escapes)
+    qt_begin_test("color_option_no_escapes")
+    string(ASCII 27 esc)
+    qt_setup_color_stack()
+    foreach(form IN ITEMS "--color" "--color=" "--color=always" "--color=auto"
+                          "--color=tty" "--color=never")
+        qt_run_color_commands(out "${form}" "series_app=4:diff_add=1")
+        qt_assert_not_contains("${out}" "${esc}" "${form} should not emit escape sequences")
+    endforeach()
+endfunction()
+
+# An invalid --color value prints the usage and fails, like upstream
 function(qt_scenario_color_option_invalid)
     qt_begin_test("color_option_invalid")
-    qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
-    qt_quilt_ok(ARGS new ci.patch MESSAGE "new failed")
-    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
-    qt_write_file("${QT_WORK_DIR}/f.txt" "changed\n")
-    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_setup_color_stack()
+    foreach(value IN ITEMS "bogus" "ALWAYS")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS series --color=${value})
+        qt_assert_equal("${rc}" "1" "series --color=${value} should fail")
+        qt_combine_output(combined "${out}" "${err}")
+        qt_assert_contains("${combined}"
+            "Usage: quilt series [--color[=always|auto|never]] [-v]"
+            "series --color=${value} should print usage")
+        qt_assert_not_contains("${combined}" "a.patch" "series --color=${value} should not list patches")
 
-    # Invalid --color value should fail
-    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS diff --color=bogus)
-    qt_assert_not_equal("${rc}" "0" "diff --color=bogus should fail")
-    qt_assert_contains("${err}" "Invalid --color value" "diff --color=bogus error message")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS patches --color=${value} f.txt)
+        qt_assert_equal("${rc}" "1" "patches --color=${value} should fail")
+        qt_combine_output(combined "${out}" "${err}")
+        qt_assert_contains("${combined}"
+            "Usage: quilt patches [-v] [--color[=always|auto|never]] {file} [files...]"
+            "patches --color=${value} should print usage")
 
-    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS series --color=bogus)
-    qt_assert_not_equal("${rc}" "0" "series --color=bogus should fail")
-    qt_assert_contains("${err}" "Invalid --color value" "series --color=bogus error message")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS diff --color=${value})
+        qt_assert_equal("${rc}" "1" "diff --color=${value} should fail")
+        qt_combine_output(combined "${out}" "${err}")
+        qt_assert_contains("${combined}"
+            "Usage: quilt diff [-p n|-p ab] [-u|-U num|-c|-C num] [--combine patch|-z] [-R] [-P patch] [--snapshot] [--diff=utility] [--no-timestamps] [--no-index] [--sort] [--color[=always|auto|never]] [file ...]"
+            "diff --color=${value} should print usage")
 
-    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS patches --color=bogus f.txt)
-    qt_assert_not_equal("${rc}" "0" "patches --color=bogus should fail")
-    qt_assert_contains("${err}" "Invalid --color value" "patches --color=bogus error message")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --color=${value})
+        qt_assert_equal("${rc}" "1" "push --color=${value} should fail")
+        qt_combine_output(combined "${out}" "${err}")
+        qt_assert_contains("${combined}"
+            "Usage: quilt push [-afqvm] [--fuzz=N] [--merge[=merge|diff3]] [--leave-rejects] [--color[=always|auto|never]] [--refresh] [num|patch]"
+            "push --color=${value} should print usage")
+        qt_assert_file_text("${QT_WORK_DIR}/.pc/applied-patches" "a.patch\nb.patch"
+            "push --color=${value} should not push")
+    endforeach()
 
-    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --color=bogus)
-    qt_assert_not_equal("${rc}" "0" "push --color=bogus should fail")
-    qt_assert_contains("${err}" "Invalid --color value" "push --color=bogus error message")
+    # Without a file, patches prints the same usage
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS patches)
+    qt_assert_equal("${rc}" "1" "patches without a file should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}"
+        "Usage: quilt patches [-v] [--color[=always|auto|never]] {file} [files...]"
+        "patches without a file should print usage")
 endfunction()
 
 function(qt_scenario_trace_option_accepted)
@@ -7608,6 +7685,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_color_option_accepted()
     elseif(scenario STREQUAL "color_option_invalid")
         qt_scenario_color_option_invalid()
+    elseif(scenario STREQUAL "color_option_no_escapes")
+        qt_scenario_color_option_no_escapes()
     elseif(scenario STREQUAL "trace_option_accepted")
         qt_scenario_trace_option_accepted()
     elseif(scenario STREQUAL "applied_with_target")
@@ -8212,8 +8291,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_snapshot_no_series()
     elseif(scenario STREQUAL "series_empty_and_comments")
         qt_scenario_series_empty_and_comments()
-    elseif(scenario STREQUAL "series_color_always")
-        qt_scenario_series_color_always()
+    elseif(scenario STREQUAL "color_option_forms")
+        qt_scenario_color_option_forms()
     elseif(scenario STREQUAL "files_all_no_applied")
         qt_scenario_files_all_no_applied()
     elseif(scenario STREQUAL "delete_n_explicit")
@@ -12181,27 +12260,6 @@ function(qt_scenario_series_empty_and_comments)
     qt_write_file("${QT_WORK_DIR}/patches/series" "# comment\n\na.patch\n# another\n")
     qt_quilt_ok(OUTPUT out2 ERROR err2 ARGS series MESSAGE "series with comments failed")
     qt_assert_equal("${out2}" "a.patch\n" "comments and blank lines should be skipped")
-endfunction()
-
-function(qt_scenario_series_color_always)
-    qt_begin_test("series_color_always")
-    string(ASCII 27 esc)
-    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
-    qt_quilt_ok(ARGS new a.patch MESSAGE "new a failed")
-    qt_quilt_ok(ARGS add f.txt MESSAGE "add a failed")
-    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
-    qt_quilt_ok(ARGS refresh MESSAGE "refresh a failed")
-    qt_quilt_ok(ARGS new b.patch MESSAGE "new b failed")
-    qt_quilt_ok(ARGS new c.patch MESSAGE "new c failed")
-    qt_quilt_ok(ARGS pop MESSAGE "pop c failed")
-    # Clear QUILT_COLORS so the default colors apply
-    qt_quilt_ok(ENV "QUILT_COLORS=" OUTPUT out ERROR err ARGS series --color=always
-                MESSAGE "series --color=always failed")
-    qt_assert_equal("${out}"
-        "${esc}[32ma.patch${esc}[00m\n${esc}[33mb.patch${esc}[00m\n${esc}[00mc.patch${esc}[00m\n"
-        "applied, top, and unapplied patches should be colored")
-    qt_quilt_ok(OUTPUT out2 ERROR err2 ARGS series --color=never MESSAGE "series --color=never failed")
-    qt_assert_equal("${out2}" "a.patch\nb.patch\nc.patch\n" "color=never should not emit escape sequences")
 endfunction()
 
 function(qt_scenario_files_all_no_applied)

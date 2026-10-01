@@ -652,12 +652,6 @@ void fd_write_stderr(std::string_view s)
         write_console_or_file(h, s);
 }
 
-bool stdout_is_tty()
-{
-    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
-    return h != INVALID_HANDLE_VALUE && GetFileType(h) == FILE_TYPE_CHAR;
-}
-
 std::string read_stdin()
 {
     HANDLE h = GetStdHandle(STD_INPUT_HANDLE);

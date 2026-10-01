@@ -173,6 +173,11 @@ std::string next_filename(std::string_view patch);
 // "is not in series" or "is not applied" and returns nullopt.
 std::optional<std::string> find_applied_patch(const QuiltState &q, std::string_view name);
 
+// Whether a --color or --color=when argument is valid. Like upstream, when
+// may be empty, always, auto, tty, or never. Quilt.cpp never colors its
+// output, so commands discard the option once it checks out.
+bool valid_color_option(std::string_view arg);
+
 // Resolve a user-provided file path relative to the current subdirectory.
 inline std::string subdir_path(const QuiltState &q, std::string_view file) {
     if (q.subdir.empty()) return std::string(file);

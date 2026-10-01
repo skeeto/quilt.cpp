@@ -159,9 +159,10 @@ natural outgrowth of the original's shell-script nature.
 
 There is no built-in pager support. `LESS` and `QUILT_PAGER` do nothing.
 
-The `--color` option is parsed, validated, and discarded. `QUILT_COLORS`
-is not examined. Quilt.cpp does not produce color output because it is not
-intended for children.
+The `--color` option is parsed, validated, and discarded. Like Quilt's,
+it may be given alone or as `--color=` with an empty value, `always`,
+`auto`, `tty`, or `never`. `QUILT_COLORS` is not examined. Quilt.cpp does
+not produce color output because it is not intended for children.
 
 
 [Quilt]: https://savannah.nongnu.org/projects/quilt

@@ -233,7 +233,7 @@ EOF
 
 Prints all patches in the series file (both applied and unapplied). With `--color`, applied patches appear in **green**, the topmost patch in **yellow/brown**, and unapplied patches in the default color.
 
-#### `quilt patches [-v] [--color] {file} [files...]`
+#### `quilt patches [-v] [--color[=always|auto|never]] {file} [files...]`
 
 Prints which patches modify the specified file(s). Works for both applied and unapplied patches, though unapplied patches use a **heuristic** (parsing patch files) which is slower than scanning `.pc/` directories for applied patches. This is the inverse of `quilt files`.
 
@@ -507,6 +507,8 @@ QUILT_PATCH_OPTS="--reject-format=unified"
 | `LESS` | `-FRSX` | Arguments for the `less` pager |
 
 ### Color configuration
+
+The `diff`, `patches`, `push`, and `series` commands take `--color[=always|auto|never]`. A bare `--color` or an empty value (`--color=`) means `always`, `tty` is an alias for `auto` (color only when stdout is a terminal), and any other value prints the command's usage and exits 1. **Quilt.cpp** accepts and validates the same forms but never produces color output, and it does not read `QUILT_COLORS`.
 
 `QUILT_COLORS` uses the format `format_name=SGR_value:format_name=SGR_value:...`:
 

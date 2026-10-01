@@ -846,17 +846,17 @@ int cmd_patches(QuiltState &q, int argc, char **argv) {
     bool opt_verbose = false;
     std::vector<std::string> target_files;
 
+    constexpr std::string_view usage =
+        "Usage: quilt patches [-v] [--color[=always|auto|never]] {file} [files...]";
+
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
         if (arg == "-v") {
             opt_verbose = true;
         } else if (arg == "--color" || arg.starts_with("--color=")) {
-            if (arg.starts_with("--color=")) {
-                auto val = arg.substr(8);
-                if (val != "always" && val != "auto" && val != "never") {
-                    err("Invalid --color value: "); err_line(val);
-                    return 1;
-                }
+            if (!valid_color_option(arg)) {
+                err_line(usage);
+                return 1;
             }
         } else if (arg[0] == '-') {
             err("Unrecognized option: "); err_line(arg);
@@ -867,7 +867,7 @@ int cmd_patches(QuiltState &q, int argc, char **argv) {
     }
 
     if (target_files.empty()) {
-        err_line("Usage: quilt patches [-v] [--color] file [files...]");
+        err_line(usage);
         return 1;
     }
 

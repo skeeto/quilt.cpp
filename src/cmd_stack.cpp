@@ -145,21 +145,13 @@ static void show_rollback(const QuiltState &q, std::span<const std::string> file
 
 int cmd_series(QuiltState &q, int argc, char **argv) {
     bool verbose = false;
-    // color: 0=never, 1=auto, 2=always
-    int color_mode = 0;
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
         if (arg == "-v") {
             verbose = true;
-        } else if (arg == "--color") {
-            color_mode = 1;  // auto
-        } else if (arg.starts_with("--color=")) {
-            auto val = arg.substr(8);
-            if (val == "always") color_mode = 2;
-            else if (val == "auto") color_mode = 1;
-            else if (val == "never") color_mode = 0;
-            else {
-                err("Invalid --color value: "); err_line(val);
+        } else if (arg == "--color" || arg.starts_with("--color=")) {
+            if (!valid_color_option(arg)) {
+                err_line("Usage: quilt series [--color[=always|auto|never]] [-v]");
                 return 1;
             }
         } else if (arg[0] == '-') {
@@ -167,8 +159,6 @@ int cmd_series(QuiltState &q, int argc, char **argv) {
             return 1;
         }
     }
-
-    bool use_color = (color_mode == 2) || (color_mode == 1 && stdout_is_tty());
 
     if (q.series.empty()) {
         if (q.series_file_exists) {
@@ -190,20 +180,7 @@ int cmd_series(QuiltState &q, int argc, char **argv) {
                 out("  ");
             }
         }
-        std::string name = format_patch(q, patch);
-        if (use_color) {
-            if (!q.applied.empty() && patch == q.applied.back()) {
-                out("\033[33m");  // yellow for top
-            } else if (q.is_applied(patch)) {
-                out("\033[32m");  // green for applied
-            } else {
-                out("\033[00m");  // default for unapplied
-            }
-            out(name);
-            out_line("\033[00m");
-        } else {
-            out_line(name);
-        }
+        out_line(format_patch(q, patch));
     }
     return 0;
 }
@@ -454,12 +431,11 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
         else if (arg == "--leave-rejects") { leave_rejects = true; }
         else if (arg == "--refresh") { do_refresh = true; }
         else if (arg == "--color" || arg.starts_with("--color=")) {
-            if (arg.starts_with("--color=")) {
-                auto val = arg.substr(8);
-                if (val != "always" && val != "auto" && val != "never") {
-                    err("Invalid --color value: "); err_line(val);
-                    return 1;
-                }
+            if (!valid_color_option(arg)) {
+                err_line("Usage: quilt push [-afqvm] [--fuzz=N] [--merge[=merge|diff3]] "
+                         "[--leave-rejects] [--color[=always|auto|never]] [--refresh] "
+                         "[num|patch]");
+                return 1;
             }
         }
         else if (arg[0] == '-') {
