@@ -489,6 +489,12 @@ static bool is_placeholder_copy(std::string_view path)
     return file_exists(path) && read_file(path).empty();
 }
 
+// Detect binary content (null bytes in the first 8 KB)
+static bool is_binary_data(std::string_view data)
+{
+    return str_find(data.substr(0, 8192), '\0') >= 0;
+}
+
 // Parse QUILT_DIFF_OPTS and extract context line count if present.
 // Returns the context line count (-1 if not specified in opts).
 static int parse_diff_opts_context(std::span<const std::string> opts)
@@ -536,14 +542,14 @@ static std::string generate_path_diff(const QuiltState &q,
     bool new_missing = new_path.empty() || !file_exists(new_path) ||
         (new_placeholder && is_placeholder_copy(new_path));
 
-    // Detect binary files (null bytes in first 8 KB)
-    auto is_binary = [](std::string_view path) {
-        std::string data = read_file(path);
-        size_t check_len = data.size() < 8192 ? data.size() : 8192;
-        return data.find('\0', 0) < check_len;
-    };
-    if ((!old_missing && is_binary(old_path)) ||
-        (!new_missing && is_binary(new_path))) {
+    // Identical files never differ, binary or not. Only a changed binary
+    // file is reported, which callers treat as a failed diff.
+    std::string old_data = old_missing ? std::string() : read_file(old_path);
+    std::string new_data = new_missing ? std::string() : read_file(new_path);
+    if (old_data == new_data) {
+        return {};
+    }
+    if (is_binary_data(old_data) || is_binary_data(new_data)) {
         return "Binary files differ\n";
     }
 
@@ -1391,6 +1397,10 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
                     this_backup, true, next_backup, true,
                     p_format, false, {}, ctx_lines, diff_format, no_timestamps,
                     diff_algorithm);
+                if (diff_out.starts_with("Binary files ")) {
+                    err("Diff failed on file '"); err(file); err_line("', aborting");
+                    return 1;
+                }
                 if (!diff_out.empty()) {
                     if (!no_index) {
                         std::string idx_name;
@@ -1855,6 +1865,17 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
             out(d);
     };
 
+    // A changed binary file is reported as "Binary files differ". The
+    // original quilt aborts the whole command when diff fails, but with an
+    // external --diff utility it ignores the utility's exit status.
+    auto abort_on_binary = [&](std::string_view diff_out, std::string_view file) {
+        if (diff_cmd_base.empty() && diff_out.starts_with("Binary files ")) {
+            err("Diff failed on file '"); err(file); err_line("', aborting");
+            return true;
+        }
+        return false;
+    };
+
     auto patches = patch_range_for_diff(q, patch);
     std::vector<std::string> tracked;
     if (against_snapshot) {
@@ -2006,16 +2027,23 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
 
             std::string diff_out;
             if (diff_cmd_base.empty()) {
-                // Use built-in diff
-                int ctx = ctx_lines;
-                auto extra_diff_opts = shell_split(get_env("QUILT_DIFF_OPTS"));
-                int opts_ctx = parse_diff_opts_context(extra_diff_opts);
-                if (opts_ctx >= 0) ctx = opts_ctx;
+                std::string old_data = old_f == "/dev/null" ? std::string() : read_file(old_f);
+                std::string new_data = new_f == "/dev/null" ? std::string() : read_file(new_f);
+                if (old_data != new_data &&
+                    (is_binary_data(old_data) || is_binary_data(new_data))) {
+                    diff_out = "Binary files differ\n";
+                } else {
+                    // Use built-in diff
+                    int ctx = ctx_lines;
+                    auto extra_diff_opts = shell_split(get_env("QUILT_DIFF_OPTS"));
+                    int opts_ctx = parse_diff_opts_context(extra_diff_opts);
+                    if (opts_ctx >= 0) ctx = opts_ctx;
 
-                DiffResult dr = builtin_diff(old_f, new_f, ctx,
-                                             old_label, new_label, diff_format,
-                                             diff_algorithm);
-                diff_out = std::move(dr.output);
+                    DiffResult dr = builtin_diff(old_f, new_f, ctx,
+                                                 old_label, new_label, diff_format,
+                                                 diff_algorithm);
+                    diff_out = std::move(dr.output);
+                }
             } else {
                 std::vector<std::string> diff_cmd = diff_cmd_base;
                 auto extra_diff_opts = shell_split(get_env("QUILT_DIFF_OPTS"));
@@ -2031,6 +2059,10 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                 if (result.exit_code == 1) {
                     diff_out = std::move(result.out);
                 }
+            }
+            if (abort_on_binary(diff_out, file)) {
+                delete_dir_recursive(tmp_dir);
+                return 1;
             }
             if (!diff_out.empty()) {
                 if (!no_index) {
@@ -2071,6 +2103,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                 q, file, old_path, old_placeholder, new_path, new_placeholder,
                 p_format, reverse, diff_cmd_base, ctx_lines, diff_format,
                 no_timestamps, diff_algorithm);
+            if (abort_on_binary(diff_out, file)) return 1;
             if (!diff_out.empty()) {
                 if (!no_index) {
                     out("Index: " + (p_format == "0" ? file : p_format == "ab" ? "b/" + file : work_base + "/" + file) + "\n");
@@ -2113,6 +2146,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                 q, file, old_path, true, new_path, new_placeholder,
                 p_format, reverse, diff_cmd_base, ctx_lines, diff_format,
                 no_timestamps, diff_algorithm);
+            if (abort_on_binary(diff_out, file)) return 1;
             if (!diff_out.empty()) {
                 if (!no_index) {
                     out("Index: " + (p_format == "0" ? file : p_format == "ab" ? "b/" + file : work_base + "/" + file) + "\n");
@@ -2146,6 +2180,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                 q, file, old_path, true, new_path, new_placeholder,
                 p_format, reverse, diff_cmd_base, ctx_lines, diff_format,
                 no_timestamps, diff_algorithm);
+            if (abort_on_binary(diff_out, file)) return 1;
             if (!diff_out.empty()) {
                 if (!no_index) {
                     out("Index: " + (p_format == "0" ? file : p_format == "ab" ? "b/" + file : work_base + "/" + file) + "\n");

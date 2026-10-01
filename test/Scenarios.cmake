@@ -379,6 +379,8 @@ set(QUILT_TEST_SCENARIOS
     refresh_invalid_p
     series_invalid_strip_level
     diff_invalid_p
+    diff_binary
+    refresh_binary_shadowed
     diff_z_deleted_file
     diff_z_emptied_file
     diff_z_shadowed
@@ -7612,6 +7614,10 @@ function(qt_run_named_scenario scenario)
         qt_scenario_series_invalid_strip_level()
     elseif(scenario STREQUAL "diff_invalid_p")
         qt_scenario_diff_invalid_p()
+    elseif(scenario STREQUAL "diff_binary")
+        qt_scenario_diff_binary()
+    elseif(scenario STREQUAL "refresh_binary_shadowed")
+        qt_scenario_refresh_binary_shadowed()
     elseif(scenario STREQUAL "diff_z_deleted_file")
         qt_scenario_diff_z_deleted_file()
     elseif(scenario STREQUAL "diff_z_emptied_file")
@@ -10867,6 +10873,54 @@ function(qt_scenario_diff_invalid_p)
     qt_assert_equal("${out}" "" "no diff should be printed")
     qt_assert_contains("${err}" "Cannot diff patches with -p9, please specify -p0, -p1, or -pab instead"
                        "invalid strip level should be rejected")
+endfunction()
+
+function(qt_scenario_diff_binary)
+    qt_begin_test("diff_binary")
+    execute_process(COMMAND ${CMAKE_COMMAND} -E env printf "\\0\\001\\002"
+        OUTPUT_FILE "${QT_WORK_DIR}/f.dat")
+    qt_write_file("${QT_WORK_DIR}/t.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.dat t.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/t.txt" "y\n")
+    # An unchanged binary file is not a difference
+    qt_quilt_ok(OUTPUT out ERROR err ARGS diff MESSAGE "diff with an unchanged binary failed")
+    qt_assert_contains("${out}" "+y" "text change should be shown")
+    qt_assert_not_contains("${out}" "f.dat" "unchanged binary file should not be mentioned")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh with an unchanged binary failed")
+    qt_assert_file_not_contains("${QT_WORK_DIR}/patches/p.patch" "f.dat" "unchanged binary file should not be in the patch")
+    # A changed binary file makes diff fail, in every mode
+    execute_process(COMMAND ${CMAKE_COMMAND} -E env printf "\\0\\003\\004"
+        OUTPUT_FILE "${QT_WORK_DIR}/f.dat")
+    qt_quilt(RESULT rc OUTPUT out2 ERROR err2 ARGS diff)
+    qt_assert_failure("${rc}" "diff should fail on a changed binary file")
+    qt_assert_contains("${err2}" "Diff failed on file 'f.dat', aborting" "binary diff should abort")
+    qt_quilt(RESULT rc3 OUTPUT out3 ERROR err3 ARGS diff -z)
+    qt_assert_failure("${rc3}" "diff -z should fail on a changed binary file")
+    qt_combine_output(combined3 "${out3}" "${err3}")
+    qt_assert_contains("${combined3}" "Diff failed" "binary diff -z should abort")
+    # With an external --diff utility, a changed binary file does not abort
+    qt_quilt_ok(ARGS diff --diff=diff MESSAGE "diff --diff=diff on a binary file failed")
+endfunction()
+
+function(qt_scenario_refresh_binary_shadowed)
+    qt_begin_test("refresh_binary_shadowed")
+    execute_process(COMMAND ${CMAKE_COMMAND} -E env printf "\\0\\001\\002"
+        OUTPUT_FILE "${QT_WORK_DIR}/f.dat")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add f.dat MESSAGE "add p1 failed")
+    execute_process(COMMAND ${CMAKE_COMMAND} -E env printf "\\0\\003\\004"
+        OUTPUT_FILE "${QT_WORK_DIR}/f.dat")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add f.dat MESSAGE "add p2 failed")
+    # p1's change to f.dat is only visible through p2's backup
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh -f p1.patch)
+    qt_assert_failure("${rc}" "refresh of a shadowed binary change should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    # The original quilt names the backup file here
+    qt_assert_contains("${combined}" "Diff failed on file '" "binary diff should abort")
+    qt_assert_contains("${combined}" "f.dat', aborting" "binary diff should abort")
+    qt_assert_not_exists("${QT_WORK_DIR}/patches/p1.patch" "aborted refresh should not write the patch")
 endfunction()
 
 function(qt_scenario_diff_z_deleted_file)
