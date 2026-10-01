@@ -20,6 +20,8 @@ static bool write_applied_checked(const QuiltState &q,
         err_line("Failed to write applied-patches.");
         return false;
     }
+    // Like the original quilt, remove the file once the stack is empty.
+    if (applied.empty()) delete_file(applied_path);
     return true;
 }
 
@@ -112,6 +114,7 @@ int cmd_delete(QuiltState &q, int argc, char **argv) {
     bool opt_backup = false;
     bool opt_next = false;
     std::string_view patch_arg;
+    int positional_count = 0;
 
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
@@ -121,15 +124,20 @@ int cmd_delete(QuiltState &q, int argc, char **argv) {
             opt_backup = true;
         } else if (arg == "-n") {
             opt_next = true;
-        } else if (arg[0] == '-') {
+        } else if (arg.starts_with('-')) {
             err("Unrecognized option: "); err_line(arg);
             return 1;
         } else {
             patch_arg = strip_patches_prefix(q, arg);
+            ++positional_count;
         }
     }
 
     std::string patch;
+    if (positional_count > 1 || (opt_next && positional_count > 0)) {
+        err_line("Usage: quilt delete [-r] [--backup] [patch|-n]");
+        return 1;
+    }
     if (!patch_arg.empty()) {
         patch = patch_arg;
     } else if (opt_next) {
@@ -166,7 +174,12 @@ int cmd_delete(QuiltState &q, int argc, char **argv) {
         }
         // Pop the topmost patch silently (no per-file messages)
         auto tracked = files_in_patch(q, patch);
-        out_line("Removing patch " + patch_path_display(q, patch));
+        if (tracked.empty()) {
+            out_line("Patch " + patch_path_display(q, patch) +
+                     " appears to be empty, removing");
+        } else {
+            out_line("Removing patch " + patch_path_display(q, patch));
+        }
         for (const auto &f : tracked) {
             restore_file(q, patch, f);
         }

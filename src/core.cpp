@@ -810,7 +810,7 @@ static Command commands[] = {
      "Show the patch before the top or a given patch"},
 
     {"delete", cmd_delete,
-     "Usage: quilt delete [-r] [--backup] [-n] [patch]\n"
+     "Usage: quilt delete [-r] [--backup] [patch|-n]\n"
      "\n"
      "Remove the topmost applied patch or a named unapplied patch from\n"
      "the series. The patch file is kept unless -r is given.\n"

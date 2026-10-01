@@ -7,6 +7,9 @@
 static void write_applied_patches(QuiltState &q) {
     std::string path = path_join(q.work_dir, q.pc_dir, "applied-patches");
     write_applied(path, q.applied);
+    // Like the original quilt, remove the file once the stack is empty.
+    // Truncating first means a failed removal leaves no stale entries.
+    if (q.applied.empty()) delete_file(path);
 }
 
 // Parse affected files from a unified diff, stripping path components
@@ -435,7 +438,7 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
         const std::string &name = q.series[checked_cast<size_t>(i)];
         std::string display = patch_path_display(q, name);
 
-        if (i > start_idx) {
+        if (i > start_idx && !quiet) {
             out_line("");
         }
         out_line("Applying patch " + display);
@@ -570,31 +573,32 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
         else if (arg == "-f") { force = true; }
         else if (arg == "-q" || arg == "--quiet") { quiet = true; }
         else if (arg == "-v" || arg == "--verbose") { verbose = true; }
-        else if (arg == "-R") { /* accepted for compat, always verified now */ }
+        // -R (verify removal) is always done unless forced, so it only
+        // cancels an earlier -f, as in the original quilt.
+        else if (arg == "-R") { force = false; }
         else if (arg == "--refresh") { auto_refresh = true; }
         else if (arg[0] == '-') {
             err("Unrecognized option: "); err_line(arg);
             return 1;
         }
+        else if (std::ranges::all_of(arg, [](char c) { return c >= '0' && c <= '9'; })) {
+            // Any run of digits is a count, as in the original quilt
+            auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), pop_count);
+            if (ec == std::errc::result_out_of_range) pop_all = true;
+        }
         else {
-            // Try as number first
-            int val = 0;
-            auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), val);
-            if (ec == std::errc{} && ptr == arg.data() + arg.size() && val > 0) {
-                pop_count = val;
-            } else {
-                target = strip_patches_prefix(q, arg);
-            }
+            target = strip_patches_prefix(q, arg);
         }
     }
 
-    if (q.applied.empty()) {
-        if (!q.series_file_exists) {
-            err_line("No series file found");
-            return 1;
-        }
-        err_line("No patch removed");
-        return 2;
+    if (q.applied.empty() && !q.series_file_exists) {
+        err_line("No series file found");
+        return 1;
+    }
+
+    if (force && auto_refresh) {
+        err_line("Options -f and --refresh are mutually exclusive");
+        return 1;
     }
 
     ptrdiff_t stop_idx;  // index in applied to stop BEFORE (exclusive); pop down to this
@@ -615,16 +619,30 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
         }
         // Pop down to (but not including) the target patch
         stop_idx = found_idx + 1;
-        if (stop_idx >= std::ssize(q.applied)) {
-            err_line("No patch removed");
-            return 2;
-        }
-    } else if (pop_count > 0) {
+    } else if (pop_count >= 0) {
         stop_idx = std::ssize(q.applied) - pop_count;
         if (stop_idx < 0) stop_idx = 0;
     } else {
         // Pop just the top patch
         stop_idx = std::ssize(q.applied) - 1;
+    }
+
+    // Refuse to pop a force-applied top patch unless forced, even with
+    // --refresh. Like the original quilt, this comes after the target
+    // patch has been resolved.
+    if (!force && !q.applied.empty()) {
+        std::string top_nr = path_join(pc_patch_dir(q, q.applied.back()),
+                                       ".needs_refresh");
+        if (file_exists(top_nr)) {
+            err_line("Patch " + patch_path_display(q, q.applied.back()) +
+                     " needs to be refreshed first.");
+            return 1;
+        }
+    }
+
+    if (q.applied.empty() || stop_idx >= std::ssize(q.applied)) {
+        err_line("No patch removed");
+        return 2;
     }
 
     // Pop from the top down to stop_idx
@@ -648,13 +666,7 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
             }
         }
 
-        // Check if patch needs refresh (force-applied) and -f not given
         std::string pc_dir = pc_patch_dir(q, name);
-        std::string nr = path_join(pc_dir, ".needs_refresh");
-        if (file_exists(nr) && !force && !auto_refresh) {
-            err_line("Patch " + display + " needs to be refreshed first.");
-            return 1;
-        }
 
         // Check if patch removes cleanly (detects dirty/unrefreshed changes)
         if (!force) {
@@ -678,14 +690,19 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
             }
         }
 
-        if (!first_pop) {
-            out_line("");
-        }
-        out_line("Removing patch " + display);
-        first_pop = false;
-
         // Restore backed-up files
         auto files = files_in_patch(q, name);
+
+        if (!first_pop && !quiet) {
+            out_line("");
+        }
+        if (files.empty()) {
+            out_line("Patch " + display + " appears to be empty, removing");
+        } else {
+            out_line("Removing patch " + display);
+        }
+        first_pop = false;
+
         for (const auto &file : files) {
             restore_file(q, name, file);
             if (!quiet) {
