@@ -465,6 +465,9 @@ set(QUILT_TEST_SCENARIOS
     push_create_existing_file
     push_reverse_create_missing_file
     push_delete_epoch_timestamp
+    push_skip_missing_file
+    push_skip_missing_later_file
+    fold_skip_missing_file
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -8133,6 +8136,12 @@ function(qt_run_named_scenario scenario)
         qt_scenario_push_reverse_create_missing_file()
     elseif(scenario STREQUAL "push_delete_epoch_timestamp")
         qt_scenario_push_delete_epoch_timestamp()
+    elseif(scenario STREQUAL "push_skip_missing_file")
+        qt_scenario_push_skip_missing_file()
+    elseif(scenario STREQUAL "push_skip_missing_later_file")
+        qt_scenario_push_skip_missing_later_file()
+    elseif(scenario STREQUAL "fold_skip_missing_file")
+        qt_scenario_fold_skip_missing_file()
     elseif(scenario STREQUAL "push_context_diff_zero_context")
         qt_scenario_push_context_diff_zero_context()
     elseif(scenario STREQUAL "push_missing_patch_file")
@@ -12868,6 +12877,108 @@ function(qt_scenario_push_delete_epoch_timestamp)
     qt_assert_not_exists("${QT_WORK_DIR}/old.txt" "push should remove old.txt (context)")
     qt_quilt_ok(ARGS pop MESSAGE "pop of context deletion failed")
     qt_assert_file_text("${QT_WORK_DIR}/old.txt" "hello" "pop should restore old.txt (context)")
+endfunction()
+
+# push_skip_missing_file: like GNU patch, push skips a missing file that the
+# patch does not create, quoting the text leading up to its first hunk.  It
+# writes no reject file, and even with -f it leaves the file alone and backs
+# nothing up, so the patch is reported as empty.
+function(qt_scenario_push_skip_missing_file)
+    qt_begin_test("push_skip_missing_file")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "junk line\nIndex: x\n--- a/new.txt\n+++ b/new.txt\n@@ -1 +1 @@\n-a\n+b\n")
+    set(skipped "can't find file to patch at input line 5\nPerhaps you used the wrong -p or --strip option?\nThe text leading up to this was:\n--------------------------\n|junk line\n|Index: x\n|--- a/new.txt\n|+++ b/new.txt\n--------------------------\nNo file to patch.  Skipping patch.\n1 out of 1 hunk ignored\n")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_failure("${rc}" "push should fail on the missing file")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_equal("${combined}"
+        "Applying patch p.diff\n${skipped}Patch p.diff does not apply (enforce with -f)\n"
+        "push should skip new.txt and refuse the patch")
+    qt_assert_not_exists("${QT_WORK_DIR}/new.txt.rej" "push should write no reject file")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --leave-rejects)
+    qt_assert_failure("${rc}" "push --leave-rejects should fail on the missing file")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_equal("${combined}"
+        "Applying patch p.diff\n${skipped}Patch p.diff does not apply (enforce with -f)\n"
+        "push --leave-rejects should skip new.txt")
+    qt_assert_not_exists("${QT_WORK_DIR}/new.txt.rej"
+        "push --leave-rejects should have no rejects to leave")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -f)
+    qt_assert_failure("${rc}" "push -f should report the skipped file")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "${skipped}" "push -f should skip new.txt")
+    qt_assert_contains("${out}" "Patch p.diff appears to be empty; applied\n"
+        "push -f should report the patch as empty")
+    qt_assert_not_exists("${QT_WORK_DIR}/new.txt" "push -f should not create new.txt")
+    qt_assert_not_exists("${QT_WORK_DIR}/new.txt.rej" "push -f should write no reject file")
+    qt_assert_not_exists("${QT_WORK_DIR}/.pc/p.diff/new.txt" "push -f should not back up new.txt")
+    qt_quilt_ok(ARGS pop -f MESSAGE "pop -f failed")
+
+    # A context diff's first hunk starts at its row of stars
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "*** a/new.txt\n--- b/new.txt\n***************\n*** 1 ****\n! a\n--- 1 ----\n! b\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_failure("${rc}" "push of the context diff should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_equal("${combined}"
+        "Applying patch p.diff\ncan't find file to patch at input line 3\nPerhaps you used the wrong -p or --strip option?\nThe text leading up to this was:\n--------------------------\n|*** a/new.txt\n|--- b/new.txt\n--------------------------\nNo file to patch.  Skipping patch.\n1 out of 1 hunk ignored\nPatch p.diff does not apply (enforce with -f)\n"
+        "push should skip new.txt in the context diff")
+    qt_assert_not_exists("${QT_WORK_DIR}/new.txt.rej" "push should write no reject file (context)")
+endfunction()
+
+# push_skip_missing_later_file: the text quoted for a skipped file starts
+# after the previous file's last hunk, and every hunk counts as ignored.
+# push -f applies the rest of the patch.
+function(qt_scenario_push_skip_missing_later_file)
+    qt_begin_test("push_skip_missing_later_file")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "Index: f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+y\ntrailing note\n--- a/g.txt\n+++ b/g.txt\n@@ -1 +1 @@\n-a\n+b\n@@ -3 +3 @@\n-c\n+d\n")
+    set(skipped "can't find file to patch at input line 10\nPerhaps you used the wrong -p or --strip option?\nThe text leading up to this was:\n--------------------------\n|trailing note\n|--- a/g.txt\n|+++ b/g.txt\n--------------------------\nNo file to patch.  Skipping patch.\n2 out of 2 hunks ignored\n")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_failure("${rc}" "push should fail on the missing file")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_equal("${combined}"
+        "Applying patch p.diff\npatching file f.txt\n${skipped}Patch p.diff does not apply (enforce with -f)\n"
+        "push should patch f.txt and skip g.txt")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "x" "failed push should restore f.txt")
+    qt_assert_not_exists("${QT_WORK_DIR}/g.txt.rej" "push should write no reject file")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -f)
+    qt_assert_failure("${rc}" "push -f should report the skipped file")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "${skipped}" "push -f should skip g.txt")
+    qt_assert_contains("${out}" "Applied patch p.diff (forced; needs refresh)\n"
+        "push -f should apply the rest of the patch")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "y" "push -f should patch f.txt")
+    qt_assert_not_exists("${QT_WORK_DIR}/g.txt" "push -f should not create g.txt")
+    qt_assert_not_exists("${QT_WORK_DIR}/g.txt.rej" "push -f should write no reject file")
+    qt_quilt_ok(OUTPUT out ARGS files MESSAGE "files failed")
+    qt_assert_equal("${out}" "f.txt\n" "only f.txt should be backed up")
+endfunction()
+
+# fold_skip_missing_file: fold skips a missing file that the patch does not
+# create, without adding it to the top patch or writing a reject file
+function(qt_scenario_fold_skip_missing_file)
+    qt_begin_test("fold_skip_missing_file")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS fold
+        INPUT "junk line\n--- a/new.txt\n+++ b/new.txt\n@@ -1 +1 @@\n-a\n+b\n")
+    qt_assert_failure("${rc}" "fold should fail on the missing file")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_equal("${combined}"
+        "can't find file to patch at input line 4\nPerhaps you used the wrong -p or --strip option?\nThe text leading up to this was:\n--------------------------\n|junk line\n|--- a/new.txt\n|+++ b/new.txt\n--------------------------\nNo file to patch.  Skipping patch.\n1 out of 1 hunk ignored\n"
+        "fold should skip new.txt")
+    qt_assert_not_exists("${QT_WORK_DIR}/new.txt" "fold should not create new.txt")
+    qt_assert_not_exists("${QT_WORK_DIR}/new.txt.rej" "fold should write no reject file")
+    qt_quilt_ok(OUTPUT out ARGS files MESSAGE "files failed")
+    qt_assert_equal("${out}" "" "fold should not add new.txt to the patch")
 endfunction()
 
 # push_context_diff_zero_context: a context diff from refresh -C 0, whose

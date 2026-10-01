@@ -510,6 +510,13 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
 
         PatchResult result = builtin_patch(patch_content, patch_opts);
 
+        // GNU patch backs up only the files it patches, so forget the
+        // missing files it skipped
+        for (const auto &file : result.skipped) {
+            delete_file(path_join(pc_dir, file));
+            std::erase(affected, file);
+        }
+
         if (!quiet && !verbose && !result.out.empty()) {
             out(result.out);
         }

@@ -113,6 +113,9 @@ struct PatchResult {
     int exit_code;             // 0=success, 1=rejects, 2=fatal
     std::string out;           // stdout-equivalent messages
     std::string err;           // stderr-equivalent messages
+    // Missing files left alone because the patch does not create them,
+    // which GNU patch would not have backed up
+    std::vector<std::string> skipped;
 };
 
 PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts);

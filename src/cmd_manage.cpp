@@ -977,17 +977,24 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
     auto affected_files = patch_target_files(stdin_data, patch_opts.strip_level,
                                              patch_opts.reverse);
     auto currently_tracked = files_in_patch(q, top);
+    auto is_tracked = [&](const std::string &f) {
+        return std::ranges::find(currently_tracked, f) != currently_tracked.end();
+    };
     for (const auto &f : affected_files) {
-        bool already_tracked = false;
-        for (const auto &t : currently_tracked) {
-            if (t == f) { already_tracked = true; break; }
-        }
-        if (!already_tracked) {
+        if (!is_tracked(f)) {
             backup_file(q, top, f);
         }
     }
 
     PatchResult r = builtin_patch(stdin_data, patch_opts);
+
+    // GNU patch backs up only the files it patches, so leave the missing
+    // files it skipped out of the patch
+    for (const auto &f : r.skipped) {
+        if (!is_tracked(f)) {
+            delete_file(path_join(pc_patch_dir(q, top), f));
+        }
+    }
     if (!opt_quiet && !r.out.empty()) {
         out(r.out);
     }

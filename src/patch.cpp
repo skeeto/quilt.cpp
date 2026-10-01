@@ -33,6 +33,9 @@ struct PatchFile {
     // /dev/null or gives the epoch as the file's timestamp, as diff -N does
     int old_absent = 0;
     int new_absent = 0;
+    // 1-based line where the text leading up to the first hunk begins,
+    // after the previous file's last hunk, as GNU patch quotes it
+    ptrdiff_t text_line = 0;
     ptrdiff_t hunk_line = 0;   // 1-based line of the first hunk header
     std::vector<PatchHunk> hunks;
 };
@@ -438,20 +441,21 @@ static void reverse_hunk(PatchHunk &hunk)
     }
 }
 
-// Parse a complete unified or context diff into a list of per-file patch
-// descriptions.  A hunk that does not parse ends parsing, with GNU patch's
-// message for it in error.
-static std::vector<PatchFile> parse_patch(std::string_view text, int strip_level,
-                                           bool reverse, std::string &error)
+// Parse the lines of a complete unified or context diff into a list of
+// per-file patch descriptions.  A hunk that does not parse ends parsing,
+// with GNU patch's message for it in error.
+static std::vector<PatchFile> parse_patch(std::span<const std::string> lines,
+                                           int strip_level, bool reverse,
+                                           std::string &error)
 {
     std::vector<PatchFile> files;
-    auto lines = split_lines(text);
     ptrdiff_t n = std::ssize(lines);
     auto at = [&](ptrdiff_t k) -> std::string_view {
         return lines[checked_cast<size_t>(k)];
     };
 
     ptrdiff_t i = 0;
+    ptrdiff_t text_line = 1;
     while (i < n) {
         // A unified diff names the files on "--- " and "+++ " lines, and a
         // context diff on "*** " and "--- " lines before its first hunk
@@ -500,6 +504,7 @@ static std::vector<PatchFile> parse_patch(std::string_view text, int strip_level
         }
 
         i += 2;  // skip the file header lines
+        pf.text_line = text_line;
         pf.hunk_line = i + 1;
 
         std::string_view hunk_start = unified ? "@@ " : "***************";
@@ -517,8 +522,12 @@ static std::vector<PatchFile> parse_patch(std::string_view text, int strip_level
         pf.old_absent = absence(old_header, first ? first->old_start : -1);
         pf.new_absent = absence(new_header, first ? first->new_start : -1);
 
-        // Like GNU patch, ignore file headers with no hunk after them
-        if (!pf.hunks.empty()) files.push_back(std::move(pf));
+        // Like GNU patch, ignore file headers with no hunk after them, so
+        // the text leading up to the next file includes them
+        if (!pf.hunks.empty()) {
+            files.push_back(std::move(pf));
+            text_line = i + 1;
+        }
     }
 
     return files;
@@ -529,7 +538,8 @@ std::vector<std::string> patch_target_files(std::string_view patch_text,
 {
     std::vector<std::string> result;
     std::string error;  // a patch that does not parse will not apply anyway
-    for (auto &pf : parse_patch(patch_text, strip_level, reverse, error)) {
+    auto lines = split_lines(patch_text);
+    for (auto &pf : parse_patch(lines, strip_level, reverse, error)) {
         if (pf.target_path.empty()) continue;
         if (std::ranges::find(result, pf.target_path) != result.end()) continue;
         result.push_back(std::move(pf.target_path));
@@ -1065,7 +1075,8 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
     };
 
     std::string parse_error;
-    auto files = parse_patch(patch_text, opts.strip_level, opts.reverse, parse_error);
+    auto lines = split_lines(patch_text);
+    auto files = parse_patch(lines, opts.strip_level, opts.reverse, parse_error);
 
     // A hunk that does not parse is fatal, so apply none of the patch
     if (!parse_error.empty()) {
@@ -1085,6 +1096,7 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
     }
 
     bool had_rejects = false;
+    std::vector<std::string> patched;  // targets of the sections not skipped
 
     for (const auto &pf : files) {
         if (pf.target_path.empty()) continue;
@@ -1108,24 +1120,35 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
         }
 
         // A missing file is patched as empty when the patch creates it, or
-        // when GNU patch would have warned above
+        // when GNU patch would have warned above.  Otherwise, like GNU patch
+        // given -f, as quilt always does, quote the text leading up to the
+        // first hunk and skip the file without writing rejects.  As with -s,
+        // quiet drops only the first two lines.
         if (!file_existed && !pf.old_absent && !looks_reversed) {
-            result.err += std::format("can't find file to patch at input line {}\n",
-                                      pf.hunk_line);
-            if (!opts.force) {
-                result.exit_code = 1;
-                if (!opts.dry_run) {
-                    had_rejects = true;
-                    // Write all hunks as rejects
-                    std::vector<bool> all_rejected(checked_cast<size_t>(std::ssize(pf.hunks)), true);
-                    std::string rej_content = format_rejects(pf, all_rejected);
-                    if (!rej_content.empty()) {
-                        fs_write(pf.target_path + ".rej", rej_content);
-                    }
-                }
-                continue;
+            if (!opts.quiet) {
+                result.err += std::format(
+                    "can't find file to patch at input line {}\n"
+                    "Perhaps you used the wrong -p or --strip option?\n",
+                    pf.hunk_line);
             }
+            result.err += "The text leading up to this was:\n"
+                          "--------------------------\n";
+            for (ptrdiff_t k = pf.text_line; k < pf.hunk_line; ++k) {
+                result.err += "|" + lines[checked_cast<size_t>(k - 1)] + "\n";
+            }
+            ptrdiff_t nhunks = std::ssize(pf.hunks);
+            result.err += std::format(
+                "--------------------------\n"
+                "No file to patch.  Skipping patch.\n"
+                "{} out of {} {} ignored\n",
+                nhunks, nhunks, nhunks == 1 ? "hunk" : "hunks");
+            result.exit_code = 1;
+            if (std::ranges::find(result.skipped, pf.target_path) == result.skipped.end()) {
+                result.skipped.push_back(pf.target_path);
+            }
+            continue;
         }
+        patched.push_back(pf.target_path);
 
         if (!opts.quiet) {
             result.out += "patching file " + pf.target_path + "\n";
@@ -1300,6 +1323,11 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
     if (had_rejects) {
         result.exit_code = 1;
     }
+
+    // Another section may have patched a skipped file, say by creating it
+    std::erase_if(result.skipped, [&](const std::string &file) {
+        return std::ranges::find(patched, file) != patched.end();
+    });
 
     return result;
 }
