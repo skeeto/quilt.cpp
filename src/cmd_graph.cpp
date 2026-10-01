@@ -348,7 +348,7 @@ int cmd_graph(QuiltState &q, int argc, char **argv) {
     bool opt_reduce = false;
     bool opt_edge_labels = false;
     std::optional<int> opt_lines;
-    std::string_view patch_arg;
+    std::optional<std::string_view> patch_arg;
 
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
@@ -391,41 +391,25 @@ int cmd_graph(QuiltState &q, int argc, char **argv) {
         } else if (!arg.empty() && arg[0] == '-') {
             err_line("Usage: quilt graph [--all] [--reduce] [--lines[=num]] [--edge-labels=files] [-T ps] [patch]");
             return 1;
-        } else if (!patch_arg.empty()) {
+        } else if (patch_arg) {
             err_line("Usage: quilt graph [--all] [--reduce] [--lines[=num]] [--edge-labels=files] [-T ps] [patch]");
             return 1;
         } else {
-            patch_arg = strip_patches_prefix(q, arg);
+            patch_arg = arg;
         }
     }
 
-    if (!patch_arg.empty() && opt_all) {
+    if (patch_arg && opt_all) {
         err_line("Usage: quilt graph [--all] [--reduce] [--lines[=num]] [--edge-labels=files] [-T ps] [patch]");
         return 1;
     }
 
-    std::string_view selected_patch;
+    std::string selected_patch;
     if (!opt_all) {
-        if (q.applied.empty()) {
-            if (!q.series_file_exists) {
-                err_line("No series file found");
-            } else if (q.series.empty()) {
-                err_line("No patches in series");
-            } else {
-                err_line("No patches applied");
-            }
-            return 1;
-        }
-
-        selected_patch = patch_arg.empty() ? std::string_view(q.applied.back()) : patch_arg;
-        if (!q.find_in_series(selected_patch).has_value()) {
-            err("Patch "); err(selected_patch); err_line(" is not in series");
-            return 1;
-        }
-        if (!q.is_applied(selected_patch)) {
-            err("Patch "); err(selected_patch); err_line(" is not applied");
-            return 1;
-        }
+        // No argument, or an empty one, means the top patch
+        auto found = find_applied_patch(q, patch_arg.value_or(""));
+        if (!found) return 1;
+        selected_patch = *found;
     } else if (q.applied.empty()) {
         err_line("No patches applied");
         return 1;

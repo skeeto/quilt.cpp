@@ -200,27 +200,20 @@ int cmd_applied(QuiltState &q, int argc, char **argv) {
     std::string_view target;
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
-        if (arg[0] == '-') {
+        if (arg.starts_with('-')) {
             err("Unrecognized option: "); err_line(arg);
             return 1;
         }
-        target = strip_patches_prefix(q, arg);
+        target = arg;
     }
 
     if (!target.empty()) {
         // Print all applied patches up to and including target
-        auto idx = q.find_in_series(target);
-        if (!idx.has_value()) {
-            err("Patch "); err(format_patch(q, target)); err_line(" is not in series");
-            return 1;
-        }
-        if (!q.is_applied(target)) {
-            err("Patch "); err(format_patch(q, target)); err_line(" is not applied");
-            return 1;
-        }
+        auto found = find_applied_patch(q, target);
+        if (!found) return 1;
         for (const auto &a : q.applied) {
             out_line(format_patch(q, a));
-            if (a == target) break;
+            if (a == *found) break;
         }
         return 0;
     }
@@ -245,14 +238,14 @@ int cmd_applied(QuiltState &q, int argc, char **argv) {
 }
 
 int cmd_unapplied(QuiltState &q, int argc, char **argv) {
-    std::string_view target;
+    std::optional<std::string_view> target;
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
-        if (arg[0] == '-') {
+        if (arg.starts_with('-')) {
             err("Unrecognized option: "); err_line(arg);
             return 1;
         }
-        target = strip_patches_prefix(q, arg);
+        target = arg;
     }
 
     if (q.series.empty()) {
@@ -265,13 +258,12 @@ int cmd_unapplied(QuiltState &q, int argc, char **argv) {
     }
 
     ptrdiff_t start_idx;
-    if (!target.empty()) {
-        auto idx = q.find_in_series(target);
-        if (!idx.has_value()) {
-            err("Patch "); err(format_patch(q, target)); err_line(" is not in series");
-            return 1;
-        }
-        start_idx = idx.value() + 1;
+    if (target) {
+        // Like upstream, a given name is looked up even when empty, which
+        // means the top patch
+        auto found = find_patch_in_series(q, *target);
+        if (!found) return 1;
+        start_idx = q.find_in_series(*found).value() + 1;
     } else {
         ptrdiff_t top = q.top_index();
         start_idx = top + 1;
@@ -280,7 +272,7 @@ int cmd_unapplied(QuiltState &q, int argc, char **argv) {
     if (start_idx >= std::ssize(q.series)) {
         // With an explicit target patch, having no patches after it is not
         // an error — just print nothing.
-        if (!target.empty()) {
+        if (target) {
             return 0;
         }
         std::string_view top_name = q.applied.empty() ? std::string_view("??") : std::string_view(q.applied.back());
@@ -323,11 +315,24 @@ int cmd_next(QuiltState &q, int argc, char **argv) {
     std::string_view target;
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
-        if (arg[0] == '-') {
+        if (arg.starts_with('-')) {
             err("Unrecognized option: "); err_line(arg);
             return 1;
         }
-        target = strip_patches_prefix(q, arg);
+        target = arg;
+    }
+
+    if (!target.empty()) {
+        auto found = find_patch(q, target);
+        if (!found) return 1;
+        // Original quilt: if the named patch is applied, error
+        if (q.is_applied(*found)) {
+            err("Patch "); err(format_patch(q, *found)); err_line(" is currently applied");
+            return 2;
+        }
+        // If unapplied, return the patch itself (it's the "next" to be pushed)
+        out_line(format_patch(q, *found));
+        return 0;
     }
 
     if (q.series.empty()) {
@@ -340,25 +345,7 @@ int cmd_next(QuiltState &q, int argc, char **argv) {
         }
     }
 
-    ptrdiff_t after_idx;
-    if (!target.empty()) {
-        auto idx = q.find_in_series(target);
-        if (!idx.has_value()) {
-            err("Patch "); err(format_patch(q, target)); err_line(" is not in series");
-            return 2;
-        }
-        // Original quilt: if the named patch is applied, error
-        if (q.is_applied(target)) {
-            err("Patch "); err(format_patch(q, target)); err_line(" is currently applied");
-            return 2;
-        }
-        // If unapplied, return the patch itself (it's the "next" to be pushed)
-        out_line(format_patch(q, target));
-        return 0;
-    } else {
-        ptrdiff_t top = q.top_index();
-        after_idx = top + 1;
-    }
+    ptrdiff_t after_idx = q.top_index() + 1;
 
     if (after_idx >= std::ssize(q.series)) {
         std::string_view top_name = q.applied.empty() ? std::string_view("??") : std::string_view(q.applied.back());
@@ -374,19 +361,17 @@ int cmd_previous(QuiltState &q, int argc, char **argv) {
     std::string_view target;
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
-        if (arg[0] == '-') {
+        if (arg.starts_with('-')) {
             err("Unrecognized option: "); err_line(arg);
             return 1;
         }
-        target = strip_patches_prefix(q, arg);
+        target = arg;
     }
 
     if (!target.empty()) {
-        auto idx = q.find_in_series(target);
-        if (!idx.has_value()) {
-            err("Patch "); err(format_patch(q, target)); err_line(" is not in series");
-            return 2;
-        }
+        auto found = find_patch(q, target);
+        if (!found) return 1;
+        auto idx = q.find_in_series(*found);
         if (idx.value() == 0) {
             return 2;
         }
@@ -449,7 +434,7 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
                 return 1;
             }
         }
-        else if (arg[0] == '-') {
+        else if (arg.starts_with('-')) {
             err("Unrecognized option: "); err_line(arg);
             return 1;
         }
@@ -460,8 +445,23 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
             if (ec == std::errc{} && ptr == arg.data() + arg.size() && val > 0) {
                 push_count = val;
             } else {
-                target = strip_patches_prefix(q, arg);
+                target = arg;
             }
+        }
+    }
+
+    ptrdiff_t top = q.top_index();
+    ptrdiff_t start_idx = top + 1;
+
+    // Like upstream, look up a named target before anything else
+    ptrdiff_t target_idx = -1;
+    if (!push_all && !target.empty()) {
+        auto found = find_patch(q, target);
+        if (!found) return 1;
+        target_idx = q.find_in_series(*found).value();
+        if (target_idx < start_idx) {
+            err("Patch "); err(format_patch(q, *found)); err_line(" is currently applied");
+            return 2;
         }
     }
 
@@ -474,9 +474,6 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
             return 1;
         }
     }
-
-    ptrdiff_t top = q.top_index();
-    ptrdiff_t start_idx = top + 1;
 
     if (q.series.empty()) {
         if (q.series_file_exists) {
@@ -496,17 +493,8 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
     ptrdiff_t end_idx;  // inclusive
     if (push_all) {
         end_idx = std::ssize(q.series) - 1;
-    } else if (!target.empty()) {
-        auto idx = q.find_in_series(target);
-        if (!idx.has_value()) {
-            err("Patch "); err(format_patch(q, target)); err_line(" is not in series");
-            return 1;
-        }
-        end_idx = idx.value();
-        if (end_idx < start_idx) {
-            err("Patch "); err(format_patch(q, target)); err_line(" is currently applied");
-            return 2;
-        }
+    } else if (target_idx >= 0) {
+        end_idx = target_idx;
     } else if (push_count > 0) {
         end_idx = start_idx + push_count - 1;
         if (end_idx >= std::ssize(q.series)) {
@@ -651,7 +639,7 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
     [[maybe_unused]] bool verbose = false;  // accepted for compat, pop is verbose by default
     bool auto_refresh = false;
     int pop_count = -1;
-    std::string_view target;
+    std::optional<std::string_view> target;
 
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
@@ -663,17 +651,18 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
         // cancels an earlier -f, as in the original quilt.
         else if (arg == "-R") { force = false; }
         else if (arg == "--refresh") { auto_refresh = true; }
-        else if (arg[0] == '-') {
+        else if (arg.starts_with('-')) {
             err("Unrecognized option: "); err_line(arg);
             return 1;
         }
-        else if (std::ranges::all_of(arg, [](char c) { return c >= '0' && c <= '9'; })) {
+        else if (!arg.empty() &&
+                 std::ranges::all_of(arg, [](char c) { return c >= '0' && c <= '9'; })) {
             // Any run of digits is a count, as in the original quilt
             auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), pop_count);
             if (ec == std::errc::result_out_of_range) pop_all = true;
         }
         else {
-            target = strip_patches_prefix(q, arg);
+            target = arg;
         }
     }
 
@@ -690,19 +679,12 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
     ptrdiff_t stop_idx;  // index in applied to stop BEFORE (exclusive); pop down to this
     if (pop_all) {
         stop_idx = 0;
-    } else if (!target.empty()) {
-        // Find target in applied list
-        ptrdiff_t found_idx = -1;
-        for (ptrdiff_t i = 0; i < std::ssize(q.applied); ++i) {
-            if (q.applied[checked_cast<size_t>(i)] == target) {
-                found_idx = i;
-                break;
-            }
-        }
-        if (found_idx < 0) {
-            err("Patch "); err(format_patch(q, target)); err_line(" is not applied");
-            return 1;
-        }
+    } else if (target) {
+        // Like upstream, an empty name means the top patch, so nothing
+        // is popped
+        auto found = find_applied_patch(q, *target);
+        if (!found) return 1;
+        ptrdiff_t found_idx = std::ranges::find(q.applied, *found) - q.applied.begin();
         // Pop down to (but not including) the target patch
         stop_idx = found_idx + 1;
     } else if (pop_count >= 0) {

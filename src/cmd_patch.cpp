@@ -170,27 +170,18 @@ int cmd_new(QuiltState &q, int argc, char **argv) {
 }
 
 int cmd_add(QuiltState &q, int argc, char **argv) {
-    if (q.applied.empty()) {
-        if (!q.series_file_exists) {
-            err_line("No series file found");
-            return 1;
-        }
-        err_line("No patches applied");
-        return 1;
-    }
-
     // Parse options
-    std::string_view patch = q.applied.back();
+    std::string_view patch_arg;
     std::vector<std::string> files;
     int i = 1;
     while (i < argc) {
         std::string_view arg = argv[i];
         if (arg == "-P" && i + 1 < argc) {
-            patch = strip_patches_prefix(q, argv[i + 1]);
+            patch_arg = argv[i + 1];
             i += 2;
             continue;
         }
-        if (arg[0] != '-') {
+        if (!arg.starts_with('-')) {
             files.push_back(subdir_path(q, arg));
         } else {
             err("Unrecognized option: "); err_line(arg);
@@ -204,10 +195,10 @@ int cmd_add(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    if (!q.is_applied(patch)) {
-        err("Patch "); err(format_patch(q, patch)); err_line(" is not applied");
-        return 1;
-    }
+    // No -P, or an empty one, means the top patch
+    auto found = find_applied_patch(q, patch_arg);
+    if (!found) return 1;
+    std::string_view patch = *found;
 
     for (const auto &file : files) {
         // Check if file is already tracked by this patch
@@ -247,23 +238,18 @@ int cmd_add(QuiltState &q, int argc, char **argv) {
 }
 
 int cmd_remove(QuiltState &q, int argc, char **argv) {
-    if (q.applied.empty()) {
-        err_line("No patches applied");
-        return 1;
-    }
-
     // Parse options
-    std::string_view patch = q.applied.back();
+    std::string_view patch_arg;
     std::vector<std::string> files;
     int i = 1;
     while (i < argc) {
         std::string_view arg = argv[i];
         if (arg == "-P" && i + 1 < argc) {
-            patch = strip_patches_prefix(q, argv[i + 1]);
+            patch_arg = argv[i + 1];
             i += 2;
             continue;
         }
-        if (arg[0] != '-') {
+        if (!arg.starts_with('-')) {
             files.push_back(subdir_path(q, arg));
         } else {
             err("Unrecognized option: "); err_line(arg);
@@ -277,10 +263,10 @@ int cmd_remove(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    if (!q.is_applied(patch)) {
-        err("Patch "); err(format_patch(q, patch)); err_line(" is not applied");
-        return 1;
-    }
+    // No -P, or an empty one, means the top patch
+    auto found = find_applied_patch(q, patch_arg);
+    if (!found) return 1;
+    std::string_view patch = *found;
 
     for (const auto &file : files) {
         // Check if file is tracked by this patch
@@ -2360,17 +2346,17 @@ static std::string normalize_relative_path(std::string_view path) {
 
 int cmd_revert(QuiltState &q, int argc, char **argv) {
     // Parse options
-    std::string_view opt_patch;
+    std::string_view patch_arg;
     std::vector<std::string> files;
     int i = 1;
     while (i < argc) {
         std::string_view arg = argv[i];
         if (arg == "-P" && i + 1 < argc) {
-            opt_patch = argv[i + 1];
+            patch_arg = argv[i + 1];
             i += 2;
             continue;
         }
-        if (arg[0] != '-') {
+        if (!arg.starts_with('-')) {
             files.push_back(subdir_path(q, arg));
         } else {
             err("Unrecognized option: "); err_line(arg);
@@ -2384,26 +2370,10 @@ int cmd_revert(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    // Resolve the patch like upstream's find_applied_patch
-    if (!q.series_file_exists) {
-        err_line("No series file found");
-        return 1;
-    }
-    std::string patch;
-    if (!opt_patch.empty()) {
-        if (q.series.empty()) {
-            err_line("No patches in series");
-            return 1;
-        }
-        auto found = find_applied_patch(q, opt_patch);
-        if (!found) return 1;
-        patch = *found;
-    } else if (!q.applied.empty()) {
-        patch = q.applied.back();
-    } else {
-        err_line(q.series.empty() ? "No patches in series" : "No patches applied");
-        return 1;
-    }
+    // No -P, or an empty one, means the top patch
+    auto found = find_applied_patch(q, patch_arg);
+    if (!found) return 1;
+    std::string patch = *found;
 
     // Check every file before changing any, reporting each problem
     int status = 0;

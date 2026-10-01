@@ -442,6 +442,9 @@ set(QUILT_TEST_SCENARIOS
     rename_pc_migration
     fork_pc_migration
     prefixed_args_delete
+    prefix_only_patch_arg
+    empty_patch_arg
+    patch_lookup_errors
     push_pop_deletion
     push_keeps_emptied_file
     fold_deletion
@@ -8326,6 +8329,12 @@ function(qt_run_named_scenario scenario)
         qt_scenario_fork_pc_migration()
     elseif(scenario STREQUAL "prefixed_args_delete")
         qt_scenario_prefixed_args_delete()
+    elseif(scenario STREQUAL "prefix_only_patch_arg")
+        qt_scenario_prefix_only_patch_arg()
+    elseif(scenario STREQUAL "empty_patch_arg")
+        qt_scenario_empty_patch_arg()
+    elseif(scenario STREQUAL "patch_lookup_errors")
+        qt_scenario_patch_lookup_errors()
     elseif(scenario STREQUAL "push_pop_deletion")
         qt_scenario_push_pop_deletion()
     elseif(scenario STREQUAL "push_keeps_emptied_file")
@@ -9626,7 +9635,7 @@ function(qt_scenario_header_replace_no_newline)
         "header should contain the replacement text")
 endfunction()
 
-# annotate_no_series_file: cmd_annotate.cpp line 112 (no_applied_patches_error)
+# annotate_no_series_file: cmd_annotate.cpp find_applied_patch
 # When annotate is called with no quilt state at all (no .pc/, no series file),
 # it hits the "No series file found" error path.
 function(qt_scenario_annotate_no_series_file)
@@ -12544,6 +12553,156 @@ function(qt_scenario_prefixed_args_delete)
                     "applied top patch should be popped and removed")
     qt_assert_file_not_contains("${QT_WORK_DIR}/patches/series" "p.patch" "patch should be removed from series")
     qt_assert_file_text("${QT_WORK_DIR}/f.txt" "x" "patch should be popped")
+endfunction()
+
+# Two applied patches (p2 on top) and one unapplied, each changing its own file.
+function(qt_setup_three_patch_stack)
+    foreach(n 1 2 3)
+        qt_write_file("${QT_WORK_DIR}/f${n}.txt" "old${n}\n")
+        qt_quilt_ok(ARGS new p${n}.patch MESSAGE "new p${n} failed")
+        qt_quilt_ok(ARGS add f${n}.txt MESSAGE "add f${n} failed")
+        qt_write_file("${QT_WORK_DIR}/f${n}.txt" "new${n}\n")
+        qt_quilt_ok(ARGS refresh MESSAGE "refresh p${n} failed")
+    endforeach()
+    qt_quilt_ok(ARGS pop MESSAGE "pop p3 failed")
+endfunction()
+
+# An argument of only the patches/ prefix names no patch: upstream's
+# find_patch strips it to nothing, which matches nothing. It must not fall
+# back to the top or next patch the way an omitted argument does.
+function(qt_scenario_prefix_only_patch_arg)
+    qt_begin_test("prefix_only_patch_arg")
+    qt_setup_three_patch_stack()
+    qt_read_file_strip(series_before "${QT_WORK_DIR}/patches/series")
+    qt_read_file_strip(applied_before "${QT_WORK_DIR}/.pc/applied-patches")
+    qt_read_file_strip(p2_before "${QT_WORK_DIR}/patches/p2.patch")
+    foreach(cmd "delete;-r;patches/" "delete;patches/" "pop;patches/"
+                "push;patches/" "rename;-P;patches/;x.patch"
+                "header;-r;patches/" "header;-a;patches/" "header;patches/"
+                "applied;patches/" "unapplied;patches/" "next;patches/"
+                "previous;patches/" "files;patches/" "files;--combine;patches/"
+                "files;--combine;-;patches/" "graph;patches/"
+                "annotate;-P;patches/;f2.txt" "add;-P;patches/;f3.txt"
+                "remove;-P;patches/;f2.txt" "revert;-P;patches/;f2.txt")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS ${cmd} INPUT "replaced header\n")
+        qt_assert_equal("${rc}" "1" "'${cmd}' should fail")
+        qt_assert_contains("${err}" "Patch patches/ is not in series" "'${cmd}' should name the argument")
+    endforeach()
+    # As a new name, the prefix alone names the patches directory itself
+    foreach(cmd "fork;patches/" "rename;patches/")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS ${cmd})
+        qt_assert_failure("${rc}" "'${cmd}' should fail")
+        qt_assert_contains("${err}" "exists already" "'${cmd}' should refuse the name")
+    endforeach()
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "${series_before}" "series should be unchanged")
+    qt_assert_file_text("${QT_WORK_DIR}/.pc/applied-patches" "${applied_before}" "applied patches should be unchanged")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/p2.patch" "${p2_before}" "top patch file should be unchanged")
+    qt_assert_file_text("${QT_WORK_DIR}/f2.txt" "new2" "top patch should stay applied")
+    qt_assert_file_text("${QT_WORK_DIR}/f3.txt" "old3" "next patch should stay unapplied")
+    # push looks up its argument before checking for a fully applied series
+    qt_quilt_ok(ARGS push MESSAGE "push p3 failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push patches/)
+    qt_assert_equal("${rc}" "1" "push patches/ should fail when fully applied")
+    qt_assert_contains("${err}" "Patch patches/ is not in series" "push patches/ should name the argument")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push p1.patch)
+    qt_assert_equal("${rc}" "2" "push of an applied patch should fail")
+    qt_assert_contains("${err}" "Patch p1.patch is currently applied" "push should name the applied patch")
+endfunction()
+
+# A literal empty patch name is an argument, but like upstream's
+# find_applied_patch and find_patch_in_series it means the top patch. It is
+# never a count, and as a new name it names the patches directory itself.
+function(qt_scenario_empty_patch_arg)
+    qt_begin_test("empty_patch_arg")
+    qt_setup_three_patch_stack()
+    qt_read_file_strip(series_before "${QT_WORK_DIR}/patches/series")
+    qt_read_file_strip(applied_before "${QT_WORK_DIR}/.pc/applied-patches")
+    qt_quilt_empty_arg(RESULT rc OUTPUT out ERROR err ARGS pop)
+    qt_assert_equal("${rc}" "2" "pop '' should stop at the top patch")
+    qt_assert_contains("${err}" "No patch removed" "pop '' should remove nothing")
+    qt_assert_file_text("${QT_WORK_DIR}/f2.txt" "new2" "pop '' should leave the top patch applied")
+    qt_quilt_empty_arg(RESULT rc OUTPUT out ERROR err ARGS add -P AFTER f3.txt)
+    qt_assert_success("${rc}" "add -P '' should add to the top patch")
+    qt_assert_contains("${out}" "File f3.txt added to patch p2.patch" "add -P '' should use the top patch")
+    qt_quilt_empty_arg(RESULT rc OUTPUT out ERROR err ARGS remove -P AFTER f3.txt)
+    qt_assert_success("${rc}" "remove -P '' should remove from the top patch")
+    qt_assert_contains("${out}" "File f3.txt removed from patch p2.patch" "remove -P '' should use the top patch")
+    # Upstream's remove leaves the patch needing a refresh before push
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2 failed")
+    foreach(cmd fork rename)
+        qt_quilt_empty_arg(RESULT rc OUTPUT out ERROR err ARGS ${cmd})
+        qt_assert_failure("${rc}" "${cmd} '' should fail")
+        qt_assert_contains("${err}" "exists already" "${cmd} '' should refuse the name")
+    endforeach()
+    qt_quilt_empty_arg(RESULT rc OUTPUT out ERROR err ARGS unapplied)
+    qt_assert_success("${rc}" "unapplied '' should list from the top patch")
+    qt_assert_equal("${out}" "p3.patch\n" "unapplied '' should list the patches after the top")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "${series_before}" "series should be unchanged")
+    qt_assert_file_text("${QT_WORK_DIR}/.pc/applied-patches" "${applied_before}" "applied patches should be unchanged")
+    # Unlike no argument, '' names the top patch even when it is the last
+    qt_quilt_ok(ARGS push MESSAGE "push p3 failed")
+    qt_quilt_empty_arg(RESULT rc OUTPUT out ERROR err ARGS unapplied)
+    qt_assert_success("${rc}" "unapplied '' should succeed when fully applied")
+    qt_assert_equal("${out}" "" "unapplied '' should list nothing when fully applied")
+    # With nothing applied there is no top patch for '' to mean
+    qt_quilt_ok(ARGS pop -a MESSAGE "pop -a failed")
+    foreach(cmd pop unapplied)
+        qt_quilt_empty_arg(RESULT rc OUTPUT out ERROR err ARGS ${cmd})
+        qt_assert_equal("${rc}" "1" "${cmd} '' should fail with nothing applied")
+        qt_assert_contains("${err}" "No patches applied" "${cmd} '' should say nothing is applied")
+    endforeach()
+endfunction()
+
+# Patch arguments are looked up like upstream's find_patch and
+# find_top_patch: before other checks, naming the argument as given, and
+# failing first on a missing series file or an empty series.
+function(qt_scenario_patch_lookup_errors)
+    qt_begin_test("patch_lookup_errors")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    foreach(cmd "delete;x" "header;x" "rename;-P;x;y.patch" "next;x" "push;x"
+                "add;-P;x;f.txt")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS ${cmd})
+        qt_assert_equal("${rc}" "1" "'${cmd}' should fail without a series file")
+        qt_assert_contains("${err}" "No series file found" "'${cmd}' should report the missing series file")
+    endforeach()
+    qt_write_file("${QT_WORK_DIR}/patches/series" "")
+    foreach(cmd "delete" "delete;x" "header" "fork" "next;x" "push;x" "add;-P;x;f.txt")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS ${cmd})
+        qt_assert_equal("${rc}" "1" "'${cmd}' should fail with an empty series")
+        qt_assert_contains("${err}" "No patches in series" "'${cmd}' should report the empty series")
+    endforeach()
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    foreach(cmd "pop;p1.patch" "add;-P;p1.patch;f.txt" "graph;p1.patch"
+                "annotate;-P;p1.patch;f.txt")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS ${cmd})
+        qt_assert_equal("${rc}" "1" "'${cmd}' should fail with nothing applied")
+        qt_assert_contains("${err}" "Patch p1.patch is not applied" "'${cmd}' should look up the patch")
+    endforeach()
+    foreach(cmd "pop;nonexist" "next;nonexist" "previous;nonexist"
+                "add;-P;nonexist;f.txt" "annotate;-P;nonexist;f.txt")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS ${cmd})
+        qt_assert_equal("${rc}" "1" "'${cmd}' should fail")
+        qt_assert_contains("${err}" "Patch nonexist is not in series" "'${cmd}' should name the patch")
+    endforeach()
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS delete patches/nonexist)
+    qt_assert_failure("${rc}" "delete of an unknown patch should fail")
+    qt_assert_contains("${err}" "Patch patches/nonexist is not in series" "delete should name the argument as given")
+    # rename refuses a name already in use outside the series too
+    qt_write_file("${QT_WORK_DIR}/patches/stray.patch" "stray\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS rename -P p1.patch patches/stray.patch)
+    qt_assert_failure("${rc}" "rename onto an existing file should fail")
+    qt_assert_contains("${err}" "Patch stray.patch exists already, please choose a different name"
+                       "rename should refuse the existing file")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/stray.patch" "stray" "rename should not overwrite the file")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS rename a.patch b.patch)
+    qt_assert_failure("${rc}" "rename with two names should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Usage: quilt rename" "rename with two names should print usage")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "p1.patch" "series should be unchanged")
 endfunction()
 
 # A file deleted by a patch (+++ /dev/null) is named only by its --- line.

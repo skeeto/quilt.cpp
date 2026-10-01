@@ -162,18 +162,49 @@ std::string next_filename(std::string_view patch) {
     return std::string(stem) + "-" + num + std::string(ext);
 }
 
-std::optional<std::string> find_applied_patch(const QuiltState &q, std::string_view name) {
+std::optional<std::string> find_patch(const QuiltState &q, std::string_view name) {
+    // A bare "patches/" strips to nothing, which names no patch
     std::string_view patch = strip_patches_prefix(q, name);
-    if (!q.find_in_series(patch)) {
+    if (!patch.empty() && q.find_in_series(patch)) {
+        return std::string(patch);
+    }
+    if (!q.series_file_exists) {
+        err_line("No series file found");
+    } else if (q.series.empty()) {
+        err_line("No patches in series");
+    } else {
         // Upstream echoes the name as given here, but not below
         err("Patch "); err(name); err_line(" is not in series");
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> find_top_patch(const QuiltState &q) {
+    if (!q.applied.empty()) {
+        return q.applied.back();
+    }
+    if (!q.series_file_exists) {
+        err_line("No series file found");
+    } else if (q.series.empty()) {
+        err_line("No patches in series");
+    } else {
+        err_line("No patches applied");
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> find_patch_in_series(const QuiltState &q, std::string_view name) {
+    return name.empty() ? find_top_patch(q) : find_patch(q, name);
+}
+
+std::optional<std::string> find_applied_patch(const QuiltState &q, std::string_view name) {
+    if (name.empty()) return find_top_patch(q);
+    auto patch = find_patch(q, name);
+    if (patch && !q.is_applied(*patch)) {
+        err("Patch "); err(format_patch(q, *patch)); err_line(" is not applied");
         return std::nullopt;
     }
-    if (!q.is_applied(patch)) {
-        err("Patch "); err(format_patch(q, patch)); err_line(" is not applied");
-        return std::nullopt;
-    }
-    return std::string(patch);
+    return patch;
 }
 
 bool valid_color_option(std::string_view arg) {

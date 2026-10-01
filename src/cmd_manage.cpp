@@ -91,7 +91,7 @@ int cmd_delete(QuiltState &q, int argc, char **argv) {
             err("Unrecognized option: "); err_line(arg);
             return 1;
         } else {
-            patch_arg = strip_patches_prefix(q, arg);
+            patch_arg = arg;
             ++positional_count;
         }
     }
@@ -101,9 +101,7 @@ int cmd_delete(QuiltState &q, int argc, char **argv) {
         err_line("Usage: quilt delete [-r] [--backup] [patch|-n]");
         return 1;
     }
-    if (!patch_arg.empty()) {
-        patch = patch_arg;
-    } else if (opt_next) {
+    if (opt_next) {
         // Next unapplied patch
         ptrdiff_t top_idx = q.top_index();
         ptrdiff_t next_idx = top_idx + 1;
@@ -113,12 +111,10 @@ int cmd_delete(QuiltState &q, int argc, char **argv) {
         }
         patch = q.series[checked_cast<size_t>(next_idx)];
     } else {
-        // Topmost applied patch
-        if (q.applied.empty()) {
-            err_line("No patches applied");
-            return 1;
-        }
-        patch = q.applied.back();
+        // No argument, or an empty one, means the top patch
+        auto found = find_patch_in_series(q, patch_arg);
+        if (!found) return 1;
+        patch = *found;
     }
 
     // Verify patch is in series
@@ -183,45 +179,39 @@ int cmd_delete(QuiltState &q, int argc, char **argv) {
 }
 
 int cmd_rename(QuiltState &q, int argc, char **argv) {
-    std::string old_patch;
+    std::string_view old_arg;
     std::string new_name;
+    int positional_count = 0;
 
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
         if (arg == "-P" && i + 1 < argc) {
-            old_patch = strip_patches_prefix(q, argv[++i]);
-        } else if (arg[0] == '-') {
+            old_arg = argv[++i];
+        } else if (arg.starts_with('-')) {
             err("Unrecognized option: "); err_line(arg);
             return 1;
         } else {
             new_name = strip_patches_prefix(q, arg);
+            ++positional_count;
         }
     }
 
-    // Default to top patch
-    if (old_patch.empty()) {
-        if (q.applied.empty()) {
-            err_line("No patches applied");
-            return 1;
-        }
-        old_patch = q.applied.back();
-    }
-
-    if (new_name.empty()) {
+    if (positional_count != 1) {
         err_line("Usage: quilt rename [-P patch] new_name");
         return 1;
     }
 
-    // Verify old patch exists in series
-    auto idx = q.find_in_series(old_patch);
-    if (!idx) {
-        err("Patch "); err(old_patch); err_line(" is not in series");
-        return 1;
-    }
+    // No -P, or an empty one, means the top patch
+    auto found = find_patch_in_series(q, old_arg);
+    if (!found) return 1;
+    std::string old_patch = *found;
 
-    // Verify new name doesn't exist in series
-    auto new_idx = q.find_in_series(new_name);
-    if (new_idx) {
+    // Like upstream, refuse a name in any use, so nothing is overwritten.
+    // An empty name (from "" or "patches/") names the directories
+    // themselves, so it is always in use.
+    if (new_name.empty() || q.find_in_series(new_name) ||
+        is_directory(pc_patch_dir(q, new_name)) ||
+        file_exists(path_join(q.work_dir, q.patches_dir, new_name))) {
         err("Patch "); err(patch_path_display(q, new_name));
         err_line(" exists already, please choose a different name");
         return 1;
@@ -613,11 +603,11 @@ int cmd_header(QuiltState &q, int argc, char **argv) {
             opt_strip_ds = true;
         } else if (arg == "--strip-trailing-whitespace") {
             opt_strip_ws = true;
-        } else if (arg[0] == '-') {
+        } else if (arg.starts_with('-')) {
             err("Unrecognized option: "); err_line(arg);
             return 1;
         } else {
-            patch_arg = strip_patches_prefix(q, arg);
+            patch_arg = arg;
             ++positional_count;
         }
     }
@@ -627,22 +617,10 @@ int cmd_header(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    // Determine patch
-    std::string_view patch;
-    if (!patch_arg.empty()) {
-        patch = patch_arg;
-        // Verify patch is in series
-        if (!q.find_in_series(patch)) {
-            err("Patch "); err(patch);
-            err_line(" is not in series");
-            return 1;
-        }
-    } else if (!q.applied.empty()) {
-        patch = q.applied.back();
-    } else {
-        err_line("No patches applied");
-        return 1;
-    }
+    // No argument, or an empty one, means the top patch
+    auto found = find_patch_in_series(q, patch_arg);
+    if (!found) return 1;
+    std::string patch = *found;
 
     std::string patch_file = path_join(q.work_dir, q.patches_dir, patch);
     std::string content = read_file(patch_file);
@@ -725,7 +703,7 @@ int cmd_files(QuiltState &q, int argc, char **argv) {
     bool opt_verbose = false;
     bool opt_all = false;
     bool opt_labels = false;
-    std::string combine_patch;
+    std::optional<std::string_view> combine_arg;
     std::string_view patch_arg;
 
     for (int i = 1; i < argc; ++i) {
@@ -737,47 +715,42 @@ int cmd_files(QuiltState &q, int argc, char **argv) {
         } else if (arg == "-l") {
             opt_labels = true;
         } else if (arg == "--combine" && i + 1 < argc) {
-            combine_patch = argv[++i];
-        } else if (arg[0] == '-') {
+            combine_arg = argv[++i];
+        } else if (arg.starts_with('-')) {
             err("Unrecognized option: "); err_line(arg);
             return 1;
         } else {
-            patch_arg = strip_patches_prefix(q, arg);
+            patch_arg = arg;
         }
     }
 
-    // Determine target patch (topmost or specified)
-    std::string target_patch;
-    if (!patch_arg.empty()) {
-        target_patch = patch_arg;
-    } else if (!q.applied.empty()) {
-        target_patch = q.applied.back();
-    } else {
-        if (!q.series_file_exists) {
-            err_line("No series file found");
-        } else if (q.series.empty()) {
-            err_line("No patches in series");
-        } else {
-            err_line("No patches applied");
-        }
-        return 1;
+    // Like upstream, resolve --combine first. Both "-" and an empty name
+    // stand for the first applied patch, resolved below.
+    std::string combine_start;
+    if (combine_arg && !combine_arg->empty() && *combine_arg != "-") {
+        auto found = find_patch(q, *combine_arg);
+        if (!found) return 1;
+        combine_start = *found;
     }
+
+    // No argument, or an empty one, means the top patch
+    auto found = find_patch_in_series(q, patch_arg);
+    if (!found) return 1;
+    std::string target_patch = *found;
 
     // Build list of patches to show files for
     std::vector<std::string> patches_to_show;
     if (opt_all) {
         patches_to_show = q.applied;
-    } else if (!combine_patch.empty()) {
-        // Range from combine_patch through target_patch
-        std::string start = combine_patch;
-        if (start == "-") {
+    } else if (combine_arg) {
+        // Range from the --combine patch through target_patch
+        std::string start = combine_start;
+        if (start.empty()) {
             if (q.applied.empty()) {
                 err_line("No patches applied");
                 return 1;
             }
             start = q.applied.front();
-        } else {
-            start = strip_patches_prefix(q, start);
         }
         bool in_range = false;
         for (const auto &a : q.applied) {
@@ -1054,12 +1027,9 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
 }
 
 int cmd_fork(QuiltState &q, int argc, char **argv) {
-    if (q.applied.empty()) {
-        err_line("No patches applied");
-        return 1;
-    }
-
-    std::string old_name = q.applied.back();
+    auto top = find_top_patch(q);
+    if (!top) return 1;
+    std::string old_name = *top;
     std::optional<std::string> given_name;
 
     for (int i = 1; i < argc; ++i) {

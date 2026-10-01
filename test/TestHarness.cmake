@@ -291,6 +291,35 @@ function(qt_quilt)
     set(${QT_ERROR} "${error}" PARENT_SCOPE)
 endfunction()
 
+# Like qt_quilt, but passes a literal empty argument between ARGS and
+# AFTER. qt_quilt cannot: CMake drops empty elements when expanding a list.
+function(qt_quilt_empty_arg)
+    cmake_parse_arguments(PARSE_ARGV 0 QT "" "RESULT;OUTPUT;ERROR" "ARGS;AFTER")
+    get_property(work_dir GLOBAL PROPERTY QT_WORK_DIR)
+    get_property(test_base GLOBAL PROPERTY QT_TEST_BASE)
+    set(env "HOME=${test_base}")
+    if(CMAKE_HOST_WIN32)
+        list(APPEND env "USERPROFILE=${test_base}")
+        set(input_file "NUL")
+    else()
+        set(input_file "/dev/null")
+    endif()
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}" -E chdir "${work_dir}"
+                "${CMAKE_COMMAND}" -E env ${env}
+                "${QUILT_TEST_EXECUTABLE}" --quiltrc - ${QT_ARGS} "" ${QT_AFTER}
+        RESULT_VARIABLE result
+        OUTPUT_VARIABLE output
+        ERROR_VARIABLE error
+        INPUT_FILE "${input_file}"
+    )
+    string(REGEX REPLACE "\r\n" "\n" output "${output}")
+    string(REGEX REPLACE "\r\n" "\n" error "${error}")
+    set(${QT_RESULT} "${result}" PARENT_SCOPE)
+    set(${QT_OUTPUT} "${output}" PARENT_SCOPE)
+    set(${QT_ERROR} "${error}" PARENT_SCOPE)
+endfunction()
+
 function(qt_quilt_ok)
     set(options DEFAULT_QUILTRC)
     set(one_value_args OUTPUT ERROR WORKING_DIRECTORY INPUT MESSAGE)

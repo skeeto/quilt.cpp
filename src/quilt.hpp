@@ -168,9 +168,19 @@ inline std::string patch_path_display(const QuiltState &q, std::string_view name
 // counts up, otherwise "-2" goes there (p.patch -> p-2.patch -> p-3.patch).
 std::string next_filename(std::string_view patch);
 
-// Resolve a user-supplied patch name that must be in the series and
-// applied, like upstream's find_applied_patch. On failure, prints
-// "is not in series" or "is not applied" and returns nullopt.
+// Patch lookups, like upstream's functions of the same names. Pass a
+// patch argument as given: these strip the patches/ prefix themselves.
+// Decide whether an argument was given before stripping, since a bare
+// "patches/" is an argument that names no patch, not a request for the
+// top patch. On failure, each prints the reason and returns nullopt.
+//
+// find_patch: the named patch must be in the series.
+// find_top_patch: the topmost applied patch.
+// find_patch_in_series: find_patch, except an empty name means the top patch.
+// find_applied_patch: find_patch_in_series, and the patch must be applied.
+std::optional<std::string> find_patch(const QuiltState &q, std::string_view name);
+std::optional<std::string> find_top_patch(const QuiltState &q);
+std::optional<std::string> find_patch_in_series(const QuiltState &q, std::string_view name);
 std::optional<std::string> find_applied_patch(const QuiltState &q, std::string_view name);
 
 // Whether a --color or --color=when argument is valid. Like upstream, when

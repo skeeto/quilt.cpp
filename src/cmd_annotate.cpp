@@ -87,7 +87,7 @@ std::optional<AnnotateOptions> parse_options(const QuiltState &q, int argc, char
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
         if (arg == "-P" && i + 1 < argc) {
-            opts.patch = strip_patches_prefix(q, argv[i + 1]);
+            opts.patch = argv[i + 1];
             ++i;
             continue;
         }
@@ -106,18 +106,6 @@ std::optional<AnnotateOptions> parse_options(const QuiltState &q, int argc, char
     return opts;
 }
 
-int no_applied_patches_error(const QuiltState &q)
-{
-    if (!q.series_file_exists) {
-        err_line("No series file found");
-    } else if (q.series.empty()) {
-        err_line("No patches in series");
-    } else {
-        err_line("No patches applied");
-    }
-    return 1;
-}
-
 } // namespace
 
 int cmd_annotate(QuiltState &q, int argc, char **argv)
@@ -128,19 +116,10 @@ int cmd_annotate(QuiltState &q, int argc, char **argv)
         return 1;
     }
 
-    if (q.applied.empty()) {
-        return no_applied_patches_error(q);
-    }
-
-    std::string stop_patch = opts->patch.empty() ? q.applied.back() : opts->patch;
-    if (!q.find_in_series(stop_patch).has_value()) {
-        err_line("Patch " + stop_patch + " is not in series");
-        return 1;
-    }
-    if (!q.is_applied(stop_patch)) {
-        err_line("Patch " + stop_patch + " is not applied");
-        return 1;
-    }
+    // No -P, or an empty one, means the top patch
+    auto found = find_applied_patch(q, opts->patch);
+    if (!found) return 1;
+    std::string stop_patch = *found;
 
     std::vector<std::string> patches;
     std::vector<std::string> files;
