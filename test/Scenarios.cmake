@@ -476,6 +476,8 @@ set(QUILT_TEST_SCENARIOS
     fold_subdirectory_rollback
     diff_context_line_ranges
     diff_hunk_context_gap
+    diff_incomplete_last_line
+    diff_incomplete_last_lines_both
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -8173,6 +8175,10 @@ function(qt_run_named_scenario scenario)
         qt_scenario_diff_context_line_ranges()
     elseif(scenario STREQUAL "diff_hunk_context_gap")
         qt_scenario_diff_hunk_context_gap()
+    elseif(scenario STREQUAL "diff_incomplete_last_line")
+        qt_scenario_diff_incomplete_last_line()
+    elseif(scenario STREQUAL "diff_incomplete_last_lines_both")
+        qt_scenario_diff_incomplete_last_lines_both()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -13452,4 +13458,67 @@ function(qt_scenario_diff_hunk_context_gap)
     qt_assert_equal("${out}"
         "--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n-1\n+X\n a\n b\n@@ -6,3 +6,3 @@\n e\n f\n-2\n+Y\n"
         "changes six unchanged lines apart should get two hunks with -U 2")
+endfunction()
+
+# Helper: in a new patch, change FILE from OLD to NEW, then check that diff
+# in FORMAT (-u or -c) prints EXPECTED with every diff algorithm (upstream
+# ignores QUILT_DIFF_ALGORITHM), and that the patch refreshed in FORMAT
+# pops back to OLD and pushes to NEW, byte for byte.
+function(qt_check_diff_round_trip file old new format expected)
+    qt_write_file("${QT_WORK_DIR}/${file}" "${old}")
+    qt_quilt_ok(ARGS new "${file}${format}.patch" MESSAGE "new failed")
+    qt_quilt_ok(ARGS add "${file}" MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/${file}" "${new}")
+    foreach(algo myers minimal patience histogram)
+        qt_quilt_ok(ENV "QUILT_DIFF_ALGORITHM=${algo}" OUTPUT out
+                    ARGS diff -p ab --no-index --no-timestamps ${format}
+                    MESSAGE "diff ${format} of ${file} failed (${algo})")
+        qt_assert_equal("${out}" "${expected}" "diff ${format} of ${file} (${algo})")
+    endforeach()
+    qt_quilt_ok(ARGS refresh ${format} MESSAGE "refresh ${format} of ${file} failed")
+    file(WRITE "${QT_TEST_BASE}/expected" "${old}")
+    file(READ "${QT_TEST_BASE}/expected" old_hex HEX)
+    file(WRITE "${QT_TEST_BASE}/expected" "${new}")
+    file(READ "${QT_TEST_BASE}/expected" new_hex HEX)
+    qt_quilt_ok(ARGS pop MESSAGE "pop of ${file}${format} failed")
+    qt_assert_file_hex("${QT_WORK_DIR}/${file}" "${old_hex}" "pop should restore ${file}")
+    qt_quilt_ok(ARGS push MESSAGE "push of ${file}${format} failed")
+    qt_assert_file_hex("${QT_WORK_DIR}/${file}" "${new_hex}" "push should change ${file}")
+endfunction()
+
+# diff_incomplete_last_line: as in GNU diff, a file's incomplete last line
+# never matches the same text with a newline, and each side's "No newline"
+# marker follows its own incomplete line.  In "del", removing the last line
+# makes "b" the new incomplete line; in "move", the incomplete "x" moves to
+# the top and leaves "g" incomplete.
+function(qt_scenario_diff_incomplete_last_line)
+    qt_begin_test("diff_incomplete_last_line")
+    set(nl "\\ No newline at end of file\n")
+    qt_check_diff_round_trip(del "b\nx" "b" -u
+        "--- a/del\n+++ b/del\n@@ -1,2 +1 @@\n-b\n-x\n${nl}+b\n${nl}")
+    qt_check_diff_round_trip(del "b\nx" "b" -c
+        "*** a/del\n--- b/del\n***************\n*** 1,2 ****\n! b\n! x\n${nl}--- 1 ----\n! b\n${nl}")
+    set(lines "a\nb\nc\nd\ne\nf\ng")
+    set(body "  a\n  b\n  c\n  d\n  e\n  f\n")
+    qt_check_diff_round_trip(move "${lines}\nx" "x\n${lines}" -u
+        "--- a/move\n+++ b/move\n@@ -1,8 +1,8 @@\n+x\n a\n b\n c\n d\n e\n f\n-g\n-x\n${nl}+g\n${nl}")
+    qt_check_diff_round_trip(move "${lines}\nx" "x\n${lines}" -c
+        "*** a/move\n--- b/move\n***************\n*** 1,8 ****\n${body}! g\n! x\n${nl}--- 1,8 ----\n+ x\n${body}! g\n${nl}")
+endfunction()
+
+# diff_incomplete_last_lines_both: when both files end in an incomplete
+# line, those lines match only each other, as in GNU diff.  In "differ" the
+# incomplete "jkl" is not matched with the complete "jkl"; in "same" the
+# matching incomplete lines are context with the marker on both sides.
+function(qt_scenario_diff_incomplete_last_lines_both)
+    qt_begin_test("diff_incomplete_last_lines_both")
+    set(nl "\\ No newline at end of file\n")
+    qt_check_diff_round_trip(differ "aabi\njkl\nx" "yz\ndghi\njkl" -u
+        "--- a/differ\n+++ b/differ\n@@ -1,3 +1,3 @@\n-aabi\n-jkl\n-x\n${nl}+yz\n+dghi\n+jkl\n${nl}")
+    qt_check_diff_round_trip(differ "aabi\njkl\nx" "yz\ndghi\njkl" -c
+        "*** a/differ\n--- b/differ\n***************\n*** 1,3 ****\n! aabi\n! jkl\n! x\n${nl}--- 1,3 ----\n! yz\n! dghi\n! jkl\n${nl}")
+    qt_check_diff_round_trip(same "a\nb\nc" "a\nX\nc" -u
+        "--- a/same\n+++ b/same\n@@ -1,3 +1,3 @@\n a\n-b\n+X\n c\n${nl}")
+    qt_check_diff_round_trip(same "a\nb\nc" "a\nX\nc" -c
+        "*** a/same\n--- b/same\n***************\n*** 1,3 ****\n  a\n! b\n  c\n${nl}--- 1,3 ----\n  a\n! X\n  c\n${nl}")
 endfunction()

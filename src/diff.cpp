@@ -30,40 +30,40 @@ static ptrdiff_t bogosqrt(ptrdiff_t n)
     return r;
 }
 
-// Split content into lines, preserving the information about whether
-// the file ended with a newline.  Each element is one line WITHOUT its
-// terminating '\n'.
-struct FileLines {
-    std::vector<std::string_view> lines;
-    bool has_trailing_newline = true;
-};
-
-static FileLines split_file_lines(std::string_view content)
+// Split content into lines.  Each element keeps its terminating '\n', so
+// an incomplete last line compares equal only to the other file's
+// incomplete last line with the same text, never to a complete line.
+// GNU diff treats it the same way in unified and context output.
+static std::vector<std::string_view> split_file_lines(std::string_view content)
 {
-    FileLines fl;
-    if (content.empty()) {
-        fl.has_trailing_newline = true;  // empty file is fine
-        return fl;
-    }
-
-    fl.has_trailing_newline = (content.back() == '\n');
-
+    std::vector<std::string_view> lines;
     ptrdiff_t start = 0;
     ptrdiff_t len = std::ssize(content);
     for (ptrdiff_t i = 0; i < len; ++i) {
         if (content[checked_cast<size_t>(i)] == '\n') {
-            fl.lines.push_back(content.substr(checked_cast<size_t>(start),
-                                              checked_cast<size_t>(i - start)));
+            lines.push_back(content.substr(checked_cast<size_t>(start),
+                                           checked_cast<size_t>(i + 1 - start)));
             start = i + 1;
         }
     }
     // If there's content after the last newline (no trailing newline)
     if (start < len) {
-        fl.lines.push_back(content.substr(checked_cast<size_t>(start),
-                                          checked_cast<size_t>(len - start)));
+        lines.push_back(content.substr(checked_cast<size_t>(start),
+                                       checked_cast<size_t>(len - start)));
     }
+    return lines;
+}
 
-    return fl;
+// Append one line of a hunk body after its prefix, followed by a
+// "No newline" marker if it is an incomplete last line.
+static void append_hunk_line(std::string &out, std::string_view prefix,
+                             std::string_view line)
+{
+    out += prefix;
+    out += line;
+    if (!line.ends_with('\n')) {
+        out += "\n\\ No newline at end of file\n";
+    }
 }
 
 // Myers diff algorithm.
@@ -796,8 +796,6 @@ static std::vector<Hunk> build_hunks(const std::vector<EditOp> &ops,
 static std::string format_unified(
     std::span<const std::string_view> old_lines,
     std::span<const std::string_view> new_lines,
-    bool old_has_trailing_nl,
-    bool new_has_trailing_nl,
     const std::vector<Hunk> &hunks,
     std::string_view old_label,
     std::string_view new_label)
@@ -811,9 +809,6 @@ static std::string format_unified(
     result += "+++ ";
     result += new_label;
     result += '\n';
-
-    ptrdiff_t old_total = std::ssize(old_lines);
-    ptrdiff_t new_total = std::ssize(new_lines);
 
     for (const auto &hunk : hunks) {
         // Hunk header: @@ -old_start[,old_count] +new_start[,new_count] @@
@@ -835,50 +830,11 @@ static std::string format_unified(
         // Hunk body
         for (const auto &op : hunk.ops) {
             if (op.type == 'E') {
-                bool last_old = (op.old_idx == old_total - 1);
-                bool last_new = (op.new_idx == new_total - 1);
-                bool old_need_annot = last_old && !old_has_trailing_nl;
-                bool new_need_annot = last_new && !new_has_trailing_nl;
-                // When the trailing-newline annotation differs between
-                // sides, emit as D+I so each gets its own marker.
-                if (old_need_annot != new_need_annot) {
-                    result += '-';
-                    result += old_lines[checked_cast<size_t>(op.old_idx)];
-                    result += '\n';
-                    if (!old_has_trailing_nl) {
-                        result += "\\ No newline at end of file\n";
-                    }
-                    result += '+';
-                    result += new_lines[checked_cast<size_t>(op.new_idx)];
-                    result += '\n';
-                    if (!new_has_trailing_nl) {
-                        result += "\\ No newline at end of file\n";
-                    }
-                } else {
-                    result += ' ';
-                    result += old_lines[checked_cast<size_t>(op.old_idx)];
-                    result += '\n';
-                    if (last_old && !old_has_trailing_nl &&
-                        last_new && !new_has_trailing_nl) {
-                        result += "\\ No newline at end of file\n";
-                    }
-                }
+                append_hunk_line(result, " ", old_lines[checked_cast<size_t>(op.old_idx)]);
             } else if (op.type == 'D') {
-                result += '-';
-                result += old_lines[checked_cast<size_t>(op.old_idx)];
-                result += '\n';
-                // Check if this is the last old line with no trailing newline
-                if (op.old_idx == old_total - 1 && !old_has_trailing_nl) {
-                    result += "\\ No newline at end of file\n";
-                }
+                append_hunk_line(result, "-", old_lines[checked_cast<size_t>(op.old_idx)]);
             } else { // 'I'
-                result += '+';
-                result += new_lines[checked_cast<size_t>(op.new_idx)];
-                result += '\n';
-                // Check if this is the last new line with no trailing newline
-                if (op.new_idx == new_total - 1 && !new_has_trailing_nl) {
-                    result += "\\ No newline at end of file\n";
-                }
+                append_hunk_line(result, "+", new_lines[checked_cast<size_t>(op.new_idx)]);
             }
         }
     }
@@ -899,8 +855,6 @@ static std::string context_range(ptrdiff_t start, ptrdiff_t count)
 static std::string format_context(
     std::span<const std::string_view> old_lines,
     std::span<const std::string_view> new_lines,
-    bool old_has_trailing_nl,
-    bool new_has_trailing_nl,
     const std::vector<Hunk> &hunks,
     std::string_view old_label,
     std::string_view new_label)
@@ -915,25 +869,20 @@ static std::string format_context(
     result += new_label;
     result += '\n';
 
-    ptrdiff_t old_total = std::ssize(old_lines);
-    ptrdiff_t new_total = std::ssize(new_lines);
-
     for (const auto &hunk : hunks) {
         result += "***************\n";
 
         // Classify each edit group: adjacent D and I runs form "changes" (! prefix)
         // We need to build old-side and new-side lines with proper prefixes.
-        struct SideLine { char prefix; std::string_view text; bool no_newline; };
+        struct SideLine { std::string_view prefix; std::string_view text; };
         std::vector<SideLine> old_side, new_side;
 
         ptrdiff_t num_ops = std::ssize(hunk.ops);
         for (ptrdiff_t k = 0; k < num_ops; ) {
             const auto &op = hunk.ops[checked_cast<size_t>(k)];
             if (op.type == 'E') {
-                bool onl = (op.old_idx == old_total - 1 && !old_has_trailing_nl &&
-                            op.new_idx == new_total - 1 && !new_has_trailing_nl);
-                old_side.push_back({' ', old_lines[checked_cast<size_t>(op.old_idx)], onl});
-                new_side.push_back({' ', new_lines[checked_cast<size_t>(op.new_idx)], onl});
+                old_side.push_back({"  ", old_lines[checked_cast<size_t>(op.old_idx)]});
+                new_side.push_back({"  ", new_lines[checked_cast<size_t>(op.new_idx)]});
                 ++k;
             } else {
                 // Collect consecutive D then I runs
@@ -946,15 +895,13 @@ static std::string format_context(
                 bool is_change = (de > ds && ie > de);
                 for (ptrdiff_t j = ds; j < de; ++j) {
                     auto &dop = hunk.ops[checked_cast<size_t>(j)];
-                    bool onl = (dop.old_idx == old_total - 1 && !old_has_trailing_nl);
-                    old_side.push_back({is_change ? '!' : '-',
-                                       old_lines[checked_cast<size_t>(dop.old_idx)], onl});
+                    old_side.push_back({is_change ? "! " : "- ",
+                                       old_lines[checked_cast<size_t>(dop.old_idx)]});
                 }
                 for (ptrdiff_t j = de; j < ie; ++j) {
                     auto &iop = hunk.ops[checked_cast<size_t>(j)];
-                    bool onl = (iop.new_idx == new_total - 1 && !new_has_trailing_nl);
-                    new_side.push_back({is_change ? '!' : '+',
-                                       new_lines[checked_cast<size_t>(iop.new_idx)], onl});
+                    new_side.push_back({is_change ? "! " : "+ ",
+                                       new_lines[checked_cast<size_t>(iop.new_idx)]});
                 }
             }
         }
@@ -966,17 +913,11 @@ static std::string format_context(
         // Print old-side lines only if there are changes (not just context)
         bool has_old_changes = false;
         for (const auto &sl : old_side) {
-            if (sl.prefix != ' ') { has_old_changes = true; break; }
+            if (sl.prefix != "  ") { has_old_changes = true; break; }
         }
         if (has_old_changes) {
             for (const auto &sl : old_side) {
-                result += sl.prefix;
-                result += ' ';
-                result += sl.text;
-                result += '\n';
-                if (sl.no_newline) {
-                    result += "\\ No newline at end of file\n";
-                }
+                append_hunk_line(result, sl.prefix, sl.text);
             }
         }
 
@@ -987,17 +928,11 @@ static std::string format_context(
         // Print new-side lines only if there are changes
         bool has_new_changes = false;
         for (const auto &sl : new_side) {
-            if (sl.prefix != ' ') { has_new_changes = true; break; }
+            if (sl.prefix != "  ") { has_new_changes = true; break; }
         }
         if (has_new_changes) {
             for (const auto &sl : new_side) {
-                result += sl.prefix;
-                result += ' ';
-                result += sl.text;
-                result += '\n';
-                if (sl.no_newline) {
-                    result += "\\ No newline at end of file\n";
-                }
+                append_hunk_line(result, sl.prefix, sl.text);
             }
         }
     }
@@ -1037,17 +972,17 @@ DiffResult builtin_diff(std::string_view old_path, std::string_view new_path,
     }
 
     // Split into lines
-    auto old_fl = split_file_lines(old_content);
-    auto new_fl = split_file_lines(new_content);
+    auto old_lines = split_file_lines(old_content);
+    auto new_lines = split_file_lines(new_content);
 
     // Run diff algorithm
     std::vector<EditOp> ops;
     if (algorithm == DiffAlgorithm::patience)
-        ops = patience_diff(old_fl.lines, new_fl.lines);
+        ops = patience_diff(old_lines, new_lines);
     else if (algorithm == DiffAlgorithm::histogram)
-        ops = histogram_diff(old_fl.lines, new_fl.lines);
+        ops = histogram_diff(old_lines, new_lines);
     else
-        ops = myers_diff(old_fl.lines, new_fl.lines, algorithm);
+        ops = myers_diff(old_lines, new_lines, algorithm);
 
     // Check if there are any differences
     bool has_diff = false;
@@ -1055,37 +990,8 @@ DiffResult builtin_diff(std::string_view old_path, std::string_view new_path,
         if (op.type != 'E') { has_diff = true; break; }
     }
 
-    // Also check trailing newline difference
-    if (!has_diff && !old_fl.lines.empty() &&
-        old_fl.has_trailing_newline != new_fl.has_trailing_newline) {
-        has_diff = true;
-    }
-
     if (!has_diff) {
         return {0, ""};
-    }
-
-    // When trailing newlines differ the last line must appear as a D+I
-    // pair (not a context 'E') so each side gets the right "\ No newline"
-    // annotation.  Replace the trailing 'E' with D+I before building hunks
-    // so that build_hunks sees a real change and includes it in a hunk.
-    if (!old_fl.lines.empty() &&
-        old_fl.has_trailing_newline != new_fl.has_trailing_newline) {
-        // Find the last 'E' op that covers the final line of both files
-        for (ptrdiff_t i = std::ssize(ops) - 1; i >= 0; --i) {
-            auto &op = ops[checked_cast<size_t>(i)];
-            if (op.type == 'E' &&
-                op.old_idx == std::ssize(old_fl.lines) - 1 &&
-                op.new_idx == std::ssize(new_fl.lines) - 1) {
-                // Replace with D then I
-                EditOp d_op{'D', op.old_idx, -1};
-                EditOp i_op{'I', -1, op.new_idx};
-                ops[checked_cast<size_t>(i)] = d_op;
-                ops.insert(ops.begin() + i + 1, i_op);
-                break;
-            }
-            if (op.type == 'E') break;  // only check the last equal op
-        }
     }
 
     // Use labels or default to paths
@@ -1097,15 +1003,9 @@ DiffResult builtin_diff(std::string_view old_path, std::string_view new_path,
 
     std::string output;
     if (format == DiffFormat::context) {
-        output = format_context(old_fl.lines, new_fl.lines,
-                                old_fl.has_trailing_newline,
-                                new_fl.has_trailing_newline,
-                                hunks, old_lbl, new_lbl);
+        output = format_context(old_lines, new_lines, hunks, old_lbl, new_lbl);
     } else {
-        output = format_unified(old_fl.lines, new_fl.lines,
-                                old_fl.has_trailing_newline,
-                                new_fl.has_trailing_newline,
-                                hunks, old_lbl, new_lbl);
+        output = format_unified(old_lines, new_lines, hunks, old_lbl, new_lbl);
     }
 
     return {1, std::move(output)};
