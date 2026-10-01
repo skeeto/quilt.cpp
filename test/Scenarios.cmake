@@ -376,6 +376,9 @@ set(QUILT_TEST_SCENARIOS
     pop_force_refresh_conflict
     pop_empty_patch
     applied_patches_removed_when_empty
+    refresh_invalid_p
+    series_invalid_strip_level
+    diff_invalid_p
     files_all_no_applied
     delete_n_explicit
     header_mode_conflict
@@ -7597,6 +7600,12 @@ function(qt_run_named_scenario scenario)
         qt_scenario_pop_empty_patch()
     elseif(scenario STREQUAL "applied_patches_removed_when_empty")
         qt_scenario_applied_patches_removed_when_empty()
+    elseif(scenario STREQUAL "refresh_invalid_p")
+        qt_scenario_refresh_invalid_p()
+    elseif(scenario STREQUAL "series_invalid_strip_level")
+        qt_scenario_series_invalid_strip_level()
+    elseif(scenario STREQUAL "diff_invalid_p")
+        qt_scenario_diff_invalid_p()
     elseif(scenario STREQUAL "files_all_no_applied")
         qt_scenario_files_all_no_applied()
     elseif(scenario STREQUAL "delete_n_explicit")
@@ -10786,6 +10795,60 @@ function(qt_scenario_applied_patches_removed_when_empty)
     qt_assert_exists("${QT_WORK_DIR}/.pc/applied-patches" "applied-patches should reappear after push")
     qt_quilt_ok(ARGS delete MESSAGE "delete failed")
     qt_assert_not_exists("${QT_WORK_DIR}/.pc/applied-patches" "applied-patches should be removed when delete empties the stack")
+endfunction()
+
+function(qt_scenario_refresh_invalid_p)
+    qt_begin_test("refresh_invalid_p")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_read_file_raw(before "${QT_WORK_DIR}/patches/p.patch")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "z\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh -p 9)
+    qt_assert_failure("${rc}" "refresh -p 9 should fail")
+    qt_assert_contains("${err}" "Cannot refresh patches with -p9, please specify -p0, -p1, or -pab instead"
+                       "invalid strip level should be rejected")
+    qt_read_file_raw(after "${QT_WORK_DIR}/patches/p.patch")
+    qt_assert_equal("${after}" "${before}" "patch file should be unchanged")
+endfunction()
+
+# A strip level from the series file is validated like an explicit -p.
+function(qt_scenario_series_invalid_strip_level)
+    qt_begin_test("series_invalid_strip_level")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch"
+                  "--- x/y/f.txt\n+++ x/y/f.txt\n@@ -1 +1 @@\n-a\n+b\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.patch -p2\n")
+    qt_quilt_ok(ARGS push MESSAGE "push of -p2 patch failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "b" "patch should apply at -p2")
+    qt_read_file_raw(before "${QT_WORK_DIR}/patches/p.patch")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "c\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh)
+    qt_assert_failure("${rc}" "refresh of a -p2 patch should fail")
+    qt_assert_contains("${err}" "Cannot refresh patches with -p2" "stored strip level should be rejected")
+    qt_quilt(RESULT rc2 OUTPUT out2 ERROR err2 ARGS diff)
+    qt_assert_failure("${rc2}" "diff of a -p2 patch should fail")
+    qt_assert_contains("${err2}" "Cannot diff patches with -p2" "stored strip level should be rejected")
+    qt_read_file_raw(after "${QT_WORK_DIR}/patches/p.patch")
+    qt_assert_equal("${after}" "${before}" "patch file should be unchanged")
+    # An explicit valid level overrides the stored one
+    qt_quilt_ok(OUTPUT out3 ERROR err3 ARGS diff -p 1 MESSAGE "diff -p 1 failed")
+    qt_assert_contains("${out3}" "+c" "diff -p 1 should show the change")
+endfunction()
+
+function(qt_scenario_diff_invalid_p)
+    qt_begin_test("diff_invalid_p")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS diff -p 9)
+    qt_assert_failure("${rc}" "diff -p 9 should fail")
+    qt_assert_equal("${out}" "" "no diff should be printed")
+    qt_assert_contains("${err}" "Cannot diff patches with -p9, please specify -p0, -p1, or -pab instead"
+                       "invalid strip level should be rejected")
 endfunction()
 
 function(qt_scenario_files_all_no_applied)

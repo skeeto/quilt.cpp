@@ -32,8 +32,7 @@ int QuiltState::get_strip_level(std::string_view patch) const {
 }
 
 std::string QuiltState::get_p_format(std::string_view patch) const {
-    if (get_strip_level(patch) == 0) return "0";
-    return "1";
+    return std::to_string(get_strip_level(patch));
 }
 
 void out(std::string_view s) {

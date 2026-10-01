@@ -1031,7 +1031,6 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     // Parse options
     std::string patch;
     std::string p_format;
-    bool explicit_p = false;
     int i = 1;
     bool no_timestamps = !get_env("QUILT_NO_DIFF_TIMESTAMPS").empty();
     bool no_index = !get_env("QUILT_NO_DIFF_INDEX").empty();
@@ -1061,13 +1060,11 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         std::string_view arg = argv[i];
         if (arg == "-p" && i + 1 < argc) {
             p_format = std::string(argv[i + 1]);
-            explicit_p = true;
             i += 2;
             continue;
         }
         if (arg.starts_with("-p") && std::ssize(arg) > 2) {
             p_format = std::string(arg.substr(2));
-            explicit_p = true;
             i += 1;
             continue;
         }
@@ -1189,8 +1186,15 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         patch = *found;
     }
 
-    if (!explicit_p) {
+    // Like the original quilt, validate the effective strip level, which
+    // may come from the series file.
+    if (p_format.empty()) {
         p_format = q.get_p_format(patch);
+    }
+    if (p_format != "0" && p_format != "1" && p_format != "ab") {
+        err("Cannot refresh patches with -p"); err(p_format);
+        err_line(", please specify -p0, -p1, or -pab instead");
+        return 1;
     }
 
     // Compute diff format and context lines
@@ -1595,7 +1599,6 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
     // Parse options
     std::string patch;
     std::string p_format;
-    bool explicit_p = false;
     std::vector<std::string> file_filter;
     bool no_timestamps = !get_env("QUILT_NO_DIFF_TIMESTAMPS").empty();
     bool no_index = !get_env("QUILT_NO_DIFF_INDEX").empty();
@@ -1630,13 +1633,11 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
         }
         if (arg == "-p" && i + 1 < argc) {
             p_format = std::string(argv[i + 1]);
-            explicit_p = true;
             i += 2;
             continue;
         }
         if (arg.starts_with("-p") && std::ssize(arg) > 2) {
             p_format = std::string(arg.substr(2));
-            explicit_p = true;
             i += 1;
             continue;
         }
@@ -1803,8 +1804,15 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    if (!explicit_p) {
+    // Like the original quilt, validate the effective strip level, which
+    // may come from the series file.
+    if (p_format.empty()) {
         p_format = q.get_p_format(patch);
+    }
+    if (p_format != "0" && p_format != "1" && p_format != "ab") {
+        err("Cannot diff patches with -p"); err(p_format);
+        err_line(", please specify -p0, -p1, or -pab instead");
+        return 1;
     }
 
     // Determine diff format and context lines for builtin diff

@@ -67,7 +67,7 @@ struct QuiltState {
     bool is_applied(std::string_view patch) const;
     std::optional<ptrdiff_t> find_in_series(std::string_view patch) const;
     int get_strip_level(std::string_view patch) const;  // returns 1 if not set
-    std::string get_p_format(std::string_view patch) const;  // "0" or "1"
+    std::string get_p_format(std::string_view patch) const;  // strip level as "-p" value
 };
 
 // I/O helpers
