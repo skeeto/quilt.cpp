@@ -12,6 +12,61 @@ static void write_applied_patches(QuiltState &q) {
     if (q.applied.empty()) delete_file(path);
 }
 
+// Apply the patch options from QUILT_PATCH_OPTS that the builtin engine
+// understands.
+static void apply_quilt_patch_opts(PatchOptions &opts, std::span<const std::string> extra)
+{
+    for (const auto &opt : extra) {
+        std::string_view o = opt;
+        if (o == "-R") opts.reverse = true;
+        else if (o == "-f" || o == "--force") opts.force = true;
+        else if (o == "-s") opts.quiet = true;
+        else if (o == "-E") opts.remove_empty = true;
+        else if (o.starts_with("--fuzz=")) {
+            opts.fuzz = checked_cast<int>(parse_int(o.substr(7)));
+        }
+    }
+}
+
+// Check that the patch file accounts for every change to the patch's files,
+// like upstream's check_for_pending_changes: apply the patch to the backups
+// in memory and compare each result with the working tree.
+static bool removes_cleanly(const QuiltState &q, std::string_view name,
+                            std::span<const std::string> extra_patch_opts)
+{
+    std::string pc_dir = pc_patch_dir(q, name);
+    auto files = files_in_patch(q, name);
+
+    std::map<std::string, std::string> memfs;
+    for (const auto &file : files) {
+        // An empty backup means the file did not exist before the patch
+        std::string backup = read_file(path_join(pc_dir, file));
+        if (!backup.empty()) memfs[file] = std::move(backup);
+    }
+
+    std::string patch_content = read_file(path_join(q.work_dir, q.patches_dir, name));
+    if (!patch_content.empty()) {
+        PatchOptions opts;
+        opts.strip_level = q.get_strip_level(name);
+        if (q.patch_reversed.contains(std::string(name))) opts.reverse = true;
+        apply_quilt_patch_opts(opts, extra_patch_opts);
+        // Keep whatever applies, so a force-applied patch matches the
+        // partial result that push left behind
+        opts.force = true;
+        opts.quiet = true;
+        opts.fs = &memfs;
+        builtin_patch(patch_content, opts);
+    }
+
+    for (const auto &file : files) {
+        // A missing file compares as empty, like diff against /dev/null
+        auto it = memfs.find(file);
+        std::string_view expected = it != memfs.end() ? std::string_view(it->second) : "";
+        if (read_file(path_join(q.work_dir, file)) != expected) return false;
+    }
+    return true;
+}
+
 int cmd_series(QuiltState &q, int argc, char **argv) {
     bool verbose = false;
     // color: 0=never, 1=auto, 2=always
@@ -431,17 +486,7 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
             patch_opts.merge = true;
             patch_opts.merge_style = merge_style;
         }
-        // Parse QUILT_PATCH_OPTS for additional options
-        for (const auto &opt : extra_patch_opts) {
-            std::string_view o = opt;
-            if (o == "-R") patch_opts.reverse = true;
-            else if (o == "-f" || o == "--force") patch_opts.force = true;
-            else if (o == "-s") patch_opts.quiet = true;
-            else if (o == "-E") patch_opts.remove_empty = true;
-            else if (o.starts_with("--fuzz=")) {
-                patch_opts.fuzz = checked_cast<int>(parse_int(o.substr(7)));
-            }
-        }
+        apply_quilt_patch_opts(patch_opts, extra_patch_opts);
 
         // Back up every file the patch will modify, including deletions
         auto affected = patch_target_files(patch_content, patch_opts.strip_level,
@@ -614,9 +659,7 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
         return 2;
     }
 
-    // Like push, honor -R in QUILT_PATCH_OPTS
     auto extra_patch_opts = shell_split(get_env("QUILT_PATCH_OPTS"));
-    bool opts_reverse = std::ranges::find(extra_patch_opts, "-R") != extra_patch_opts.end();
 
     // Pop from the top down to stop_idx
     bool first_pop = true;
@@ -641,27 +684,12 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
 
         std::string pc_dir = pc_patch_dir(q, name);
 
-        // Check if patch removes cleanly (detects dirty/unrefreshed changes)
-        if (!force) {
-            std::string patch_path = path_join(q.work_dir, q.patches_dir, name);
-            std::string patch_content = read_file(patch_path);
-            if (!patch_content.empty()) {
-                int strip_level = q.get_strip_level(name);
-                PatchOptions verify_opts;
-                verify_opts.strip_level = strip_level;
-                // Undo the patch opposite to how push applied it
-                verify_opts.reverse = !(opts_reverse || q.patch_reversed.contains(name));
-                verify_opts.dry_run = true;
-                verify_opts.force = true;
-                verify_opts.quiet = true;
-                PatchResult vr = builtin_patch(patch_content, verify_opts);
-                if (vr.exit_code != 0) {
-                    err_line("Patch " + display +
-                             " does not remove cleanly (refresh it or enforce with -f)");
-                    err_line("Hint: `quilt diff -z' will show the pending changes.");
-                    return 1;
-                }
-            }
+        // Refuse to discard changes that are not in the patch file
+        if (!force && !removes_cleanly(q, name, extra_patch_opts)) {
+            err_line("Patch " + display +
+                     " does not remove cleanly (refresh it or enforce with -f)");
+            err_line("Hint: `quilt diff -z' will show the pending changes.");
+            return 1;
         }
 
         // Restore backed-up files

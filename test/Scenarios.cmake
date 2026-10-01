@@ -383,6 +383,11 @@ set(QUILT_TEST_SCENARIOS
     pop_refresh_needs_refresh
     pop_force_refresh_conflict
     pop_empty_patch
+    pop_unrefreshed_outside_hunk
+    pop_never_refreshed
+    pop_file_added_after_refresh
+    pop_reversed_series_patch
+    pop_forced_patch_below_top
     refresh_p0_deleted_file
     diff_R_deleted_file_labels
     applied_patches_removed_when_empty
@@ -7759,6 +7764,16 @@ function(qt_run_named_scenario scenario)
         qt_scenario_pop_force_refresh_conflict()
     elseif(scenario STREQUAL "pop_empty_patch")
         qt_scenario_pop_empty_patch()
+    elseif(scenario STREQUAL "pop_unrefreshed_outside_hunk")
+        qt_scenario_pop_unrefreshed_outside_hunk()
+    elseif(scenario STREQUAL "pop_never_refreshed")
+        qt_scenario_pop_never_refreshed()
+    elseif(scenario STREQUAL "pop_file_added_after_refresh")
+        qt_scenario_pop_file_added_after_refresh()
+    elseif(scenario STREQUAL "pop_reversed_series_patch")
+        qt_scenario_pop_reversed_series_patch()
+    elseif(scenario STREQUAL "pop_forced_patch_below_top")
+        qt_scenario_pop_forced_patch_below_top()
     elseif(scenario STREQUAL "refresh_p0_deleted_file")
         qt_scenario_refresh_p0_deleted_file()
     elseif(scenario STREQUAL "diff_R_deleted_file_labels")
@@ -11056,8 +11071,116 @@ function(qt_scenario_pop_empty_patch)
                     "delete of the last applied patch")
 endfunction()
 
+# pop must refuse when an edit lies outside the hunks of the refreshed
+# patch, which reverse-applying the patch would not notice
+function(qt_scenario_pop_unrefreshed_outside_hunk)
+    qt_begin_test("pop_unrefreshed_outside_hunk")
+    set(content "")
+    foreach(i RANGE 1 30)
+        string(APPEND content "${i}\n")
+    endforeach()
+    qt_write_file("${QT_WORK_DIR}/big.txt" "${content}")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add big.txt MESSAGE "add failed")
+    string(REGEX REPLACE "^1\n" "ONE\n" content "${content}")
+    qt_write_file("${QT_WORK_DIR}/big.txt" "${content}")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    string(REPLACE "\n30\n" "\nTHIRTY\n" content "${content}")
+    qt_write_file("${QT_WORK_DIR}/big.txt" "${content}")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS pop)
+    qt_assert_failure("${rc}" "pop with an unrefreshed edit should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Patch p1.patch does not remove cleanly (refresh it or enforce with -f)"
+                       "failure should be explained")
+    qt_assert_contains("${combined}" "Hint: `quilt diff -z' will show the pending changes." "hint should be shown")
+    qt_assert_exists("${QT_WORK_DIR}/.pc/p1.patch" "patch should still be applied")
+    qt_assert_file_contains("${QT_WORK_DIR}/big.txt" "THIRTY" "unrefreshed edit should be kept")
+    qt_quilt_ok(ARGS refresh MESSAGE "second refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop after refresh failed")
+    qt_assert_file_not_contains("${QT_WORK_DIR}/big.txt" "THIRTY" "pop should restore the original")
+endfunction()
 
+# pop must refuse when a patch with changes was never refreshed
+function(qt_scenario_pop_never_refreshed)
+    qt_begin_test("pop_never_refreshed")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "orig\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add a.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "edited\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS pop)
+    qt_assert_failure("${rc}" "pop of an unrefreshed patch should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "does not remove cleanly" "failure should be explained")
+    qt_assert_exists("${QT_WORK_DIR}/.pc/p1.patch" "patch should still be applied")
+    qt_assert_file_text("${QT_WORK_DIR}/a.txt" "edited" "unrefreshed edit should be kept")
+    qt_quilt_ok(ARGS pop -f MESSAGE "pop -f failed")
+    qt_assert_file_text("${QT_WORK_DIR}/a.txt" "orig" "pop -f should restore the original")
+endfunction()
 
+# pop must refuse when a file added since the last refresh has changes
+function(qt_scenario_pop_file_added_after_refresh)
+    qt_begin_test("pop_file_added_after_refresh")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "a\n")
+    qt_write_file("${QT_WORK_DIR}/b.txt" "b\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add a.txt MESSAGE "add a.txt failed")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "A\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS add b.txt MESSAGE "add b.txt failed")
+    qt_write_file("${QT_WORK_DIR}/b.txt" "B\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS pop -R)
+    qt_assert_failure("${rc}" "pop -R with an unrefreshed new file should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "does not remove cleanly" "failure should be explained")
+    qt_assert_file_text("${QT_WORK_DIR}/b.txt" "B" "unrefreshed edit should be kept")
+    qt_quilt_ok(ARGS refresh MESSAGE "second refresh failed")
+    qt_quilt_ok(ARGS pop -R MESSAGE "pop -R after refresh failed")
+    qt_assert_file_text("${QT_WORK_DIR}/a.txt" "a" "a.txt should be restored")
+    qt_assert_file_text("${QT_WORK_DIR}/b.txt" "b" "b.txt should be restored")
+endfunction()
+
+# A patch marked -R in the series pops without -f, and pending changes
+# on top of it are still detected
+function(qt_scenario_pop_reversed_series_patch)
+    qt_begin_test("pop_reversed_series_patch")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "new\n")
+    qt_write_file("${QT_WORK_DIR}/patches/rev.patch" "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-old\n+new\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "rev.patch -R\n")
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "old" "push should reverse-apply the patch")
+    qt_quilt_ok(ARGS pop MESSAGE "pop of a reversed patch failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "new" "pop should restore the original")
+    qt_quilt_ok(ARGS push MESSAGE "second push failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "dirty\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS pop)
+    qt_assert_failure("${rc}" "pop of a dirty reversed patch should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "does not remove cleanly" "failure should be explained")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "dirty" "unrefreshed edit should be kept")
+endfunction()
+
+# A force-applied patch below the top matches its own partial application
+# and pops without -f
+function(qt_scenario_pop_forced_patch_below_top)
+    qt_begin_test("pop_forced_patch_below_top")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "one\ntwo\nthree\n")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "x\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt g.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "one\nTWO\nthree\n")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "X\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "one\n2\nthree\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -f)
+    qt_assert_failure("${rc}" "forced push of a conflicting patch should fail")
+    qt_assert_file_text("${QT_WORK_DIR}/g.txt" "X" "forced push should apply the good hunk")
+    qt_quilt_ok(ARGS new p4.patch MESSAGE "new p4 failed")
+    qt_quilt_ok(ARGS pop -a MESSAGE "pop -a failed")
+    qt_assert_not_exists("${QT_WORK_DIR}/.pc/p1.patch" "p1.patch should be popped")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "one\n2\nthree" "f.txt should be restored")
+    qt_assert_file_text("${QT_WORK_DIR}/g.txt" "x" "g.txt should be restored")
+endfunction()
 
 # With -p0, a deleted file is named by itself rather than file.orig, so
 # the patch can be applied again and pop sees no pending changes
