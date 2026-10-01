@@ -1908,6 +1908,8 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
             return 1;
         }
 
+        bool files_were_shadowed = false;
+
         for (const auto &file : tracked) {
             std::string backup_path = path_join(pc_patch_dir(q, patch), file);
             std::string working_path = path_join(q.work_dir, file);
@@ -1919,12 +1921,13 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                 make_dirs(tmp_file_dir);
             }
 
-            // Copy backup to temp (empty backup = file didn't exist)
-            if (file_exists(backup_path)) {
-                std::string backup_content = read_file(backup_path);
-                write_file(tmp_file, backup_content);
-            } else {
-                write_file(tmp_file, "");
+            // Rebuild the refreshed state as the original quilt does: start
+            // from the backup (an empty backup means the file did not
+            // exist), then apply this file's section of the stored patch.
+            // The result is removed only if the section deletes the file;
+            // a file the patch merely empties stays as an empty file.
+            if (file_exists(backup_path) && !is_placeholder_copy(backup_path)) {
+                write_file(tmp_file, read_file(backup_path));
             }
 
             // Apply stored patch section to temp file
@@ -1935,36 +1938,49 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                 // Extract just the hunk lines from the stored section
                 auto section_lines = split_lines(it->second);
                 bool in_hunk = false;
+                bool deletes_file = false;
                 for (const auto &sl : section_lines) {
                     if (sl.starts_with("@@")) {
                         in_hunk = true;
                         mini_patch += sl + "\n";
                     } else if (in_hunk) {
                         mini_patch += sl + "\n";
+                    } else if (sl.starts_with("+++ /dev/null")) {
+                        deletes_file = true;
                     }
                 }
                 if (in_hunk) {
+                    if (!file_exists(tmp_file)) write_file(tmp_file, "");
                     std::string saved_cwd = get_cwd();
                     if (set_cwd(tmp_dir)) {
                         PatchOptions po;
                         po.strip_level = 0;
-                        po.remove_empty = true;
                         po.quiet = true;
                         builtin_patch(mini_patch, po);
                         set_cwd(saved_cwd);
                     }
+                    if (deletes_file) delete_file(tmp_file);
                 }
             }
 
-            // Now diff the reconstructed "refreshed" file against working file
-            if (!file_exists(working_path) && !file_exists(tmp_file)) continue;
+            // Diff the reconstructed "refreshed" file against the working
+            // file or, if a later applied patch modifies this file, against
+            // that patch's backup. The original quilt warns about shadowed
+            // files after the loop.
+            std::string new_src = working_path;
+            std::string shadowing_patch = next_patch_for_file(q, patch, file);
+            if (!shadowing_patch.empty()) {
+                files_were_shadowed = true;
+                new_src = path_join(pc_patch_dir(q, shadowing_patch), file);
+            }
+            if (!file_exists(new_src) && !file_exists(tmp_file)) continue;
 
             std::string old_label, new_label;
             if (p_format == "ab") {
                 old_label = "a/" + file;
                 new_label = "b/" + file;
             } else if (p_format == "0") {
-                old_label = file;
+                old_label = file + ".orig";
                 new_label = file;
             } else {
                 old_label = work_base + ".orig/" + file;
@@ -1972,11 +1988,20 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
             }
 
             std::string old_f = tmp_file;
-            std::string new_f = working_path;
-            if (!file_exists(working_path)) new_f = "/dev/null";
-
+            std::string new_f = new_src;
             if (reverse) {
                 std::swap(old_f, new_f);
+            }
+            // As in the original quilt, a missing or empty old file and a
+            // missing new file are diffed as /dev/null.
+            if (!file_exists(old_f) || read_file(old_f).empty()) {
+                old_f = "/dev/null";
+                old_label = "/dev/null";
+            }
+            if (!file_exists(new_f)) {
+                if (p_format == "0") old_label = new_label;
+                new_f = "/dev/null";
+                new_label = "/dev/null";
             }
 
             std::string diff_out;
@@ -2014,6 +2039,11 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                 }
                 emit_diff(diff_out);
             }
+        }
+
+        if (files_were_shadowed) {
+            err("Warning: more recent patches modify files in patch ");
+            err_line(patch_path_display(q, patch));
         }
 
         delete_dir_recursive(tmp_dir);

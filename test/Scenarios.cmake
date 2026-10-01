@@ -379,6 +379,11 @@ set(QUILT_TEST_SCENARIOS
     refresh_invalid_p
     series_invalid_strip_level
     diff_invalid_p
+    diff_z_deleted_file
+    diff_z_emptied_file
+    diff_z_shadowed
+    diff_z_shadowed_unrefreshed
+    diff_z_shadowed_deleted
     snapshot_no_series
     files_all_no_applied
     delete_n_explicit
@@ -7607,6 +7612,16 @@ function(qt_run_named_scenario scenario)
         qt_scenario_series_invalid_strip_level()
     elseif(scenario STREQUAL "diff_invalid_p")
         qt_scenario_diff_invalid_p()
+    elseif(scenario STREQUAL "diff_z_deleted_file")
+        qt_scenario_diff_z_deleted_file()
+    elseif(scenario STREQUAL "diff_z_emptied_file")
+        qt_scenario_diff_z_emptied_file()
+    elseif(scenario STREQUAL "diff_z_shadowed")
+        qt_scenario_diff_z_shadowed()
+    elseif(scenario STREQUAL "diff_z_shadowed_unrefreshed")
+        qt_scenario_diff_z_shadowed_unrefreshed()
+    elseif(scenario STREQUAL "diff_z_shadowed_deleted")
+        qt_scenario_diff_z_shadowed_deleted()
     elseif(scenario STREQUAL "snapshot_no_series")
         qt_scenario_snapshot_no_series()
     elseif(scenario STREQUAL "files_all_no_applied")
@@ -10852,6 +10867,98 @@ function(qt_scenario_diff_invalid_p)
     qt_assert_equal("${out}" "" "no diff should be printed")
     qt_assert_contains("${err}" "Cannot diff patches with -p9, please specify -p0, -p1, or -pab instead"
                        "invalid strip level should be rejected")
+endfunction()
+
+function(qt_scenario_diff_z_deleted_file)
+    qt_begin_test("diff_z_deleted_file")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    file(REMOVE "${QT_WORK_DIR}/f.txt")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS diff -z MESSAGE "diff -z after deletion failed")
+    qt_assert_contains("${out}" "+++ /dev/null" "deleted file should diff against /dev/null")
+    qt_assert_contains("${out}" "-y" "removed content should appear")
+    qt_quilt_ok(OUTPUT out2 ERROR err2 ARGS diff -z -R MESSAGE "diff -z -R after deletion failed")
+    qt_assert_contains("${out2}" "--- /dev/null" "reversed deletion should diff from /dev/null")
+    qt_assert_contains("${out2}" "+y" "restored content should appear")
+    # A file added since the last refresh is diffed from /dev/null
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS add g.txt MESSAGE "add g.txt failed")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "new\n")
+    qt_quilt_ok(OUTPUT out3 ERROR err3 ARGS diff -z MESSAGE "diff -z with a new file failed")
+    qt_assert_contains("${out3}" "--- /dev/null" "new file should diff from /dev/null")
+    qt_assert_contains("${out3}" "+new" "new content should appear")
+    qt_quilt_ok(OUTPUT out4 ERROR err4 ARGS diff -z -R MESSAGE "diff -z -R with a new file failed")
+    qt_assert_contains("${out4}" "+++ /dev/null" "reversed new file should diff to /dev/null")
+endfunction()
+
+# A file the patch empties (rather than deletes) is not /dev/null in -z.
+function(qt_scenario_diff_z_emptied_file)
+    qt_begin_test("diff_z_emptied_file")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "keep\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "again\n")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS diff -z -R MESSAGE "diff -z -R failed")
+    qt_assert_contains("${out}" "-again" "pending change should be shown")
+    qt_assert_not_contains("${out}" "/dev/null" "emptied file still exists in the refreshed state")
+endfunction()
+
+function(qt_scenario_diff_z_shadowed)
+    qt_begin_test("diff_z_shadowed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p1 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p2 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "z\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "w\n")
+    # p1 was refreshed before p2 took its backup, so nothing is pending
+    qt_quilt_ok(OUTPUT out ERROR err ARGS diff -z -P p1.patch MESSAGE "diff -z -P p1 failed")
+    qt_assert_equal("${out}" "" "shadowed -z diff should produce no output")
+    qt_assert_contains("${err}" "more recent patches modify files in patch p1.patch" "shadowing should be warned about")
+endfunction()
+
+# With -z, a shadowed file is diffed against the next patch's backup, which
+# shows changes made before that patch took over the file.
+function(qt_scenario_diff_z_shadowed_unrefreshed)
+    qt_begin_test("diff_z_shadowed_unrefreshed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nb\nc\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p1 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nB\nc\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nB\nc\nd\n")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p2 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "A\nB\nc\nd\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2 failed")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS diff -z -P p1.patch MESSAGE "diff -z -P p1 failed")
+    qt_assert_contains("${out}" "\n+d\n" "unrefreshed change to p1 should be shown")
+    qt_assert_not_contains("${out}" "+A" "p2's change should not be shown")
+    qt_assert_contains("${err}" "more recent patches modify files in patch p1.patch" "shadowing should be warned about")
+endfunction()
+
+function(qt_scenario_diff_z_shadowed_deleted)
+    qt_begin_test("diff_z_shadowed_deleted")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p1 failed")
+    file(REMOVE "${QT_WORK_DIR}/f.txt")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p2 failed")
+    # Neither side has content, but the file is still shadowed
+    qt_quilt_ok(OUTPUT out ERROR err ARGS diff -z -P p1.patch MESSAGE "diff -z -P p1 failed")
+    qt_assert_equal("${out}" "" "no diff should be printed")
+    qt_assert_contains("${err}" "more recent patches modify files in patch p1.patch" "shadowing should be warned about")
 endfunction()
 
 function(qt_scenario_snapshot_no_series)
