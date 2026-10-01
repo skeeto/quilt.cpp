@@ -1390,9 +1390,9 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
             }
 
             bool creating = !file_existed && pf.old_absent;
-            if (any_applied || creating || (opts.merge && file_has_rejects)) {
-                std::string new_content;
-
+            bool changed = any_applied || creating || (opts.merge && file_has_rejects);
+            std::string new_content;
+            if (changed) {
                 if (opts.merge && file_has_rejects) {
                     new_content = build_merge_output(fc.lines, fc.has_trailing_newline,
                                                       pf, hunk_positions, hunk_fuzz,
@@ -1423,25 +1423,30 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                         make_dirs(dir);
                     }
                 }
+            }
 
-                // Remove a file left empty when -E is given or the patch
-                // surely deletes it, like GNU patch outside POSIX mode
-                if ((opts.remove_empty || pf.new_absent == 2) &&
-                    new_content.empty() && !pf.old_absent) {
-                    if (file_existed && fs_delete(pf.target_path) && !opts.fs) {
-                        remove_empty_parents(pf.target_path);
-                    }
-                } else {
-                    if (pf.new_absent == 2 && !new_content.empty() &&
-                        !(opts.merge && file_has_rejects)) {
-                        result.exit_code = 1;
-                        if (!opts.quiet) {
-                            result.out += "Not deleting file " + pf.target_path +
-                                          " as content differs from patch\n";
-                        }
-                    }
-                    fs_write(pf.target_path, new_content);
+            // GNU patch writes out the file even when no hunk changed it, so
+            // it judges what is left of the file either way
+            bool left_empty = changed ? new_content.empty() : is_empty;
+
+            // Remove a file left empty when -E is given or the patch
+            // surely deletes it, like GNU patch outside POSIX mode
+            if ((opts.remove_empty || pf.new_absent == 2) && left_empty && !pf.old_absent) {
+                if (file_existed && fs_delete(pf.target_path) && !opts.fs) {
+                    remove_empty_parents(pf.target_path);
                 }
+            } else {
+                // Like GNU patch, which in merge mode stays quiet about it
+                // once any hunk has failed
+                if (pf.new_absent == 2 && !left_empty &&
+                    !(opts.merge && result.exit_code != 0)) {
+                    result.exit_code = 1;
+                    if (!opts.quiet) {
+                        result.out += "Not deleting file " + pf.target_path +
+                                      " as content differs from patch\n";
+                    }
+                }
+                if (changed) fs_write(pf.target_path, new_content);
             }
 
             // Write reject file if needed (and not in merge mode)

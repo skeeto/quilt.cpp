@@ -490,6 +490,7 @@ set(QUILT_TEST_SCENARIOS
     push_verbose_rollback
     push_reject_format
     push_hunk_line_numbers
+    push_delete_mismatch
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -8215,6 +8216,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_push_reject_format()
     elseif(scenario STREQUAL "push_hunk_line_numbers")
         qt_scenario_push_hunk_line_numbers()
+    elseif(scenario STREQUAL "push_delete_mismatch")
+        qt_scenario_push_delete_mismatch()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -14128,4 +14131,45 @@ function(qt_scenario_push_hunk_line_numbers)
         "push should report the failed hunk's line in the patched file")
     qt_assert_contains("${combined}" "Hunk #2 succeeded at 12 with fuzz 1.\n"
         "push should report the fuzzy hunk's line in the patched file")
+endfunction()
+
+# push_delete_mismatch: like GNU patch, a patch that deletes a file still
+# keeps a file with contents left, saying so, and removes an empty one, even
+# when no hunk applies.  -q hides the message, and merge mode leaves it out
+# once a hunk has failed, as GNU patch does.
+function(qt_scenario_push_delete_mismatch)
+    qt_begin_test("push_delete_mismatch")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "--- a/f.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-a\n--- a/g.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-a\n")
+    foreach(flag "" "-q")
+        qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+        qt_write_file("${QT_WORK_DIR}/g.txt" "")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push ${flag} -f)
+        qt_assert_failure("${rc}" "push ${flag} -f of a failed deletion should fail")
+        qt_combine_output(combined "${out}" "${err}")
+        if(flag STREQUAL "")
+            qt_assert_contains("${combined}"
+                "Not deleting file f.txt as content differs from patch\n"
+                "push -f should keep f.txt, saying so")
+        else()
+            qt_assert_not_contains("${combined}" "Not deleting"
+                "push -q -f should not say that it keeps f.txt")
+        endif()
+        qt_assert_not_contains("${combined}" "Not deleting file g.txt"
+            "push ${flag} -f should not say that it keeps g.txt")
+        qt_assert_file_text("${QT_WORK_DIR}/f.txt" "x" "push ${flag} -f should keep f.txt")
+        qt_assert_not_exists("${QT_WORK_DIR}/g.txt" "push ${flag} -f should remove the empty g.txt")
+        qt_quilt_ok(ARGS pop -f MESSAGE "pop -f failed")
+    endforeach()
+
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nb\n")
+    qt_write_file("${QT_WORK_DIR}/e.txt" "x\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "--- a/e.txt\n+++ b/e.txt\n@@ -1 +1 @@\n-q\n+r\n--- a/f.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-a\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --merge)
+    qt_assert_failure("${rc}" "push --merge of a patch with a failed hunk should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_not_contains("${combined}" "Not deleting"
+        "push --merge should not say that it keeps f.txt after a failed hunk")
 endfunction()
