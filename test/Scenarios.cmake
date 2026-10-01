@@ -455,6 +455,7 @@ set(QUILT_TEST_SCENARIOS
     push_context_diff_strip
     push_malformed_hunk
     push_zero_context_insert
+    push_missing_patch_file
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -591,7 +592,6 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     quilt_help_command
     quilt_unknown_command
     quilt_ambiguous_command
-    push_missing_patch
     push_reject_no_newline
     import_no_files
     files_combine_dash_patch_no_applied
@@ -7660,8 +7660,6 @@ function(qt_run_named_scenario scenario)
         qt_scenario_fold_fail()
     elseif(scenario STREQUAL "push_count_clamp")
         qt_scenario_push_count_clamp()
-    elseif(scenario STREQUAL "push_missing_patch")
-        qt_scenario_push_missing_patch()
     elseif(scenario STREQUAL "push_quilt_patch_opts")
         qt_scenario_push_quilt_patch_opts()
     elseif(scenario STREQUAL "pop_auto_refresh_fail")
@@ -8110,6 +8108,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_push_zero_context_insert()
     elseif(scenario STREQUAL "push_context_diff_zero_context")
         qt_scenario_push_context_diff_zero_context()
+    elseif(scenario STREQUAL "push_missing_patch_file")
+        qt_scenario_push_missing_patch_file()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -8183,21 +8183,6 @@ function(qt_scenario_push_count_clamp)
     # Push 99 patches, but only 2 exist: should clamp and push all
     qt_quilt_ok(ARGS push 99 OUTPUT push_out MESSAGE "push 99 failed")
     qt_assert_file_text("${QT_WORK_DIR}/f.txt" "v2" "push 99 should apply all patches")
-endfunction()
-
-function(qt_scenario_push_missing_patch)
-    qt_begin_test("push_missing_patch")
-    qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
-    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
-    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
-    qt_write_file("${QT_WORK_DIR}/f.txt" "modified\n")
-    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
-    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
-    # Remove the patch file so push will fail
-    file(REMOVE "${QT_WORK_DIR}/patches/p.patch")
-    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
-    qt_assert_failure("${rc}" "push with missing patch file should fail")
-    qt_assert_contains("${err}" "does not exist" "push should report missing patch")
 endfunction()
 
 function(qt_scenario_push_quilt_patch_opts)
@@ -12765,4 +12750,28 @@ function(qt_scenario_push_context_diff_zero_context)
     qt_assert_file_text("${QT_WORK_DIR}/f.txt" "a\nb\nX\nc\ne" "push should insert X and remove d")
     qt_quilt_ok(ARGS pop MESSAGE "pop of -C 0 patch failed")
     qt_assert_file_text("${QT_WORK_DIR}/f.txt" "a\nb\nc\nd\ne" "pop should restore f.txt again")
+endfunction()
+
+# A missing patch file applies as an empty patch, with a note that -q does
+# not suppress, and push --refresh notes it before refreshing it
+function(qt_scenario_push_missing_patch_file)
+    qt_begin_test("push_missing_patch_file")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "a.patch\nb.patch\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_success("${rc}" "push of a missing patch should succeed")
+    qt_assert_equal("${out}"
+        "Applying patch a.patch\nPatch a.patch does not exist; applied empty patch\n\nNow at patch a.patch\n"
+        "push should note the missing patch")
+    qt_assert_equal("${err}" "" "push should print nothing on stderr")
+    qt_assert_not_exists("${QT_WORK_DIR}/patches/a.patch"
+        "push should not create the missing patch")
+    qt_quilt_ok(ARGS push -q OUTPUT out MESSAGE "push -q failed")
+    qt_assert_equal("${out}"
+        "Applying patch b.patch\nPatch b.patch does not exist; applied empty patch\nNow at patch b.patch\n"
+        "push -q should still note the missing patch")
+    qt_quilt_ok(ARGS pop -q -a MESSAGE "pop -q -a failed")
+    qt_quilt_ok(ARGS push --refresh OUTPUT out MESSAGE "push --refresh failed")
+    qt_assert_equal("${out}"
+        "Applying patch a.patch\nPatch a.patch does not exist; applied empty patch\nNothing in patch a.patch\n\nNow at patch a.patch\n"
+        "push --refresh should note the missing patch before refreshing it")
 endfunction()

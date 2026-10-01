@@ -468,13 +468,10 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
         }
         out_line("Applying patch " + display);
 
-        // Read patch file
+        // Read patch file. A missing patch applies as an empty one.
         std::string patch_path = path_join(q.work_dir, q.patches_dir, name);
-        std::string patch_content = read_file(patch_path);
-        if (patch_content.empty() && !file_exists(patch_path)) {
-            err_line("Patch " + display + " does not exist");
-            return 1;
-        }
+        bool patch_exists = file_exists(patch_path);
+        std::string patch_content = patch_exists ? read_file(patch_path) : "";
 
         // Apply the patch using built-in patch engine
         PatchOptions patch_opts;
@@ -517,19 +514,12 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
             out(result.out);
         }
 
-        if (result.exit_code != 0) {
+        bool failed = result.exit_code != 0;
+        if (failed) {
             if (!result.err.empty()) {
                 err(result.err);
             }
-            if (force) {
-                // Force-applied: record as applied but mark as needing refresh
-                q.applied.push_back(name);
-                write_applied_patches(q);
-                write_file(path_join(pc_dir, ".timestamp"), "");
-                write_file(path_join(pc_dir, ".needs_refresh"), "");
-                out_line("Applied patch " + display + " (forced; needs refresh)");
-                return 1;
-            } else {
+            if (!force) {
                 // Not forced: restore files from backups and clean up
                 for (const auto &file : affected) {
                     restore_file(q, name, file);
@@ -548,17 +538,23 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
             }
         }
 
-        // Record as applied
+        // Record as applied; a forced patch is marked as needing refresh
         q.applied.push_back(name);
         write_applied_patches(q);
-
-        // Create .timestamp
         write_file(path_join(pc_dir, ".timestamp"), "");
-
-        // Like upstream, report a patch that backed up no files, even with -q
-        if (affected.empty()) {
-            out_line("Patch " + display + " appears to be empty; applied");
+        if (failed) {
+            write_file(path_join(pc_dir, ".needs_refresh"), "");
         }
+
+        // Like upstream, these print even with -q
+        if (!patch_exists) {
+            out_line("Patch " + display + " does not exist; applied empty patch");
+        } else if (affected.empty()) {
+            out_line("Patch " + display + " appears to be empty; applied");
+        } else if (failed) {
+            out_line("Applied patch " + display + " (forced; needs refresh)");
+        }
+        if (failed) return 1;
 
         if (do_refresh) {
             char arg0[] = "refresh";
