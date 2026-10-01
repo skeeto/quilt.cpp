@@ -179,10 +179,14 @@ static bool is_no_newline_marker(std::string_view line)
 
 // GNU patch's message for a line it cannot parse.  It prints the line with
 // its newline, so the message ends in a blank line.
+static std::string malformed(ptrdiff_t lineno, std::string_view line)
+{
+    return std::format("malformed patch at line {}: {}\n", lineno, line);
+}
+
 static std::string malformed(std::span<const std::string> lines, ptrdiff_t i)
 {
-    return std::format("malformed patch at line {}: {}\n",
-                       i + 1, lines[checked_cast<size_t>(i)]);
+    return malformed(i + 1, lines[checked_cast<size_t>(i)]);
 }
 
 // Parse a unified hunk header "@@ -start[,count] +start[,count] @@" as
@@ -201,6 +205,9 @@ static bool parse_unified_range(std::string_view s, PatchHunk &hunk)
 }
 
 // Parse the unified hunk whose header is lines[i], advancing i past it.
+// Like GNU patch, read exactly the lines that the header's counts call for,
+// so a hunk that ends early, at a line that does not fit or at the end of
+// the patch, is malformed.
 static bool parse_unified_hunk(std::span<const std::string> lines, ptrdiff_t &i,
                                PatchHunk &hunk, std::string &error)
 {
@@ -211,52 +218,53 @@ static bool parse_unified_hunk(std::span<const std::string> lines, ptrdiff_t &i,
     ++i;
 
     ptrdiff_t n = std::ssize(lines);
-    ptrdiff_t old_seen = 0, new_seen = 0;
-    while (i < n) {
-        std::string_view ln = lines[checked_cast<size_t>(i)];
-
-        if (is_no_newline_marker(ln)) {
-            // Applies to the preceding line
-            if (!hunk.lines.empty()) {
-                char prev_prefix = hunk.lines.back()[0];
-                if (prev_prefix == '-')
-                    hunk.old_no_newline = true;
-                else if (prev_prefix == '+')
-                    hunk.new_no_newline = true;
-                else
-                    hunk.old_no_newline = hunk.new_no_newline = true;
-            }
-            ++i;
-            continue;
+    ptrdiff_t old_left = hunk.old_count, new_left = hunk.new_count;
+    while (old_left > 0 || new_left > 0) {
+        // When the patch ends with at most three new lines missing, GNU
+        // patch assumes that blank context lines were chopped off, and
+        // blames the patch's last line if they do not fit
+        std::string_view ln = " ";
+        ptrdiff_t lineno = n;
+        if (i < n) {
+            lineno = i + 1;
+            ln = lines[checked_cast<size_t>(i++)];
+        } else if (new_left > 3) {
+            error = "unexpected end of file in patch";
+            return false;
         }
 
-        if (ln.empty()) {
-            // Empty line in diff = context line (space was stripped)
-            if (old_seen >= hunk.old_count && new_seen >= hunk.new_count) break;
-            hunk.lines.push_back(" ");
-            old_seen++;
-            new_seen++;
-            ++i;
-            continue;
-        }
+        if (ln.starts_with('#')) continue;  // GNU patch skips comments
 
-        char prefix = ln[0];
-        if (prefix == ' ') {
-            if (old_seen >= hunk.old_count && new_seen >= hunk.new_count) break;
-            old_seen++;
-            new_seen++;
-        } else if (prefix == '-') {
-            if (old_seen >= hunk.old_count) break;
-            old_seen++;
-        } else if (prefix == '+') {
-            if (new_seen >= hunk.new_count) break;
-            new_seen++;
+        // A blank line, or one that starts with a tab, is a context line
+        // whose leading space was lost.  GNU patch also takes '=' for ' '.
+        std::string line;
+        if (ln.empty() || ln[0] == '\t') {
+            line = " " + std::string(ln);
+        } else if (ln[0] == '=') {
+            line = " " + std::string(ln.substr(1));
         } else {
-            // Start of next file section or unknown line
-            break;
+            line = std::string(ln);
         }
-        hunk.lines.emplace_back(ln);
-        ++i;
+        char mark = line[0];
+        bool fits = mark == '-' ? old_left > 0
+                  : mark == '+' ? new_left > 0
+                  : mark == ' ' && old_left > 0 && new_left > 0;
+        if (!fits) {
+            error = malformed(lineno, ln);
+            return false;
+        }
+        if (mark != '+') old_left--;
+        if (mark != '-') new_left--;
+        hunk.lines.push_back(std::move(line));
+
+        // "\ No newline at end of file" applies to the line before it.  GNU
+        // patch accepts it only after the last line of a side, but the
+        // built-in diff has written it after earlier lines too.
+        while (i < n && is_no_newline_marker(lines[checked_cast<size_t>(i)])) {
+            if (mark != '+') hunk.old_no_newline = true;
+            if (mark != '-') hunk.new_no_newline = true;
+            ++i;
+        }
     }
     return true;
 }
@@ -390,13 +398,14 @@ static bool parse_context_hunk(std::span<const std::string> lines, ptrdiff_t &i,
     }
 
     // A lone line number with no lines names the empty range after that
-    // line, as diff -C0 writes for a pure insertion or deletion
-    auto fits = [](ptrdiff_t &count, ptrdiff_t actual) {
-        if (actual == 0 && count == 1) count = 0;
+    // line, as diff -C0 writes for a pure insertion or deletion.  The other
+    // section has the change then, or the hunk ended before its lines.
+    auto fits = [](ptrdiff_t &count, ptrdiff_t actual, ptrdiff_t other) {
+        if (actual == 0 && count == 1 && other > 0) count = 0;
         return actual == count;
     };
-    if (!fits(hunk.old_count, std::ssize(old_sec.lines)) ||
-        !fits(hunk.new_count, std::ssize(new_sec.lines))) {
+    if (!fits(hunk.old_count, std::ssize(old_sec.lines), std::ssize(new_sec.lines)) ||
+        !fits(hunk.new_count, std::ssize(new_sec.lines), std::ssize(old_sec.lines))) {
         error = std::format("replacement text or line numbers mangled in hunk at line {}",
                             range_line + 1);
         return false;

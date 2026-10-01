@@ -455,6 +455,8 @@ set(QUILT_TEST_SCENARIOS
     push_context_diff
     push_context_diff_strip
     push_malformed_hunk
+    push_truncated_hunk
+    push_hunk_gnu_leniency
     push_zero_context_insert
     push_missing_patch_file
     push_garbage_patch
@@ -8126,6 +8128,10 @@ function(qt_run_named_scenario scenario)
         qt_scenario_push_context_diff_strip()
     elseif(scenario STREQUAL "push_malformed_hunk")
         qt_scenario_push_malformed_hunk()
+    elseif(scenario STREQUAL "push_truncated_hunk")
+        qt_scenario_push_truncated_hunk()
+    elseif(scenario STREQUAL "push_hunk_gnu_leniency")
+        qt_scenario_push_hunk_gnu_leniency()
     elseif(scenario STREQUAL "push_zero_context_insert")
         qt_scenario_push_zero_context_insert()
     elseif(scenario STREQUAL "push_create_without_dev_null")
@@ -12768,6 +12774,72 @@ function(qt_scenario_push_malformed_hunk)
         qt_combine_output(combined "${out}" "${err}")
         qt_assert_contains("${combined}" "${error_${n}}" "push should explain malformed patch ${n}")
         qt_assert_file_text("${QT_WORK_DIR}/f.txt" "a\nb\nc" "malformed patch ${n} should leave f.txt alone")
+    endforeach()
+endfunction()
+
+# push_truncated_hunk: a hunk that ends, at the end of the patch or at a
+# line that does not fit, before it has the lines its header counts call
+# for fails the push with GNU patch's message, instead of applying the
+# lines it has.
+function(qt_scenario_push_truncated_hunk)
+    qt_begin_test("push_truncated_hunk")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nb\nc\n")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "g\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "t.patch\n")
+    # Each case: patch text, then the message expected for it.  A range
+    # with no count ("-0") names one line, which this hunk never supplies.
+    set(patch_1 "--- a/new.txt\n+++ b/new.txt\n@@ -0 +1 @@\n+hello\n")
+    set(error_1 "malformed patch at line 4: ")
+    # The hunk lacks its last context line, so the next file's header
+    # cuts it short
+    set(patch_2 "--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n a\n-b\n+B\nIndex: g.txt\n===================================================================\n--- a/g.txt\n+++ b/g.txt\n@@ -1 +1 @@\n-g\n+G\n")
+    set(error_2 "malformed patch at line 7: Index: g.txt")
+    # Too many lines are missing to be chopped blank lines
+    set(patch_3 "--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,7 @@\n a\n+X\n")
+    set(error_3 "unexpected end of file in patch")
+    # A context line after the old side is complete
+    set(patch_4 "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1,2 @@\n-a\n b\n+A\n")
+    set(error_4 "malformed patch at line 5:  b")
+    # Context form: each lone line number names a line, and neither
+    # section has one
+    set(patch_5 "*** a/f.txt\n--- b/f.txt\n***************\n*** 1 ****\n--- 1 ----\n")
+    set(error_5 "replacement text or line numbers mangled in hunk at line 4")
+    foreach(n 1 2 3 4 5)
+        qt_write_file("${QT_WORK_DIR}/patches/t.patch" "${patch_${n}}")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+        qt_assert_failure("${rc}" "push of truncated patch ${n} should fail")
+        qt_combine_output(combined "${out}" "${err}")
+        qt_assert_contains("${combined}" "${error_${n}}" "push should explain truncated patch ${n}")
+        qt_assert_not_exists("${QT_WORK_DIR}/new.txt" "truncated patch ${n} should not create new.txt")
+        qt_assert_file_text("${QT_WORK_DIR}/f.txt" "a\nb\nc" "truncated patch ${n} should leave f.txt alone")
+        qt_assert_file_text("${QT_WORK_DIR}/g.txt" "g" "truncated patch ${n} should leave g.txt alone")
+    endforeach()
+endfunction()
+
+# push_hunk_gnu_leniency: the hunk lines GNU patch accepts besides the
+# usual ones still apply now that hunks must be complete: blank context
+# lines missing at the end of the patch, a comment line, and a context line
+# whose leading space was lost before its tab.
+function(qt_scenario_push_hunk_gnu_leniency)
+    qt_begin_test("push_hunk_gnu_leniency")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "t.patch\n")
+    # Each case: file text, patch text, then the file text expected after
+    set(file_1 "a\nb\n\n")
+    set(patch_1 "--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n-a\n+A\n b\n")
+    set(want_1 "A\nb\n\n")
+    set(file_2 "a\nb\n")
+    set(patch_2 "--- a/f.txt\n+++ b/f.txt\n@@ -1,2 +1,2 @@\n-a\n# comment\n+A\n b\n")
+    set(want_2 "A\nb\n")
+    set(file_3 "a\n\tb\n")
+    set(patch_3 "--- a/f.txt\n+++ b/f.txt\n@@ -1,2 +1,2 @@\n-a\n+A\n\tb\n")
+    set(want_3 "A\n\tb\n")
+    foreach(n 1 2 3)
+        qt_write_file("${QT_WORK_DIR}/f.txt" "${file_${n}}")
+        qt_write_file("${QT_WORK_DIR}/patches/t.patch" "${patch_${n}}")
+        qt_quilt_ok(ARGS push MESSAGE "push of patch ${n} failed")
+        qt_read_file_raw(got "${QT_WORK_DIR}/f.txt")
+        qt_assert_equal("${got}" "${want_${n}}" "patch ${n} should apply")
+        qt_quilt_ok(ARGS pop MESSAGE "pop of patch ${n} failed")
     endforeach()
 endfunction()
 
