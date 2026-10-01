@@ -28,6 +28,21 @@ static void apply_quilt_patch_opts(PatchOptions &opts, std::span<const std::stri
     }
 }
 
+// Drop the " -- saving rejects to file X" ending from patch's messages, as
+// upstream push's cleanup_patch_output does with -q.
+static std::string strip_reject_file_names(std::string_view text)
+{
+    std::string_view ending = " -- saving rejects to ";
+    std::string result;
+    for (ptrdiff_t at; (at = str_find(text, ending)) >= 0;) {
+        result += text.substr(0, checked_cast<size_t>(at));
+        ptrdiff_t nl = str_find(text, '\n', at);
+        text.remove_prefix(nl < 0 ? text.size() : checked_cast<size_t>(nl));
+    }
+    result += text;
+    return result;
+}
+
 // Check that the patch file accounts for every change to the patch's files,
 // like upstream's check_for_pending_changes: apply the patch to the backups
 // in memory and compare each result with the working tree.
@@ -357,7 +372,7 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
     bool push_all = false;
     bool force = false;
     bool quiet = false;
-    bool verbose = false;
+    [[maybe_unused]] bool verbose = false;  // accepted for compat, patch output is unchanged
     int fuzz = -1;
     bool merge = false;
     std::string merge_style;
@@ -483,6 +498,7 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
             patch_opts.merge = true;
             patch_opts.merge_style = merge_style;
         }
+        patch_opts.quiet = quiet;
         apply_quilt_patch_opts(patch_opts, extra_patch_opts);
 
         // Back up every file the patch will modify, including deletions
@@ -497,17 +513,6 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
             backup_file(q, name, file);
         }
 
-        // Print verbose file list ourselves instead of relying on
-        // patch --verbose, which is not available on busybox.
-        if (verbose && !quiet) {
-            for (const auto &file : affected) {
-                out_line("patching file " + file);
-            }
-        }
-
-        // Suppress builtin_patch's own "patching file" messages when we do verbose ourselves
-        if (verbose) patch_opts.quiet = true;
-
         PatchResult result = builtin_patch(patch_content, patch_opts);
 
         // GNU patch backs up only the files it patches, so forget the
@@ -517,12 +522,17 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
             std::erase(affected, file);
         }
 
-        if (!quiet && !verbose && !result.out.empty()) {
+        if (!result.out.empty()) {
             out(result.out);
         }
 
         bool failed = result.exit_code != 0;
         if (failed) {
+            // Like upstream with -q, do not name a reject file that push
+            // will remove
+            if (quiet && !force && !leave_rejects) {
+                result.err = strip_reject_file_names(result.err);
+            }
             if (!result.err.empty()) {
                 err(result.err);
             }

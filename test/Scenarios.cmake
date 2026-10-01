@@ -478,6 +478,9 @@ set(QUILT_TEST_SCENARIOS
     diff_hunk_context_gap
     diff_incomplete_last_line
     diff_incomplete_last_lines_both
+    push_quiet_patch_output
+    push_verbose_patch_output
+    fold_quiet_patch_output
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -8179,6 +8182,12 @@ function(qt_run_named_scenario scenario)
         qt_scenario_diff_incomplete_last_line()
     elseif(scenario STREQUAL "diff_incomplete_last_lines_both")
         qt_scenario_diff_incomplete_last_lines_both()
+    elseif(scenario STREQUAL "push_quiet_patch_output")
+        qt_scenario_push_quiet_patch_output()
+    elseif(scenario STREQUAL "push_verbose_patch_output")
+        qt_scenario_push_verbose_patch_output()
+    elseif(scenario STREQUAL "fold_quiet_patch_output")
+        qt_scenario_fold_quiet_patch_output()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -13521,4 +13530,102 @@ function(qt_scenario_diff_incomplete_last_lines_both)
         "--- a/same\n+++ b/same\n@@ -1,3 +1,3 @@\n a\n-b\n+X\n c\n${nl}")
     qt_check_diff_round_trip(same "a\nb\nc" "a\nX\nc" -c
         "*** a/same\n--- b/same\n***************\n*** 1,3 ****\n  a\n! b\n  c\n${nl}--- 1,3 ----\n  a\n! X\n  c\n${nl}")
+endfunction()
+
+# push_quiet_patch_output: push -q passes -s to patch, which still shows
+# the text before the hunks of a file it cannot find, and a file's count of
+# failed hunks, but not the file being patched, nor each hunk.  Unless the
+# rejects are kept, push drops the name of the reject file, which is a
+# temporary one.
+function(qt_scenario_push_quiet_patch_output)
+    qt_begin_test("push_quiet_patch_output")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "junk line\nIndex: x\n--- a/new.txt\n+++ b/new.txt\n@@ -1 +1 @@\n-a\n+b\n")
+    set(skipped "The text leading up to this was:\n--------------------------\n|junk line\n|Index: x\n|--- a/new.txt\n|+++ b/new.txt\n--------------------------\nNo file to patch.  Skipping patch.\n1 out of 1 hunk ignored\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -q --leave-rejects)
+    qt_assert_failure("${rc}" "push -q of a patch for a missing file should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_equal("${combined}"
+        "Applying patch p.diff\n${skipped}Patch p.diff does not apply (enforce with -f)\n"
+        "push -q should show only what patch -s does for a missing file")
+    qt_assert_not_exists("${QT_WORK_DIR}/new.txt.rej" "patch should keep no rejects for a missing file")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_failure("${rc}" "push of a patch for a missing file should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}"
+        "can't find file to patch at input line 5\nPerhaps you used the wrong -p or --strip option?\n${skipped}"
+        "push without -q should also name the missing file")
+
+    # The first hunk fails, and the second applies at an offset
+    qt_write_file("${QT_WORK_DIR}/f.txt"
+        "zero\nzero\none\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n one\n-TWO\n+2\n three\n@@ -8,3 +8,3 @@\n eight\n-nine\n+9\n ten\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -q)
+    qt_assert_failure("${rc}" "push -q of a patch with a failed hunk should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_equal("${combined}"
+        "Applying patch p.diff\n1 out of 2 hunks FAILED\nPatch p.diff does not apply (enforce with -f)\n"
+        "push -q should show only the count of failed hunks")
+    qt_assert_not_exists("${QT_WORK_DIR}/f.txt.rej" "push should remove the rejects")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "nine" "push should restore f.txt")
+    # -f keeps the rejects, so the name of their file stays
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -q -f)
+    qt_assert_failure("${rc}" "push -q -f of a patch with a failed hunk should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "\n1 out of 2 hunks FAILED -- saving rejects to file f.txt.rej\n"
+        "push -q -f should name the reject file")
+    qt_assert_not_contains("${combined}" "patching file" "push -q -f should not name the patched file")
+    qt_assert_not_contains("${combined}" "Hunk #" "push -q -f should not report each hunk")
+    qt_assert_exists("${QT_WORK_DIR}/f.txt.rej" "push -f should keep the rejects")
+endfunction()
+
+# push_verbose_patch_output: push -v leaves the output of patch as it is,
+# so it names a missing file and reports each hunk
+function(qt_scenario_push_verbose_patch_output)
+    qt_begin_test("push_verbose_patch_output")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "--- a/new.txt\n+++ b/new.txt\n@@ -1 +1 @@\n-a\n+b\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -v)
+    qt_assert_failure("${rc}" "push -v of a patch for a missing file should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}"
+        "can't find file to patch at input line 3\nPerhaps you used the wrong -p or --strip option?\n"
+        "push -v should name the missing file")
+    qt_assert_not_contains("${combined}" "patching file" "push -v should not patch a missing file")
+
+    qt_write_file("${QT_WORK_DIR}/f.txt"
+        "zero\nzero\none\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n one\n-TWO\n+2\n three\n@@ -8,3 +8,3 @@\n eight\n-nine\n+9\n ten\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -v)
+    qt_assert_failure("${rc}" "push -v of a patch with a failed hunk should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "patching file f.txt\n" "push -v should name the patched file")
+    qt_assert_contains("${combined}" "Hunk #1 FAILED at 1.\n" "push -v should report the failed hunk")
+    qt_assert_contains("${combined}" "Hunk #2 succeeded at 10 (offset 2 lines).\n"
+        "push -v should report the hunk applied at an offset")
+    qt_assert_contains("${combined}" "1 out of 2 hunks FAILED" "push -v should count the failed hunks")
+endfunction()
+
+# fold_quiet_patch_output: fold -q passes -s to patch, which still counts
+# the failed hunks, and the failed fold is still rolled back
+function(qt_scenario_fold_quiet_patch_output)
+    qt_begin_test("fold_quiet_patch_output")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "one\ntwo\nthree\n")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "g\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS fold -q
+        INPUT "--- a/g.txt\n+++ b/g.txt\n@@ -1 +1 @@\n-g\n+g2\n--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n one\n-TWO\n+2\n three\n")
+    qt_assert_failure("${rc}" "fold -q of a failing hunk should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_equal("${combined}" "1 out of 1 hunk FAILED -- saving rejects to file f.txt.rej\n"
+        "fold -q should show only the count of failed hunks")
+    qt_assert_file_text("${QT_WORK_DIR}/g.txt" "g" "fold -q should restore g.txt")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "one\ntwo\nthree" "fold -q should leave f.txt alone")
+    qt_quilt_ok(OUTPUT out ARGS files MESSAGE "files failed")
+    qt_assert_equal("${out}" "f.txt\n" "fold -q should add no files to the top patch")
 endfunction()

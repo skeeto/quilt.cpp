@@ -1319,15 +1319,14 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                 if (!rej_content.empty()) {
                     fs_write(pf.target_path + ".rej", rej_content);
                 }
-                if (!opts.quiet) {
-                    ptrdiff_t rej_count = 0;
-                    for (bool r : rejected) if (r) ++rej_count;
-                    result.err += std::format(
-                        "{} out of {} {} FAILED -- saving rejects to file {}.rej\n",
-                        rej_count, std::ssize(pf.hunks),
-                        std::ssize(pf.hunks) == 1 ? "hunk" : "hunks",
-                        pf.target_path);
-                }
+                // Like GNU patch, even with -s
+                ptrdiff_t rej_count = 0;
+                for (bool r : rejected) if (r) ++rej_count;
+                result.err += std::format(
+                    "{} out of {} {} FAILED -- saving rejects to file {}.rej\n",
+                    rej_count, std::ssize(pf.hunks),
+                    std::ssize(pf.hunks) == 1 ? "hunk" : "hunks",
+                    pf.target_path);
             }
         }
     }
