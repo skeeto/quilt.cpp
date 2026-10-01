@@ -555,6 +555,9 @@ set(QUILT_TEST_SCENARIOS
     push_merge_hunk_regions
     push_merge_no_fuzz
     push_merge_overlapping_hunks
+    push_anchor_start
+    push_anchor_end
+    push_fuzz_uneven_context
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -8631,6 +8634,12 @@ function(qt_run_named_scenario scenario)
         qt_scenario_push_merge_overlapping_hunks()
     elseif(scenario STREQUAL "push_merge_diff3_applied_region")
         qt_scenario_push_merge_diff3_applied_region()
+    elseif(scenario STREQUAL "push_anchor_start")
+        qt_scenario_push_anchor_start()
+    elseif(scenario STREQUAL "push_anchor_end")
+        qt_scenario_push_anchor_end()
+    elseif(scenario STREQUAL "push_fuzz_uneven_context")
+        qt_scenario_push_fuzz_uneven_context()
     elseif(scenario STREQUAL "push_misordered_hunks")
         qt_scenario_push_misordered_hunks()
     elseif(scenario STREQUAL "push_insertion_hunk_guess")
@@ -17088,4 +17097,124 @@ function(qt_scenario_push_merge_overlapping_hunks)
     qt_read_file_raw(rej "${QT_WORK_DIR}/c.txt.rej")
     qt_assert_contains("${rej}" "\n@@ -4,3 +4,3 @@\n l3\n-l4\n+L4\n l5\n"
         "the reject should be numbered like GNU patch in merge mode")
+endfunction()
+
+# push_anchor_start: like GNU patch, push holds a hunk on line 1 with less
+# context before its changes than after to the start of the file, until
+# fuzz has skipped the extra context after them.  So a hunk that adds a
+# line already at the top of the file does not add it again.
+function(qt_scenario_push_anchor_start)
+    qt_begin_test("push_anchor_start")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "z\na\nb\n")
+    qt_write_file("${QT_WORK_DIR}/b.txt" "x\na\nb\nc\nd\ne\nf\n")
+    qt_write_file("${QT_WORK_DIR}/c.txt" "u\n\ny\nz\nq\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "a.diff\nb.diff\nc.diff\n")
+    qt_write_file("${QT_WORK_DIR}/patches/a.diff"
+        "--- a/a.txt\n+++ b/a.txt\n@@ -1,2 +1,3 @@\n+new\n a\n b\n")
+    qt_write_file("${QT_WORK_DIR}/patches/b.diff"
+        "--- a/b.txt\n+++ b/b.txt\n@@ -1,5 +1,5 @@\n a\n-b\n+B\n c\n d\n e\n")
+    qt_write_file("${QT_WORK_DIR}/patches/c.diff"
+        "--- a/c.txt\n+++ b/c.txt\n@@ -1,3 +1,4 @@\n+u\n \n y\n z\n")
+
+    # With all its context skipped, the hunk goes where its header says
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_success("${rc}" "push of a.diff should succeed")
+    qt_assert_equal("${out}"
+        "Applying patch a.diff\npatching file a.txt\nHunk #1 succeeded at 1 with fuzz 2.\n\nNow at patch a.diff\n"
+        "push should insert at line 1 with fuzz 2")
+    qt_assert_file_text("${QT_WORK_DIR}/a.txt" "new\nz\na\nb" "push should insert before z")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_success("${rc}" "push of b.diff should succeed")
+    qt_assert_equal("${out}"
+        "Applying patch b.diff\npatching file b.txt\nHunk #1 succeeded at 2 with fuzz 2 (offset 1 line).\n\nNow at patch b.diff\n"
+        "push should move the hunk off line 1 only with fuzz 2")
+    qt_assert_file_text("${QT_WORK_DIR}/b.txt" "x\na\nB\nc\nd\ne\nf" "push should patch b.txt")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_failure("${rc}" "push of a line already at the top should fail")
+    qt_assert_equal("${out}"
+        "Applying patch c.diff\npatching file c.txt\nHunk #1 FAILED at 1.\n1 out of 1 hunk FAILED -- rejects in file c.txt\nPatch c.diff can be reverse-applied\n"
+        "push should not add the line again")
+    qt_assert_file_text("${QT_WORK_DIR}/c.txt" "u\n\ny\nz\nq" "push should leave c.txt alone")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -m)
+    qt_assert_success("${rc}" "push -m of a line already at the top should succeed")
+    qt_assert_equal("${out}"
+        "Applying patch c.diff\npatching file c.txt\nHunk #1 already applied at 1.\n\nNow at patch c.diff\n"
+        "push -m should say the line is already applied")
+    qt_assert_file_text("${QT_WORK_DIR}/c.txt" "u\n\ny\nz\nq" "push -m should leave c.txt alone")
+endfunction()
+
+# push_anchor_end: like GNU patch, push holds a hunk with less context
+# after its changes than before to the end of the file, until fuzz has
+# skipped the extra context before them
+function(qt_scenario_push_anchor_end)
+    qt_merge_base(base)
+    qt_begin_test("push_anchor_end")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "${base}")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "${base}l21\n")
+    qt_write_file("${QT_WORK_DIR}/h.txt" "${base}")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "f.diff\ng.diff\nh.diff\n")
+    qt_write_file("${QT_WORK_DIR}/patches/f.diff"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -5,5 +5,5 @@\n l5\n l6\n l7\n-l8\n+L8\n l9\n")
+    foreach(name g h)
+        qt_write_file("${QT_WORK_DIR}/patches/${name}.diff"
+            "--- a/${name}.txt\n+++ b/${name}.txt\n@@ -16,5 +16,5 @@\n l16\n l17\n l18\n-l19\n+L19\n l20\n")
+    endforeach()
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --fuzz=1)
+    qt_assert_failure("${rc}" "push --fuzz=1 of a hunk short of the end should fail")
+    qt_assert_equal("${out}"
+        "Applying patch f.diff\npatching file f.txt\nHunk #1 FAILED at 5.\n1 out of 1 hunk FAILED -- rejects in file f.txt\nPatch f.diff does not apply (enforce with -f)\n"
+        "push --fuzz=1 should not match the hunk short of the end")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_success("${rc}" "push of a hunk short of the end should succeed")
+    qt_assert_equal("${out}"
+        "Applying patch f.diff\npatching file f.txt\nHunk #1 succeeded at 5 with fuzz 2.\n\nNow at patch f.diff\n"
+        "push should match the hunk short of the end with fuzz 2")
+    string(REPLACE "l8\n" "L8\n" f "${base}")
+    qt_read_file_raw(actual "${QT_WORK_DIR}/f.txt")
+    qt_assert_equal("${actual}" "${f}" "push should patch f.txt")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_success("${rc}" "push of a hunk a line short of the end should succeed")
+    qt_assert_equal("${out}"
+        "Applying patch g.diff\npatching file g.txt\nHunk #1 succeeded at 16 with fuzz 2.\n\nNow at patch g.diff\n"
+        "push should match the hunk a line short of the end with fuzz 2")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_success("${rc}" "push of a hunk at the end should succeed")
+    qt_assert_equal("${out}"
+        "Applying patch h.diff\npatching file h.txt\n\nNow at patch h.diff\n"
+        "push should match the hunk at the end exactly")
+endfunction()
+
+# push_fuzz_uneven_context: like GNU patch, push fuzz skips context first
+# at the end of a hunk with more of it, so a hunk with less context before
+# its changes needs more fuzz to skip a line that differs there
+function(qt_scenario_push_fuzz_uneven_context)
+    qt_merge_base(base)
+    qt_begin_test("push_fuzz_uneven_context")
+    string(REPLACE "l4\n" "X4\n" f "${base}")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "${f}")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -4,6 +4,6 @@\n l4\n l5\n-l6\n+L6\n l7\n l8\n l9\n")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --fuzz=1)
+    qt_assert_failure("${rc}" "push --fuzz=1 should fail")
+    qt_assert_equal("${out}"
+        "Applying patch p.diff\npatching file f.txt\nHunk #1 FAILED at 4.\n1 out of 1 hunk FAILED -- rejects in file f.txt\nPatch p.diff does not apply (enforce with -f)\n"
+        "push --fuzz=1 should not skip the first context line")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_success("${rc}" "push should succeed")
+    qt_assert_equal("${out}"
+        "Applying patch p.diff\npatching file f.txt\nHunk #1 succeeded at 4 with fuzz 2.\n\nNow at patch p.diff\n"
+        "push should skip the first context line with fuzz 2")
+    string(REPLACE "l6\n" "L6\n" f "${f}")
+    qt_read_file_raw(actual "${QT_WORK_DIR}/f.txt")
+    qt_assert_equal("${actual}" "${f}" "push should patch f.txt")
 endfunction()

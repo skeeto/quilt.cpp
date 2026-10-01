@@ -710,21 +710,16 @@ static HunkContext get_hunk_context(const PatchHunk &hunk)
 }
 
 // Try to match a hunk's old-side pattern against file lines starting at
-// position `pos` (0-based), with `fuzz` context lines skipped at top/bottom.
-// prefix_ctx/suffix_ctx are the real context extents from the full hunk.
-// Returns true if the pattern matches.
+// position `pos` (0-based), skipping prefix_fuzz lines at its top and
+// suffix_fuzz at its bottom.  Returns true if the pattern matches.
 static bool try_match(std::span<const std::string> file_lines,
                       ptrdiff_t pos,
                       const std::vector<PatternLine> &pattern,
-                      int fuzz,
-                      ptrdiff_t prefix_ctx,
-                      ptrdiff_t suffix_ctx)
+                      ptrdiff_t prefix_fuzz,
+                      ptrdiff_t suffix_fuzz)
 {
     ptrdiff_t pat_len = std::ssize(pattern);
     if (pat_len == 0) return true;
-
-    ptrdiff_t prefix_fuzz = std::min(static_cast<ptrdiff_t>(fuzz), prefix_ctx);
-    ptrdiff_t suffix_fuzz = std::min(static_cast<ptrdiff_t>(fuzz), suffix_ctx);
 
     // Lines to match: skip prefix_fuzz from top, suffix_fuzz from bottom
     ptrdiff_t match_start = prefix_fuzz;
@@ -751,8 +746,10 @@ static ptrdiff_t old_range_pos(const PatchHunk &hunk)
     return std::max(hunk.old_start, ptrdiff_t{1}) - 1;
 }
 
-// Spiral search: find where a hunk matches in the file.
-// Returns the 0-based file position, or -1 if not found.
+// Spiral search: find where a hunk matches in the file, as GNU patch does,
+// at each fuzz level up to max_fuzz in turn.  Returns the 0-based file
+// position, with fuzz_used set to the fuzz it matched with, or -1 if not
+// found.
 //
 // Lines before last_frozen_line are frozen: the hunks before have copied
 // them to the output or deleted them.  Search like GNU patch, which may
@@ -766,7 +763,8 @@ static ptrdiff_t locate_hunk(std::span<const std::string> file_lines,
                               const std::vector<PatternLine> &pattern,
                               ptrdiff_t last_frozen_line,
                               ptrdiff_t cumulative_offset,
-                              int max_fuzz)
+                              int max_fuzz,
+                              ptrdiff_t &fuzz_used)
 {
     ptrdiff_t file_len = std::ssize(file_lines);
     ptrdiff_t pat_old_count = std::ssize(pattern);
@@ -781,36 +779,50 @@ static ptrdiff_t locate_hunk(std::span<const std::string> file_lines,
         return first_guess < 0 ? -1 : first_guess;
     }
 
-    // Clamp to valid range
-    ptrdiff_t max_pos = file_len - pat_old_count;
-    if (max_pos < 0) max_pos = 0;
-
-    // Past the hunk's context, more fuzz changes nothing, so like GNU
-    // patch stop there
-    int fuzz_limit = checked_cast<int>(
-        std::min(ptrdiff_t{max_fuzz}, std::max(ctx.prefix, ctx.suffix)));
-    for (int fuzz = 0; fuzz <= fuzz_limit; ++fuzz) {
-        ptrdiff_t prefix_fuzz = std::min(static_cast<ptrdiff_t>(fuzz), ctx.prefix);
-        ptrdiff_t suffix_fuzz = std::min(static_cast<ptrdiff_t>(fuzz), ctx.suffix);
-        ptrdiff_t effective_pat_len = pat_old_count - prefix_fuzz - suffix_fuzz;
+    // Like GNU patch, fuzz no more than the hunk has context, and skip
+    // context at the end of the hunk with more of it first.  Until fuzz
+    // reaches the end with less, a hunk with less context at its start
+    // must start the file when its header puts it on line 1, and a hunk
+    // with less at its end must end the file.
+    ptrdiff_t context = std::max(ctx.prefix, ctx.suffix);
+    ptrdiff_t top_fuzz = std::min(ptrdiff_t{max_fuzz}, context);
+    for (ptrdiff_t fuzz = 0; fuzz <= top_fuzz; ++fuzz) {
+        fuzz_used = fuzz;
+        ptrdiff_t prefix_fuzz = fuzz + ctx.prefix - context;
+        ptrdiff_t suffix_fuzz = fuzz + ctx.suffix - context;
+        if (prefix_fuzz < 0 && old_range_pos(hunk) == 0) {
+            if (last_frozen_line <= ctx.prefix &&
+                try_match(file_lines, 0, pattern, 0, suffix_fuzz)) {
+                return 0;
+            }
+            continue;
+        }
+        prefix_fuzz = std::max(prefix_fuzz, ptrdiff_t{0});
+        if (suffix_fuzz < 0) {
+            ptrdiff_t pos = file_len - pat_old_count;
+            if (pos >= 0 && pos >= last_frozen_line &&
+                try_match(file_lines, pos, pattern, prefix_fuzz, 0)) {
+                return pos;
+            }
+            continue;
+        }
 
         // The last position where the lines to match fit, which counts the
         // fuzzed prefix, as GNU patch does
         ptrdiff_t max_search = file_len - (pat_old_count - suffix_fuzz);
-        if (effective_pat_len == 0) max_search = file_len;  // empty pattern matches anywhere
 
         if (first_guess < last_frozen_line && first_guess <= max_search) {
             // A first guess of 0 or less reaches no line before it
             ptrdiff_t lowest = first_guess > 0 ? 2 * first_guess - last_frozen_line : -1;
             if (lowest >= 0 &&
-                try_match(file_lines, lowest, pattern, fuzz, ctx.prefix, ctx.suffix)) {
+                try_match(file_lines, lowest, pattern, prefix_fuzz, suffix_fuzz)) {
                 return lowest;
             }
-            if (try_match(file_lines, last_frozen_line, pattern, fuzz, ctx.prefix, ctx.suffix)) {
+            if (try_match(file_lines, last_frozen_line, pattern, prefix_fuzz, suffix_fuzz)) {
                 return last_frozen_line;
             }
             for (ptrdiff_t pos = std::max(lowest + 1, ptrdiff_t{0}); pos <= max_search; ++pos) {
-                if (try_match(file_lines, pos, pattern, fuzz, ctx.prefix, ctx.suffix)) {
+                if (try_match(file_lines, pos, pattern, prefix_fuzz, suffix_fuzz)) {
                     return pos;
                 }
             }
@@ -820,7 +832,7 @@ static ptrdiff_t locate_hunk(std::span<const std::string> file_lines,
         // Try exact position first
         if (first_guess >= 0 && first_guess <= max_search &&
             first_guess > last_frozen_line - 1) {
-            if (try_match(file_lines, first_guess, pattern, fuzz, ctx.prefix, ctx.suffix)) {
+            if (try_match(file_lines, first_guess, pattern, prefix_fuzz, suffix_fuzz)) {
                 return first_guess;
             }
         }
@@ -845,7 +857,7 @@ static ptrdiff_t locate_hunk(std::span<const std::string> file_lines,
             if (delta <= max_offset_forward) {
                 ptrdiff_t pos = first_guess + delta;
                 if (pos >= 0 && pos <= max_search && pos > last_frozen_line - 1) {
-                    if (try_match(file_lines, pos, pattern, fuzz, ctx.prefix, ctx.suffix)) {
+                    if (try_match(file_lines, pos, pattern, prefix_fuzz, suffix_fuzz)) {
                         return pos;
                     }
                 }
@@ -855,7 +867,7 @@ static ptrdiff_t locate_hunk(std::span<const std::string> file_lines,
             if (delta <= max_offset_backward) {
                 ptrdiff_t pos = first_guess - delta;
                 if (pos >= 0 && pos <= max_search && pos > last_frozen_line - 1) {
-                    if (try_match(file_lines, pos, pattern, fuzz, ctx.prefix, ctx.suffix)) {
+                    if (try_match(file_lines, pos, pattern, prefix_fuzz, suffix_fuzz)) {
                         return pos;
                     }
                 }
@@ -1345,8 +1357,9 @@ static std::string merge_hunks(const FileContent &fc, const PatchFile &pf,
         // Apply the hunk where it matches exactly, or else merge it where
         // it matches best
         ptrdiff_t matched = old_len;
+        ptrdiff_t no_fuzz = 0;
         ptrdiff_t where = locate_hunk(file, hunk, get_old_pattern(hunk),
-                                      last_frozen_line, cumulative_offset, 0);
+                                      last_frozen_line, cumulative_offset, 0, no_fuzz);
         bool applies_cleanly = where >= 0;
         if (applies_cleanly) {
             cumulative_offset = where - old_range_pos(hunk);
@@ -1895,9 +1908,10 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                 auto pattern = get_old_pattern(hunk);
                 offset_before[checked_cast<size_t>(h)] = out_offset;
 
+                ptrdiff_t fuzz_used = 0;
                 ptrdiff_t pos = locate_hunk(fc.lines, hunk, pattern,
                                              last_frozen_line, cumulative_offset,
-                                             opts.fuzz);
+                                             opts.fuzz, fuzz_used);
                 auto ctx = get_hunk_context(hunk);
                 bool changes = ctx.prefix < std::ssize(hunk.lines);
 
@@ -1919,19 +1933,6 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                     hunk_positions[checked_cast<size_t>(h)] = pos;
                     ptrdiff_t pat_len = std::ssize(pattern);
                     ptrdiff_t actual_offset = pos - old_range_pos(hunk);
-
-                    // Determine fuzz level used for this hunk
-                    int fuzz_used = 0;
-                    if (opts.fuzz > 0) {
-                        int fuzz_limit = checked_cast<int>(
-                            std::min(ptrdiff_t{opts.fuzz}, std::max(ctx.prefix, ctx.suffix)));
-                        for (int f = 0; f <= fuzz_limit; ++f) {
-                            if (try_match(fc.lines, pos, pattern, f, ctx.prefix, ctx.suffix)) {
-                                fuzz_used = f;
-                                break;
-                            }
-                        }
-                    }
 
                     // Like GNU patch, report the hunk's line in the patched
                     // file and its whole offset from the line it names, even
