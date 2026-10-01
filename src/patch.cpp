@@ -759,13 +759,22 @@ static ptrdiff_t old_range_pos(const PatchHunk &hunk)
 
 // Spiral search: find where a hunk matches in the file.
 // Returns the 0-based file position, or -1 if not found.
-// Updates cumulative_offset on success.
+//
+// Lines before last_frozen_line are frozen: the hunks before have copied
+// them to the output or deleted them.  With overlap, search like GNU patch
+// outside merge mode, which may find a hunk among the frozen lines, since
+// it takes context from the file: return the guess for an empty pattern,
+// and for a guess among the frozen lines, try first as far before the guess
+// as the frozen lines reach past it, then the first line not frozen, then
+// each line up from the first.  The caller fails a hunk found where it
+// would change a frozen line.
 static ptrdiff_t locate_hunk(std::span<const std::string> file_lines,
                               const PatchHunk &hunk,
                               const std::vector<PatternLine> &pattern,
                               ptrdiff_t last_frozen_line,
                               ptrdiff_t cumulative_offset,
-                              int max_fuzz)
+                              int max_fuzz,
+                              bool overlap)
 {
     ptrdiff_t file_len = std::ssize(file_lines);
     ptrdiff_t pat_old_count = std::ssize(pattern);
@@ -775,6 +784,10 @@ static ptrdiff_t locate_hunk(std::span<const std::string> file_lines,
 
     // First guess: the position the hunk header names, plus the offset
     ptrdiff_t first_guess = old_range_pos(hunk) + cumulative_offset;
+
+    if (overlap && pat_old_count == 0) {
+        return first_guess < 0 ? -1 : first_guess;
+    }
 
     // Clamp to valid range
     ptrdiff_t max_pos = file_len - pat_old_count;
@@ -789,8 +802,28 @@ static ptrdiff_t locate_hunk(std::span<const std::string> file_lines,
         ptrdiff_t suffix_fuzz = std::min(static_cast<ptrdiff_t>(fuzz), ctx.suffix);
         ptrdiff_t effective_pat_len = pat_old_count - prefix_fuzz - suffix_fuzz;
 
-        ptrdiff_t max_search = file_len - effective_pat_len;
+        // The last position where the lines to match fit, which counts the
+        // fuzzed prefix, as GNU patch does
+        ptrdiff_t max_search = file_len - (pat_old_count - suffix_fuzz);
         if (effective_pat_len == 0) max_search = file_len;  // empty pattern matches anywhere
+
+        if (overlap && first_guess < last_frozen_line && first_guess <= max_search) {
+            // A first guess of 0 or less reaches no line before it
+            ptrdiff_t lowest = first_guess > 0 ? 2 * first_guess - last_frozen_line : -1;
+            if (lowest >= 0 &&
+                try_match(file_lines, lowest, pattern, fuzz, ctx.prefix, ctx.suffix)) {
+                return lowest;
+            }
+            if (try_match(file_lines, last_frozen_line, pattern, fuzz, ctx.prefix, ctx.suffix)) {
+                return last_frozen_line;
+            }
+            for (ptrdiff_t pos = std::max(lowest + 1, ptrdiff_t{0}); pos <= max_search; ++pos) {
+                if (try_match(file_lines, pos, pattern, fuzz, ctx.prefix, ctx.suffix)) {
+                    return pos;
+                }
+            }
+            continue;
+        }
 
         // Try exact position first
         if (first_guess >= 0 && first_guess <= max_search &&
@@ -858,75 +891,60 @@ static std::vector<std::string_view> get_new_lines(const PatchHunk &hunk)
 
 // Build the output file content after applying all successfully matched hunks.
 // hunks_positions[i] = 0-based file position where hunk i matched, or -1 if rejected.
-// hunk_fuzz[i] = fuzz amounts used for hunk i (to trim context from both sides).
+// Like GNU patch, copy the file up to each change and write only the added
+// lines from the patch, so context, matched or fuzzed, comes from the file,
+// and a hunk may start among the trailing context of the hunk before.
 static std::string build_output(std::span<const std::string> file_lines,
                                  bool has_trailing_newline,
                                  const PatchFile &pf,
-                                 const std::vector<ptrdiff_t> &hunk_positions,
-                                 const std::vector<HunkFuzz> &hunk_fuzz)
+                                 const std::vector<ptrdiff_t> &hunk_positions)
 {
     std::string output;
     ptrdiff_t file_len = std::ssize(file_lines);
-    ptrdiff_t last_copied = 0;  // next line to copy from input
+    ptrdiff_t copied = 0;       // file lines copied or deleted so far
+    bool after_newline = true;  // whether output ends at a line's end
+
+    // Like GNU patch, end a line left incomplete before writing another
+    auto put = [&](std::string_view line, bool newline) {
+        if (!after_newline) output += '\n';
+        output += line;
+        if (newline) output += '\n';
+        after_newline = newline;
+    };
+    auto copy_till = [&](ptrdiff_t end) {
+        for (; copied < std::min(end, file_len); ++copied) {
+            put(file_lines[checked_cast<size_t>(copied)],
+                copied < file_len - 1 || has_trailing_newline);
+        }
+    };
 
     for (ptrdiff_t h = 0; h < std::ssize(pf.hunks); ++h) {
         ptrdiff_t pos = hunk_positions[checked_cast<size_t>(h)];
         if (pos < 0) continue;  // rejected hunk, skip
 
         const auto &hunk = pf.hunks[checked_cast<size_t>(h)];
-        auto pattern = get_old_pattern(hunk);
-        ptrdiff_t pat_len = std::ssize(pattern);
-        auto new_lines = get_new_lines(hunk);
-
-        // When fuzz was used, trim the fuzzed context lines from both sides.
-        // The fuzzed prefix/suffix context lines were not matched against the
-        // file, so we must not replace them.
-        auto fz = hunk_fuzz[checked_cast<size_t>(h)];
-        pos += fz.prefix;
-        pat_len -= fz.prefix + fz.suffix;
-        if (pat_len < 0) pat_len = 0;
-        ptrdiff_t new_start = fz.prefix;
-        ptrdiff_t new_end = std::ssize(new_lines) - fz.suffix;
-        if (new_end < new_start) new_end = new_start;
-
-        // Clamp to file bounds
-        if (pos > file_len) pos = file_len;
-
-        // Copy unchanged lines from last_copied to pos
-        for (ptrdiff_t j = last_copied; j < pos; ++j) {
-            output += file_lines[checked_cast<size_t>(j)];
-            output += '\n';
+        ptrdiff_t nlines = std::ssize(hunk.lines);
+        ptrdiff_t last_new = nlines - 1;  // last new-side line, if any
+        while (last_new >= 0 && hunk.lines[checked_cast<size_t>(last_new)][0] == '-') {
+            --last_new;
         }
 
-        // Write replacement lines (trimmed by fuzz)
-        for (ptrdiff_t j = new_start; j < new_end; ++j) {
-            output += new_lines[checked_cast<size_t>(j)];
-            bool is_last_new_line = (j == new_end - 1);
-            if (is_last_new_line && fz.suffix == 0 && hunk.new_no_newline) {
-                // Don't add trailing newline (only when suffix not trimmed)
+        ptrdiff_t old = pos;  // file line of the next old-side line
+        for (ptrdiff_t j = 0; j < nlines; ++j) {
+            std::string_view line = hunk.lines[checked_cast<size_t>(j)];
+            if (line[0] == ' ') {
+                ++old;
+            } else if (line[0] == '-') {
+                copy_till(old);
+                copied = ++old;
             } else {
-                output += '\n';
-            }
-        }
-
-        last_copied = pos + pat_len;
-        if (last_copied > file_len) last_copied = file_len;
-    }
-
-    // Copy remaining lines
-    for (ptrdiff_t j = last_copied; j < file_len; ++j) {
-        output += file_lines[checked_cast<size_t>(j)];
-        if (j < file_len - 1) {
-            output += '\n';
-        } else {
-            // Last line: preserve original trailing newline status
-            // unless a hunk changed it
-            if (has_trailing_newline) {
-                output += '\n';
+                copy_till(old);
+                put(line.substr(1), !(j == last_new && hunk.new_no_newline));
             }
         }
     }
 
+    copy_till(file_len);
     return output;
 }
 
@@ -1433,17 +1451,28 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
 
             ptrdiff_t pos = locate_hunk(fc.lines, hunk, pattern,
                                          last_frozen_line, cumulative_offset,
-                                         opts.fuzz);
+                                         opts.fuzz, !opts.merge);
+            auto ctx = get_hunk_context(hunk);
+            bool changes = ctx.prefix < std::ssize(hunk.lines);
 
             // Like GNU patch, outside merge mode refuse a hunk at the top
             // of a file with contents when the patch surely creates it
             bool refused = !opts.merge && pos == 0 && pf.old_absent == 2 && !is_empty;
 
-            if (pos >= 0 && !refused) {
+            // Like GNU patch, fail a hunk found among the frozen lines that
+            // would change one, saying so even with -s, though the hunks
+            // after it still start from where it was found
+            bool misordered = !refused && pos >= 0 && changes &&
+                              pos + ctx.prefix < last_frozen_line;
+            if (misordered) {
+                result.out += "misordered hunks! output would be garbled\n";
+                cumulative_offset = pos - old_range_pos(hunk);
+            }
+
+            if (pos >= 0 && !refused && !misordered) {
                 hunk_positions[checked_cast<size_t>(h)] = pos;
                 ptrdiff_t pat_len = std::ssize(pattern);
                 ptrdiff_t actual_offset = pos - old_range_pos(hunk);
-                auto ctx = get_hunk_context(hunk);
 
                 // Determine fuzz level used for this hunk
                 int fuzz_used = 0;
@@ -1458,7 +1487,7 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                     }
                 }
 
-                // Record fuzz amounts for build_output trimming
+                // Record fuzz amounts for build_merge_output trimming
                 hunk_fuzz[checked_cast<size_t>(h)] = {
                     std::min(static_cast<ptrdiff_t>(fuzz_used), ctx.prefix),
                     std::min(static_cast<ptrdiff_t>(fuzz_used), ctx.suffix)
@@ -1482,9 +1511,16 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                     result.out += ".\n";
                 }
 
-                // Update offset and frozen line (adjusted for fuzz)
+                // Update offset and frozen line.  Like GNU patch, merge mode
+                // freezes the trailing context (but for fuzzed lines), but
+                // otherwise only the lines through the hunk's last change are
+                // frozen, as the output takes context from the file.
                 cumulative_offset = actual_offset;
-                last_frozen_line = pos + pat_len - fz.suffix;
+                if (opts.merge) {
+                    last_frozen_line = pos + pat_len - fz.suffix;
+                } else if (changes) {
+                    last_frozen_line = pos + pat_len - ctx.suffix;
+                }
                 out_offset += hunk.new_count - hunk.old_count;
             } else {
                 // Hunk failed
@@ -1495,7 +1531,12 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                         result.out += std::format("Hunk #{} NOT MERGED at {}.\n",
                                                   h + 1, hunk.old_start);
                     } else {
-                        ptrdiff_t line = refused ? pos + 1 : hunk.old_start;
+                        // Like GNU patch, the line a hunk was found at, or
+                        // else the line it names, the one after for an
+                        // empty range
+                        ptrdiff_t line = refused || misordered ? pos + 1
+                                       : hunk.old_count == 0 ? hunk.old_start + 1
+                                       : hunk.old_start;
                         result.out += std::format("Hunk #{} FAILED at {}.\n",
                                                   h + 1, line + out_offset);
                     }
@@ -1525,7 +1566,7 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                                                       opts.merge_style);
                 } else {
                     new_content = build_output(fc.lines, fc.has_trailing_newline,
-                                               pf, hunk_positions, hunk_fuzz);
+                                               pf, hunk_positions);
                 }
 
                 // Restore \r\n line endings if the original file used them

@@ -544,6 +544,11 @@ set(QUILT_TEST_SCENARIOS
     getopt_files_patches_fold
     getopt_graph
     getopt_help_operand
+    push_overlapping_hunks
+    push_overlapping_hunk_offsets
+    push_hunk_among_frozen_lines
+    push_misordered_hunks
+    push_insertion_hunk_guess
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -8599,6 +8604,16 @@ function(qt_run_named_scenario scenario)
         qt_scenario_getopt_mail()
     elseif(scenario STREQUAL "getopt_help_value")
         qt_scenario_getopt_help_value()
+    elseif(scenario STREQUAL "push_overlapping_hunks")
+        qt_scenario_push_overlapping_hunks()
+    elseif(scenario STREQUAL "push_overlapping_hunk_offsets")
+        qt_scenario_push_overlapping_hunk_offsets()
+    elseif(scenario STREQUAL "push_hunk_among_frozen_lines")
+        qt_scenario_push_hunk_among_frozen_lines()
+    elseif(scenario STREQUAL "push_misordered_hunks")
+        qt_scenario_push_misordered_hunks()
+    elseif(scenario STREQUAL "push_insertion_hunk_guess")
+        qt_scenario_push_insertion_hunk_guess()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -16249,4 +16264,372 @@ function(qt_scenario_getopt_help_value)
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS grep -- -h)
     qt_assert_equal("${rc}" "1" "grep -- -h should fail")
     qt_assert_contains("${err}" "not implemented" "grep -- -h should not print the help")
+endfunction()
+
+# push_overlapping_hunks: like GNU patch, a hunk may start among the trailing
+# context of the hunk before, by one line or several, in a unified or a
+# context diff, since context comes from the file, not the patch
+function(qt_scenario_push_overlapping_hunks)
+    qt_begin_test("push_overlapping_hunks")
+    set(lines "")
+    foreach(n RANGE 1 20)
+        string(APPEND lines "l${n}\n")
+    endforeach()
+    qt_write_file("${QT_WORK_DIR}/f.txt" "${lines}")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\n")
+
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff" [=[
+--- a/f.txt
++++ b/f.txt
+@@ -2,3 +2,3 @@
+ l2
+-l3
++L3
+ l4
+@@ -4,3 +4,3 @@
+ l4
+-l5
++L5
+ l6
+]=])
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_success("${rc}" "push of hunks sharing a line should succeed")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_not_contains("${combined}" "Hunk" "push should apply both hunks where they say")
+    string(REPLACE "\nl3\n" "\nL3\n" expected "${lines}")
+    string(REPLACE "\nl5\n" "\nL5\n" expected "${expected}")
+    qt_strip_trailing_newlines(expected "${expected}")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "${expected}"
+        "push should apply hunks sharing a line")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff" [=[
+--- a/f.txt
++++ b/f.txt
+@@ -2,7 +2,7 @@
+ l2
+ l3
+ l4
+-l5
++L5
+ l6
+ l7
+ l8
+@@ -7,7 +7,7 @@
+ l7
+ l8
+ l9
+-l10
++L10
+ l11
+ l12
+ l13
+]=])
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_success("${rc}" "push of hunks sharing two lines should succeed")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_not_contains("${combined}" "Hunk" "push should apply both hunks where they say")
+    string(REPLACE "\nl5\n" "\nL5\n" expected "${lines}")
+    string(REPLACE "\nl10\n" "\nL10\n" expected "${expected}")
+    qt_strip_trailing_newlines(expected "${expected}")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "${expected}"
+        "push should apply hunks sharing two lines")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff" [=[
+*** a/f.txt
+--- b/f.txt
+***************
+*** 2,8 ****
+  l2
+  l3
+  l4
+! l5
+  l6
+  l7
+  l8
+--- 2,8 ----
+  l2
+  l3
+  l4
+! L5
+  l6
+  l7
+  l8
+***************
+*** 6,12 ****
+  l6
+  l7
+  l8
+! l9
+  l10
+  l11
+  l12
+--- 6,12 ----
+  l6
+  l7
+  l8
+! L9
+  l10
+  l11
+  l12
+]=])
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_success("${rc}" "push of context hunks sharing three lines should succeed")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_not_contains("${combined}" "Hunk" "push should apply both hunks where they say")
+    string(REPLACE "\nl5\n" "\nL5\n" expected "${lines}")
+    string(REPLACE "\nl9\n" "\nL9\n" expected "${expected}")
+    qt_strip_trailing_newlines(expected "${expected}")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "${expected}"
+        "push should apply context hunks sharing three lines")
+endfunction()
+
+# push_overlapping_hunk_offsets: hunks that share lines report offsets, fuzz,
+# and lines in the patched file as GNU patch does, and a fuzzed context line
+# shared with the hunk before stays as it is in the file
+function(qt_scenario_push_overlapping_hunk_offsets)
+    qt_begin_test("push_overlapping_hunk_offsets")
+    set(lines "x1\nx2\n")
+    foreach(n RANGE 1 20)
+        string(APPEND lines "l${n}\n")
+    endforeach()
+    qt_write_file("${QT_WORK_DIR}/f.txt" "${lines}")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff" [=[
+--- a/f.txt
++++ b/f.txt
+@@ -2,3 +2,5 @@
+ l2
+-l3
++A
++B
++C
+ l4
+@@ -4,3 +6,3 @@
+ l4
+-l5
++L5
+ l6
+@@ -6,3 +8,3 @@
+ X6
+-l7
++L7
+ l8
+]=])
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_success("${rc}" "push of overlapping hunks with offsets should succeed")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}"
+        "Hunk #1 succeeded at 4 (offset 2 lines).\nHunk #2 succeeded at 8 (offset 2 lines).\nHunk #3 succeeded at 10 with fuzz 1 (offset 2 lines).\n"
+        "push should report the overlapping hunks' lines, offsets and fuzz")
+    string(REPLACE "\nl3\n" "\nA\nB\nC\n" expected "${lines}")
+    string(REPLACE "\nl5\n" "\nL5\n" expected "${expected}")
+    string(REPLACE "\nl7\n" "\nL7\n" expected "${expected}")
+    qt_strip_trailing_newlines(expected "${expected}")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "${expected}"
+        "push should apply the overlapping hunks, keeping the file's fuzzed line")
+endfunction()
+
+# push_hunk_among_frozen_lines: GNU patch may find a hunk whose leading
+# context covers lines that the hunk before changed, as long as its own
+# changes come after, searching as it does: first as far before the line it
+# expects as the changes before reach past it, then the line after those
+# changes, then each line up from the first
+function(qt_scenario_push_hunk_among_frozen_lines)
+    qt_begin_test("push_hunk_among_frozen_lines")
+    set(lines "")
+    foreach(n RANGE 1 20)
+        string(APPEND lines "l${n}\n")
+    endforeach()
+    qt_write_file("${QT_WORK_DIR}/f.txt" "${lines}")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\n")
+
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff" [=[
+--- a/f.txt
++++ b/f.txt
+@@ -2,3 +2,3 @@
+ l2
+-l3
++L3
+ l4
+@@ -3,3 +3,3 @@
+ l3
+-l4
++L4
+ l5
+]=])
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_success("${rc}" "push of a hunk with a changed line as context should succeed")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_not_contains("${combined}" "Hunk" "push should apply both hunks where they say")
+    string(REPLACE "\nl3\nl4\n" "\nL3\nL4\n" expected "${lines}")
+    qt_strip_trailing_newlines(expected "${expected}")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "${expected}"
+        "push should apply a hunk with a changed line as context")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff" [=[
+--- a/f.txt
++++ b/f.txt
+@@ -4,4 +4,4 @@
+ l4
+-l5
+-l6
++L5
++L6
+ l7
+@@ -3,7 +3,7 @@
+ l5
+ l6
+ l7
+-l8
++L8
+ l9
+ l10
+ l11
+]=])
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_success("${rc}" "push of a hunk found among changed lines should succeed")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Hunk #2 succeeded at 5 (offset 2 lines).\n"
+        "push should find the hunk among the changed lines")
+    string(REPLACE "\nl5\nl6\nl7\nl8\n" "\nL5\nL6\nl7\nL8\n" expected "${lines}")
+    qt_strip_trailing_newlines(expected "${expected}")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "${expected}"
+        "push should apply a hunk found among changed lines")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+
+    # With every line alike, where the hunk lands shows the search order
+    string(REPEAT "x\n" 15 xs)
+    qt_write_file("${QT_WORK_DIR}/f.txt" "${xs}")
+    foreach(case "3;2;-1 lines" "2;4;2 lines")
+        list(GET case 0 start)
+        list(GET case 1 line)
+        list(GET case 2 offset)
+        qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+            "--- a/f.txt\n+++ b/f.txt\n@@ -2,3 +2,3 @@\n x\n-x\n+Y\n x\n@@ -${start},7 +${start},7 @@\n x\n x\n x\n-x\n+Z\n x\n x\n x\n")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+        qt_assert_success("${rc}" "push of hunks in alike lines should succeed")
+        qt_combine_output(combined "${out}" "${err}")
+        qt_assert_contains("${combined}" "Hunk #2 succeeded at ${line} (offset ${offset}).\n"
+            "push should search for the hunk at line ${start} like GNU patch")
+        set(expected "x\nx\nY\n")
+        math(EXPR changed "${line} + 3")
+        foreach(n RANGE 4 15)
+            if(n EQUAL changed)
+                string(APPEND expected "Z\n")
+            else()
+                string(APPEND expected "x\n")
+            endif()
+        endforeach()
+        qt_strip_trailing_newlines(expected "${expected}")
+        qt_assert_file_text("${QT_WORK_DIR}/f.txt" "${expected}"
+            "push should apply the hunk expected at line ${start} at line ${line}")
+        qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    endforeach()
+endfunction()
+
+# push_misordered_hunks: like GNU patch, a hunk found among the lines that
+# the hunk before changed, which would change one of them, fails, saying so
+# even with -q, and the hunks after it still start from where it was found
+function(qt_scenario_push_misordered_hunks)
+    qt_begin_test("push_misordered_hunks")
+    set(lines "")
+    foreach(n RANGE 1 9)
+        string(APPEND lines "l${n}\n")
+    endforeach()
+    string(APPEND lines "a\nb\nc\na\nb\nc\nl16\nl17\nl18\n")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "${lines}")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff" [=[
+--- a/f.txt
++++ b/f.txt
+@@ -4,3 +4,3 @@
+ l4
+-l5
++L5
+ l6
+@@ -4,3 +4,3 @@
+ l2
+-l3
++X3
+ l4
+@@ -12,3 +12,3 @@
+ a
+-b
++B
+ c
+]=])
+    set(misordered "misordered hunks! output would be garbled\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_failure("${rc}" "push of misordered hunks should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}"
+        "patching file f.txt\n${misordered}Hunk #2 FAILED at 2.\nHunk #3 succeeded at 10 (offset -2 lines).\n1 out of 3 hunks FAILED"
+        "push should fail the misordered hunk and go on from where it was found")
+    qt_strip_trailing_newlines(expected "${lines}")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "${expected}" "push should roll back")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -q)
+    qt_assert_failure("${rc}" "push -q of misordered hunks should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "${misordered}1 out of 3 hunks FAILED"
+        "push -q should still say the hunks are misordered")
+    qt_assert_not_contains("${combined}" "Hunk #" "push -q should not report hunks")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -f)
+    qt_assert_failure("${rc}" "push -f of misordered hunks should fail")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt.rej"
+        "--- f.txt\n+++ f.txt\n@@ -4,3 +4,3 @@\n l2\n-l3\n+X3\n l4\n"
+        "push -f should reject the misordered hunk")
+    string(REPLACE "\nl5\n" "\nL5\n" expected "${lines}")
+    string(REPLACE "\na\nb\nc\na\n" "\na\nB\nc\na\n" expected "${expected}")
+    qt_strip_trailing_newlines(expected "${expected}")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "${expected}"
+        "push -f should apply the other hunks")
+endfunction()
+
+# push_insertion_hunk_guess: like GNU patch, a hunk with no old lines goes
+# right where it says, among the trailing context of the hunk before or
+# past the end of the file, but fails when the hunk before changed a line
+# after it, or the offset puts it before the first line
+function(qt_scenario_push_insertion_hunk_guess)
+    qt_begin_test("push_insertion_hunk_guess")
+    set(lines "")
+    foreach(n RANGE 1 20)
+        string(APPEND lines "l${n}\n")
+    endforeach()
+    qt_write_file("${QT_WORK_DIR}/f.txt" "${lines}")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\n")
+
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -2,3 +2,3 @@\n l2\n-l3\n+L3\n l4\n@@ -3,0 +4 @@\n+ins\n@@ -25,0 +27 @@\n+end\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_success("${rc}" "push of insertions should succeed")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_not_contains("${combined}" "Hunk" "push should insert the lines where the hunks say")
+    string(REPLACE "\nl3\n" "\nL3\nins\n" expected "${lines}end\n")
+    qt_strip_trailing_newlines(expected "${expected}")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "${expected}"
+        "push should insert among the trailing context and at the end")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -2,3 +2,3 @@\n l2\n-l3\n+L3\n l4\n@@ -1,0 +2 @@\n+ins\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_failure("${rc}" "push of an insertion before a change should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}"
+        "misordered hunks! output would be garbled\nHunk #2 FAILED at 2.\n"
+        "push should fail an insertion before the change of the hunk before")
+
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -6,3 +6,3 @@\n l2\n-l3\n+L3\n l4\n@@ -3,0 +4 @@\n+ins\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_failure("${rc}" "push of an insertion before the first line should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}"
+        "Hunk #1 succeeded at 2 (offset -4 lines).\nHunk #2 FAILED at 4.\n"
+        "push should fail an insertion that the offset puts before the first line")
 endfunction()
