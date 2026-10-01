@@ -959,13 +959,11 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
     PatchOptions patch_opts;
     patch_opts.strip_level = strip_level;
     patch_opts.reverse = opt_reverse;
-    patch_opts.force = opt_force;
     patch_opts.quiet = opt_quiet;
     auto extra_patch_opts = shell_split(get_env("QUILT_PATCH_OPTS"));
     for (const auto &opt : extra_patch_opts) {
         std::string_view o = opt;
         if (o == "-R") patch_opts.reverse = true;
-        else if (o == "-f" || o == "--force") patch_opts.force = true;
         else if (o == "-s") patch_opts.quiet = true;
         else if (o == "-E") patch_opts.remove_empty = true;
         else if (o.starts_with("--fuzz=")) {

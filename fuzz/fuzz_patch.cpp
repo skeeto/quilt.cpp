@@ -40,7 +40,6 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     opts.strip_level  = (opt_bits & 0x01) ? 0 : 1;
     opts.fuzz         = (opt_bits >> 1) & 0x03;       // 0-3
     opts.reverse      = (opt_bits & 0x08) != 0;
-    opts.force        = (opt_bits & 0x10) != 0;
     opts.remove_empty = (opt_bits & 0x20) != 0;
     opts.merge        = (opt_bits & 0x40) != 0;
     if (opt_bits & 0x80) opts.merge_style = "diff3";

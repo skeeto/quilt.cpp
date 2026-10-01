@@ -88,7 +88,6 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         opts.strip_level  = 1;
         opts.fuzz         = fuzz_level;
         opts.reverse      = false;
-        opts.force        = true;   // keep going even if hunks fail
         opts.remove_empty = false;
         opts.merge        = false;
         opts.dry_run      = false;

@@ -92,13 +92,14 @@ std::vector<std::string> split_lines(std::string_view s);
 std::vector<std::string> split_on_whitespace(std::string_view s);
 std::vector<std::string> shell_split(std::string_view s);
 
-// Built-in patch engine
+// Built-in patch engine.  Like GNU patch given the -f that quilt always
+// passes, it never asks questions: it applies what it can and skips
+// missing files the patch does not create.
 struct PatchOptions {
     int strip_level = 1;       // -pN
     int fuzz = 2;              // --fuzz=N (default 2)
     bool reverse = false;      // -R
     bool dry_run = false;      // --dry-run
-    bool force = false;        // -f
     bool remove_empty = false; // -E
     bool quiet = false;        // -s
     bool merge = false;        // --merge

@@ -19,7 +19,6 @@ static void apply_quilt_patch_opts(PatchOptions &opts, std::span<const std::stri
     for (const auto &opt : extra) {
         std::string_view o = opt;
         if (o == "-R") opts.reverse = true;
-        else if (o == "-f" || o == "--force") opts.force = true;
         else if (o == "-s") opts.quiet = true;
         else if (o == "-E") opts.remove_empty = true;
         else if (o.starts_with("--fuzz=")) {
@@ -80,9 +79,8 @@ static bool removes_cleanly(const QuiltState &q, std::string_view name,
         opts.strip_level = q.get_strip_level(name);
         if (q.patch_reversed.contains(std::string(name))) opts.reverse = true;
         apply_quilt_patch_opts(opts, extra_patch_opts);
-        // Keep whatever applies, so a force-applied patch matches the
-        // partial result that push left behind
-        opts.force = true;
+        // The engine keeps whatever applies, so a force-applied patch
+        // matches the partial result that push left behind
         opts.quiet = true;
         opts.fs = &memfs;
         builtin_patch(patch_content, opts);
@@ -506,7 +504,6 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
         // Apply the patch using built-in patch engine
         PatchOptions patch_opts;
         patch_opts.strip_level = q.get_strip_level(name);
-        patch_opts.force = force;
         if (q.patch_reversed.contains(name)) patch_opts.reverse = true;
         if (fuzz >= 0) patch_opts.fuzz = fuzz;
         if (merge) {
