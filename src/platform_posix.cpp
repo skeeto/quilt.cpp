@@ -229,13 +229,25 @@ bool append_file(std::string_view path, std::string_view content)
     return true;
 }
 
+static struct timespec stat_mtime(const struct stat &st)
+{
+#ifdef __APPLE__
+    return st.st_mtimespec;
+#else
+    return st.st_mtim;
+#endif
+}
+
 bool copy_file(std::string_view src, std::string_view dst)
 {
+    std::string s = null_terminated(src);
+    struct stat st;
+    if (::stat(s.c_str(), &st) != 0) return false;
     std::string contents = read_file(src);
-    // Distinguish "empty file" from "failed to open" by checking existence
-    if (contents.empty() && !file_exists(src))
-        return false;
-    return write_file(dst, contents);
+    if (!write_file(dst, contents)) return false;
+    std::string d = null_terminated(dst);
+    struct timespec times[2] = {{0, UTIME_OMIT}, stat_mtime(st)};
+    return ::utimensat(AT_FDCWD, d.c_str(), times, 0) == 0;
 }
 
 bool rename_path(std::string_view old_path, std::string_view new_path)
@@ -326,12 +338,14 @@ bool is_directory(std::string_view path)
     return S_ISDIR(st.st_mode);
 }
 
-int64_t file_mtime(std::string_view path)
+int64_t file_mtime(std::string_view path, int32_t *nsec)
 {
     std::string p = null_terminated(path);
     struct stat st;
     if (::stat(p.c_str(), &st) != 0) return -1;
-    return static_cast<int64_t>(st.st_mtime);
+    struct timespec mt = stat_mtime(st);
+    if (nsec) *nsec = static_cast<int32_t>(mt.tv_nsec);
+    return static_cast<int64_t>(mt.tv_sec);
 }
 
 std::vector<DirEntry> list_dir(std::string_view path)

@@ -526,6 +526,7 @@ set(QUILT_TEST_SCENARIOS
     refresh_z_patches_dir_name
     refresh_diff_patch_order
     refresh_shadowed_per_file
+    refresh_backup_keeps_mtime
     fork_next_filename_shapes
     fork_target_exists
     fork_patches_prefix
@@ -8262,6 +8263,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_refresh_diff_patch_order()
     elseif(scenario STREQUAL "refresh_shadowed_per_file")
         qt_scenario_refresh_shadowed_per_file()
+    elseif(scenario STREQUAL "refresh_backup_keeps_mtime")
+        qt_scenario_refresh_backup_keeps_mtime()
     elseif(scenario STREQUAL "refresh_sorted_default")
         qt_scenario_refresh_sorted_default()
     elseif(scenario STREQUAL "diff_P_shadowed")
@@ -10945,6 +10948,24 @@ function(qt_scenario_refresh_shadowed_per_file)
     qt_assert_exists("${QT_WORK_DIR}/patches/p.patch~" "refresh --backup should back up a replaced patch")
     qt_assert_file_contains("${QT_WORK_DIR}/patches/p.patch" "+f3" "refresh -f should take the new f")
     qt_assert_file_contains("${QT_WORK_DIR}/patches/p.patch" "+h1" "h should come from the later patch's backup")
+endfunction()
+
+# Backups keep the file's modification time, like cp -p, so a later
+# patch's backup of a file gives the same timestamp the file had
+function(qt_scenario_refresh_backup_keeps_mtime)
+    qt_begin_test("refresh_backup_keeps_mtime")
+    qt_write_file("${QT_WORK_DIR}/f" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new p failed")
+    qt_quilt_ok(ARGS add f MESSAGE "add p failed")
+    qt_write_file("${QT_WORK_DIR}/f" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p failed")
+    # Back up f in a later second than it was written
+    execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep 1.1)
+    qt_quilt_ok(ARGS new q.patch MESSAGE "new q failed")
+    qt_quilt_ok(ARGS add f MESSAGE "add q failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh -f p.patch)
+    qt_assert_success("${rc}" "refresh -f failed")
+    qt_assert_equal("${out}" "Patch p.patch is unchanged\n" "the backup should keep the timestamp")
 endfunction()
 
 function(qt_scenario_refresh_sorted_default)

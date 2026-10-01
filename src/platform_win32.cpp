@@ -468,7 +468,7 @@ bool is_directory(std::string_view path)
     return (attr & FILE_ATTRIBUTE_DIRECTORY) != 0;
 }
 
-int64_t file_mtime(std::string_view path)
+int64_t file_mtime(std::string_view path, int32_t *nsec)
 {
     std::wstring wpath = utf8_to_wide(path);
     WIN32_FILE_ATTRIBUTE_DATA data;
@@ -477,7 +477,9 @@ int64_t file_mtime(std::string_view path)
     // FILETIME: 100-nanosecond intervals since 1601-01-01
     uint64_t ft = (static_cast<uint64_t>(data.ftLastWriteTime.dwHighDateTime) << 32)
                 | data.ftLastWriteTime.dwLowDateTime;
-    return static_cast<int64_t>((ft - 116444736000000000ULL) / 10000000ULL);
+    ft -= 116444736000000000ULL;
+    if (nsec) *nsec = static_cast<int32_t>(ft % 10000000ULL * 100);
+    return static_cast<int64_t>(ft / 10000000ULL);
 }
 
 std::vector<DirEntry> list_dir(std::string_view path)

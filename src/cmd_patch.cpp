@@ -432,16 +432,17 @@ static int parse_diff_opts_context(std::span<const std::string> opts)
 }
 
 // p_format: "ab" for a/b labels, "0" for bare filenames, "1" (default) for dir.orig/dir
-// Format a file modification time as "YYYY-MM-DD HH:MM:SS.000000000 +HHMM".
+// Format a file modification time as "YYYY-MM-DD HH:MM:SS.NNNNNNNNN +HHMM".
 static std::string format_file_timestamp(std::string_view path) {
-    int64_t mt = file_mtime(path);
+    int32_t nsec = 0;
+    int64_t mt = file_mtime(path, &nsec);
     if (mt <= 0) return "";
     DateTime dt = local_time(mt);
     int off_h = dt.utc_offset / 3600;
     int off_m = (std::abs(dt.utc_offset) % 3600) / 60;
-    return std::format("\t{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}.000000000 {:+03d}{:02d}",
+    return std::format("\t{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}.{:09d} {:+03d}{:02d}",
                        dt.year, dt.month, dt.day,
-                       dt.hour, dt.min, dt.sec, off_h, off_m);
+                       dt.hour, dt.min, dt.sec, nsec, off_h, off_m);
 }
 
 static std::string generate_path_diff(const QuiltState &q,

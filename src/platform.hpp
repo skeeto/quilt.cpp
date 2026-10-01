@@ -21,6 +21,7 @@ int run_cmd_tty(const std::vector<std::string> &argv);
 std::string read_file(std::string_view path);
 bool write_file(std::string_view path, std::string_view content);
 bool append_file(std::string_view path, std::string_view content);
+// Copies keep the source's modification time, like cp -p
 bool copy_file(std::string_view src, std::string_view dst);
 bool rename_path(std::string_view old_path, std::string_view new_path);
 bool delete_file(std::string_view path);
@@ -30,7 +31,8 @@ bool make_dir(std::string_view path);
 bool make_dirs(std::string_view path);
 bool file_exists(std::string_view path);
 bool is_directory(std::string_view path);
-int64_t file_mtime(std::string_view path);  // -1 on failure
+// Seconds since the epoch, -1 on failure; nsec gets the fraction, if wanted
+int64_t file_mtime(std::string_view path, int32_t *nsec = nullptr);
 
 struct DirEntry {
     std::string name;
