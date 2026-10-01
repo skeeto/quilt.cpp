@@ -303,7 +303,7 @@ int cmd_rename(QuiltState &q, int argc, char **argv) {
 }
 
 int cmd_import(QuiltState &q, int argc, char **argv) {
-    int strip_level = -1;
+    std::string strip_arg;  // -p value, recorded verbatim in the series
     std::string target_name;
     bool force = false;
     char dup_mode = 0;  // o=overwrite, a=append, n=next
@@ -313,33 +313,51 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
     constexpr std::string_view usage =
         "Usage: quilt import [-p num] [-R] [-P patch] [-f] [-d {o|a|n}] patchfile ...";
 
+    // Parse like getopt(1) with "P:d:fp:Rh": options may be grouped (-fR),
+    // take a value attached or as the next word (-p0, -p 0), and may follow
+    // patch files. "--" ends the options.
+    bool options_done = false;
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
-        if (arg == "-p" && i + 1 < argc) {
-            strip_level = checked_cast<int>(parse_int(argv[++i]));
-        } else if (arg.starts_with("-p") && std::ssize(arg) > 2) {
-            strip_level = checked_cast<int>(parse_int(arg.substr(2)));
-        } else if (arg == "-R") {
-            reversed = true;
-        } else if (arg == "-P" && i + 1 < argc) {
-            target_name = strip_patches_prefix(q, argv[++i]);
-        } else if (arg.starts_with("-P") && std::ssize(arg) > 2) {
-            target_name = strip_patches_prefix(q, arg.substr(2));
-        } else if (arg == "-f") {
-            force = true;
-        } else if ((arg == "-d" && i + 1 < argc) ||
-                   (arg.starts_with("-d") && std::ssize(arg) > 2)) {
-            std::string_view mode = arg == "-d" ? argv[++i] : arg.substr(2);
-            if (mode != "o" && mode != "a" && mode != "n") {
-                err_line(usage);
+        if (options_done || std::ssize(arg) < 2 || arg[0] != '-') {
+            patchfiles.emplace_back(arg);
+            continue;
+        }
+        if (arg == "--") {
+            options_done = true;
+            continue;
+        }
+        for (ptrdiff_t j = 1; j < std::ssize(arg); ++j) {
+            char opt = arg[checked_cast<size_t>(j)];
+            if (opt == 'f') {
+                force = true;
+            } else if (opt == 'R') {
+                reversed = true;
+            } else if (opt == 'p' || opt == 'P' || opt == 'd') {
+                std::string_view value;
+                if (j + 1 < std::ssize(arg)) {
+                    value = arg.substr(checked_cast<size_t>(j + 1));
+                } else if (i + 1 < argc) {
+                    value = argv[++i];
+                } else {
+                    err_line(usage);
+                    return 1;
+                }
+                if (opt == 'p') {
+                    strip_arg = value;
+                } else if (opt == 'P') {
+                    target_name = strip_patches_prefix(q, value);
+                } else if (value == "o" || value == "a" || value == "n") {
+                    dup_mode = value[0];
+                } else {
+                    err_line(usage);
+                    return 1;
+                }
+                break;
+            } else {
+                err("Unrecognized option: "); err_line(arg);
                 return 1;
             }
-            dup_mode = mode[0];
-        } else if (arg[0] == '-') {
-            err("Unrecognized option: "); err_line(arg);
-            return 1;
-        } else {
-            patchfiles.emplace_back(arg);
         }
     }
 
@@ -366,14 +384,20 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
         }
     }
 
-    // Like the original quilt, record -p whenever it was given (even -p1),
-    // and insert every patch in front of the same one, keeping their order.
+    // Like the original quilt, record -p as given (even -p1, or a value that
+    // is not a number), and insert every patch in front of the same one,
+    // keeping their order.
     std::string patch_args;
-    if (strip_level >= 0) patch_args = "-p" + std::to_string(strip_level);
+    if (!strip_arg.empty()) patch_args = "-p" + strip_arg;
     if (reversed) patch_args += patch_args.empty() ? "-R" : " -R";
     std::string before = q.patch_after_top();
 
     for (const auto &patchfile : patchfiles) {
+        if (!file_exists(patchfile)) {
+            err_line("Patch " + patchfile + " does not exist");
+            return 1;
+        }
+
         // Determine target name
         std::string name;
         if (!target_name.empty()) {

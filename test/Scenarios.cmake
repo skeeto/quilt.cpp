@@ -39,6 +39,9 @@ set(QUILT_TEST_SCENARIOS
     import_strip_level_attached
     import_attached_P_d
     import_dup_invalid_mode
+    import_grouped_options
+    import_end_of_options
+    import_strip_level_as_given
     import_reversed
     import_reversed_strip
     import_dup_keep_old
@@ -1303,6 +1306,44 @@ function(qt_scenario_import_dup_invalid_mode)
         qt_assert_contains("${combined}" "Usage: quilt import" "import ${args} should print usage")
         qt_assert_not_exists("${QT_WORK_DIR}/patches/x.diff" "import ${args} should not store the patch")
     endforeach()
+endfunction()
+
+function(qt_scenario_import_grouped_options)
+    qt_begin_test("import_grouped_options")
+    qt_write_file("${QT_WORK_DIR}/x.diff" "--- f.txt\n+++ f.txt\n@@ -1 +1 @@\n-x\n+y\n")
+    qt_write_file("${QT_WORK_DIR}/y.diff" "--- a/g.txt\n+++ b/g.txt\n@@ -1 +1 @@\n-x\n+y\n")
+    # getopt lets options share a word, the last one taking its value attached
+    qt_quilt_ok(ARGS import -Rp0 x.diff MESSAGE "import -Rp0 failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "x.diff -p0 -R" "-Rp0 should set both options")
+    qt_quilt_ok(ARGS import -fRPz.diff y.diff MESSAGE "import -fRPz.diff failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "z.diff -R\nx.diff -p0 -R" "-fRPz.diff should set all three options")
+    qt_assert_exists("${QT_WORK_DIR}/patches/z.diff" "-fRPz.diff should store the patch as z.diff")
+endfunction()
+
+function(qt_scenario_import_end_of_options)
+    qt_begin_test("import_end_of_options")
+    qt_write_file("${QT_WORK_DIR}/x.diff" "--- f.txt\n+++ f.txt\n@@ -1 +1 @@\n-x\n+y\n")
+    qt_quilt_ok(ARGS import -p0 -- x.diff MESSAGE "import -p0 -- x.diff failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "x.diff -p0" "import -- should import the patch")
+    # After "--" a word that looks like an option names a patch file
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS import -- -p1)
+    qt_assert_failure("${rc}" "import -- -p1 should look for a patch file named -p1")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Patch -p1 does not exist" "import -- -p1 should report the missing file")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "x.diff -p0" "import -- -p1 should leave the series alone")
+endfunction()
+
+function(qt_scenario_import_strip_level_as_given)
+    qt_begin_test("import_strip_level_as_given")
+    qt_write_file("${QT_WORK_DIR}/a.diff" "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+y\n")
+    qt_write_file("${QT_WORK_DIR}/b.diff" "--- a/g.txt\n+++ b/g.txt\n@@ -1 +1 @@\n-x\n+y\n")
+    qt_write_file("${QT_WORK_DIR}/c.diff" "--- a/h.txt\n+++ b/h.txt\n@@ -1 +1 @@\n-x\n+y\n")
+    # The series records -p as given, even the default level
+    qt_quilt_ok(ARGS import -p 1 a.diff b.diff MESSAGE "import -p 1 failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "a.diff -p1\nb.diff -p1" "series should record an explicit -p1")
+    # ... and without checking it is a number
+    qt_quilt_ok(ARGS import -pab c.diff MESSAGE "import -pab failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "c.diff -pab\na.diff -p1\nb.diff -p1" "series should record -pab verbatim")
 endfunction()
 
 function(qt_scenario_import_reversed)
@@ -6903,6 +6944,12 @@ function(qt_run_named_scenario scenario)
         qt_scenario_import_attached_P_d()
     elseif(scenario STREQUAL "import_dup_invalid_mode")
         qt_scenario_import_dup_invalid_mode()
+    elseif(scenario STREQUAL "import_grouped_options")
+        qt_scenario_import_grouped_options()
+    elseif(scenario STREQUAL "import_end_of_options")
+        qt_scenario_import_end_of_options()
+    elseif(scenario STREQUAL "import_strip_level_as_given")
+        qt_scenario_import_strip_level_as_given()
     elseif(scenario STREQUAL "import_reversed")
         qt_scenario_import_reversed()
     elseif(scenario STREQUAL "import_reversed_strip")
