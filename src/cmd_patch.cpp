@@ -2441,6 +2441,7 @@ int cmd_revert(QuiltState &q, int argc, char **argv) {
         memfs[name] = backup_content;
         PatchOptions opts;
         opts.strip_level = strip_level;
+        opts.reverse = q.patch_reversed.contains(patch);
         opts.quiet = true;
         opts.fs = &memfs;
         builtin_patch(patch_text, opts);

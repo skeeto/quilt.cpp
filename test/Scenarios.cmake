@@ -508,6 +508,7 @@ set(QUILT_TEST_SCENARIOS
     revert_unnormalized_path
     revert_patch_resolution
     revert_no_series
+    revert_reversed_patch
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -8299,6 +8300,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_revert_patch_resolution()
     elseif(scenario STREQUAL "revert_no_series")
         qt_scenario_revert_no_series()
+    elseif(scenario STREQUAL "revert_reversed_patch")
+        qt_scenario_revert_reversed_patch()
     elseif(scenario STREQUAL "refresh_z_strip_migration")
         qt_scenario_refresh_z_strip_migration()
     elseif(scenario STREQUAL "annotate_P_missing_arg")
@@ -14793,4 +14796,33 @@ function(qt_scenario_revert_no_series)
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS revert -P x.patch a.txt)
     qt_assert_failure("${rc}" "revert -P with an empty series should fail")
     qt_assert_equal("${err}" "No patches in series\n" "empty series should be reported")
+endfunction()
+
+# revert applies a patch marked -R in the series in reverse when computing
+# the post-patch content, as push does
+function(qt_scenario_revert_reversed_patch)
+    qt_begin_test("revert_reversed_patch")
+    qt_write_file("${QT_TEST_BASE}/r.diff" [=[--- a/a.txt
++++ b/a.txt
+@@ -1 +1 @@
+-a2
++a1
+]=])
+    qt_write_file("${QT_WORK_DIR}/a.txt" "a1\n")
+    qt_quilt_ok(ARGS import -R "${QT_TEST_BASE}/r.diff" MESSAGE "import -R failed")
+    qt_quilt_ok(ARGS push MESSAGE "push of reversed patch failed")
+    qt_assert_file_text("${QT_WORK_DIR}/a.txt" "a2" "push should apply the patch in reverse")
+
+    qt_write_file("${QT_WORK_DIR}/a.txt" "dirty\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS revert a.txt)
+    qt_assert_success("${rc}" "revert in a reversed patch failed")
+    qt_assert_equal("${out}" "Changes to a.txt in patch r.diff reverted\n"
+                    "revert should report the change")
+    qt_assert_file_text("${QT_WORK_DIR}/a.txt" "a2"
+                        "revert should restore the reversed patch's result")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS revert a.txt)
+    qt_assert_success("${rc}" "second revert failed")
+    qt_assert_equal("${out}" "File a.txt is unchanged\n"
+                    "a reverted file should be unchanged")
 endfunction()
