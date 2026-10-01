@@ -200,7 +200,7 @@ Shows differences without writing anything. This is the read-only counterpart to
 
 **Critical distinction**: `quilt diff` (without `-z`) shows the **entire patch content** (backup vs. current file, identical to what `refresh` would write). `quilt diff -z` shows only **uncommitted changes** since the last refresh — the delta between the last-refreshed state and current working state. Think of `quilt diff` as `git diff HEAD` and `quilt diff -z` as `git diff`.
 
-**Key flags**: `--combine patch` produces a combined diff across a range of patches (`-` means first applied patch). `--snapshot` diffs against a previously taken snapshot. `-R` creates a reverse diff. `--diff=utility` uses an alternate diff program. `--color` enables syntax coloring. `--diff-algorithm` selects the diff algorithm (see below; **quilt.cpp extension**).
+**Key flags**: `--combine patch` produces a combined diff across a range of patches (`-` means first applied patch). `--snapshot` diffs against a previously taken snapshot. `-R` creates a reverse diff. `--diff=utility` runs another program on each file that changed, with just the old and new file as arguments (an empty or missing one as `/dev/null`), and shows its output as is, without `Index:` lines. `--color` enables syntax coloring. `--diff-algorithm` selects the diff algorithm (see below; **quilt.cpp extension**).
 
 ```bash
 quilt diff                     # Full diff of topmost patch
@@ -431,7 +431,7 @@ Original quilt delegates all patching to **GNU `patch`** and all diff generation
 
 **During `push`**: Original quilt invokes `patch` approximately as: `patch -d <source-root> [--backup --prefix=.pc/<patchname>/] [--quoting-style=literal] [-p<N>] [-R] [--fuzz=<N>] [<QUILT_PATCH_OPTS>] < <patch-file>`. Quilt.cpp uses its built-in patch engine instead, but honors the same options via `QUILT_PATCH_OPTS`.
 
-**During `refresh` and `diff`**: Original quilt invokes `diff` for each file, comparing the backup in `.pc/<patchname>/<file>` with the current source file. Quilt.cpp uses its built-in diff engine by default. An external diff utility can be selected with `--diff=utility`. Additional options come from `QUILT_DIFF_OPTS` (e.g., `-p` shows C function names in hunk headers when using an external diff).
+**During `refresh` and `diff`**: Original quilt invokes `diff` for each file, comparing the backup in `.pc/<patchname>/<file>` with the current source file. Quilt.cpp uses its built-in diff engine by default. `quilt diff --diff=utility` instead runs the given program on the two files, as the original quilt does, passing it no other options, not even `QUILT_DIFF_OPTS`.
 
 ### Diff algorithm selection (quilt.cpp extension)
 

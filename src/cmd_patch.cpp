@@ -293,115 +293,6 @@ int cmd_edit(QuiltState &q, int argc, char **argv) {
     return run_cmd_tty(cmd_argv);
 }
 
-// Convert unified diff output to context diff format.  This allows
-// quilt to produce -c/-C output even when the external diff command
-// (e.g. busybox) only supports unified format.
-static std::string unified_to_context(std::string_view unified)
-{
-    auto lines = split_lines(unified);
-    std::string result;
-    ptrdiff_t n = std::ssize(lines);
-    ptrdiff_t i = 0;
-
-    // File headers: unified --- becomes context ***, unified +++ becomes context ---
-    while (i < n && !lines[checked_cast<size_t>(i)].starts_with("--- ")) ++i;
-    if (i < n) { result += "*** " + lines[checked_cast<size_t>(i)].substr(4) + "\n"; ++i; }
-    if (i < n && lines[checked_cast<size_t>(i)].starts_with("+++ ")) {
-        result += "--- " + lines[checked_cast<size_t>(i)].substr(4) + "\n"; ++i;
-    }
-
-    while (i < n) {
-        if (!lines[checked_cast<size_t>(i)].starts_with("@@ ")) { ++i; continue; }
-
-        // Parse @@ -os[,oc] +ns[,nc] @@
-        int os = 0, oc = 1, ns = 0, nc = 1;
-        {
-            std::string_view hdr = lines[checked_cast<size_t>(i)];
-            ptrdiff_t at1 = str_find(hdr, '-', 3);
-            if (at1 >= 0) {
-                ptrdiff_t p = at1 + 1;
-                ptrdiff_t c = str_find(hdr, ',', p);
-                ptrdiff_t pp = str_find(hdr, '+', p);
-                if (pp >= 0) {
-                    if (c >= 0 && c < pp) {
-                        os = checked_cast<int>(parse_int(hdr.substr(checked_cast<size_t>(p), checked_cast<size_t>(c - p))));
-                        oc = checked_cast<int>(parse_int(hdr.substr(checked_cast<size_t>(c + 1), checked_cast<size_t>(pp - c - 2))));
-                    } else {
-                        os = checked_cast<int>(parse_int(hdr.substr(checked_cast<size_t>(p), checked_cast<size_t>(pp - p - 1))));
-                    }
-                    p = pp + 1;
-                    c = str_find(hdr, ',', p);
-                    ptrdiff_t end = str_find(hdr, ' ', p);
-                    if (end < 0) end = std::ssize(hdr);
-                    if (c >= 0 && c < end) {
-                        ns = checked_cast<int>(parse_int(hdr.substr(checked_cast<size_t>(p), checked_cast<size_t>(c - p))));
-                        nc = checked_cast<int>(parse_int(hdr.substr(checked_cast<size_t>(c + 1), checked_cast<size_t>(end - c - 1))));
-                    } else {
-                        ns = checked_cast<int>(parse_int(hdr.substr(checked_cast<size_t>(p), checked_cast<size_t>(end - p))));
-                    }
-                }
-            }
-        }
-        ++i;
-
-        // Collect unified hunk body lines with their types
-        struct UL { char type; std::string text; };
-        std::vector<UL> body;
-        while (i < n && !lines[checked_cast<size_t>(i)].starts_with("@@ ")) {
-            std::string_view ln = lines[checked_cast<size_t>(i)];
-            body.push_back({ln.empty() ? ' ' : ln[0],
-                            ln.empty() ? std::string{} : std::string(ln.substr(1))});
-            ++i;
-        }
-
-        // Build old-side and new-side lines with context-diff prefixes.
-        // Adjacent -/+ runs form "change" blocks and get '!' prefix.
-        std::vector<std::pair<char, std::string>> old_side, new_side;
-        for (ptrdiff_t k = 0; k < std::ssize(body); ) {
-            if (body[checked_cast<size_t>(k)].type == ' ') {
-                old_side.push_back({' ', body[checked_cast<size_t>(k)].text});
-                new_side.push_back({' ', body[checked_cast<size_t>(k)].text});
-                ++k;
-            } else if (body[checked_cast<size_t>(k)].type == '-') {
-                ptrdiff_t ds = k;
-                while (k < std::ssize(body) && body[checked_cast<size_t>(k)].type == '-') ++k;
-                ptrdiff_t as = k;
-                while (k < std::ssize(body) && body[checked_cast<size_t>(k)].type == '+') ++k;
-                bool change = (as > ds && k > as);
-                for (ptrdiff_t m = ds; m < as; ++m)
-                    old_side.push_back({change ? '!' : '-', body[checked_cast<size_t>(m)].text});
-                for (ptrdiff_t m = as; m < k; ++m)
-                    new_side.push_back({change ? '!' : '+', body[checked_cast<size_t>(m)].text});
-            } else if (body[checked_cast<size_t>(k)].type == '+') {
-                new_side.push_back({'+', body[checked_cast<size_t>(k)].text});
-                ++k;
-            } else {
-                ++k;
-            }
-        }
-
-        int oe = oc == 0 ? os : os + oc - 1;
-        int ne = nc == 0 ? ns : ns + nc - 1;
-
-        result += "***************\n";
-        result += std::format("*** {},{} ****\n", os, oe);
-        bool has_old = false;
-        for (auto &[p, t] : old_side) if (p != ' ') { has_old = true; break; }
-        if (has_old)
-            for (auto &[p, t] : old_side)
-                result += std::string(1, p) + " " + t + "\n";
-
-        result += std::format("--- {},{} ----\n", ns, ne);
-        bool has_new = false;
-        for (auto &[p, t] : new_side) if (p != ' ') { has_new = true; break; }
-        if (has_new)
-            for (auto &[p, t] : new_side)
-                result += std::string(1, p) + " " + t + "\n";
-    }
-
-    return result;
-}
-
 static constexpr std::string_view SNAPSHOT_PATCH = ".snap";
 
 static bool is_placeholder_copy(std::string_view path)
@@ -453,7 +344,6 @@ static std::string generate_path_diff(const QuiltState &q,
                                       bool new_placeholder,
                                       std::string_view p_format = "1",
                                       bool reverse = false,
-                                      std::span<const std::string> diff_cmd_base = {},
                                       int context_lines = 3,
                                       DiffFormat diff_format = DiffFormat::unified,
                                       bool no_timestamps = false,
@@ -514,47 +404,22 @@ static std::string generate_path_diff(const QuiltState &q,
             new_label += format_file_timestamp(new_path);
     }
 
-    // Use built-in diff when no external diff utility is specified
-    if (diff_cmd_base.empty()) {
-        int ctx = context_lines;
-        // QUILT_DIFF_OPTS may override context lines
-        auto extra_diff_opts = shell_split(get_env("QUILT_DIFF_OPTS"));
-        int opts_ctx = parse_diff_opts_context(extra_diff_opts);
-        if (opts_ctx >= 0) ctx = opts_ctx;
-
-        DiffResult result = builtin_diff(old_arg, new_arg, ctx,
-                                          old_label, new_label, diff_format,
-                                          diff_algorithm);
-        return result.output;
-    }
-
-    // External diff utility path
-    std::vector<std::string> cmd_argv(diff_cmd_base.begin(), diff_cmd_base.end());
+    // QUILT_DIFF_OPTS may override context lines
+    int ctx = context_lines;
     auto extra_diff_opts = shell_split(get_env("QUILT_DIFF_OPTS"));
-    for (const auto &opt : extra_diff_opts) {
-        cmd_argv.push_back(opt);
-    }
+    int opts_ctx = parse_diff_opts_context(extra_diff_opts);
+    if (opts_ctx >= 0) ctx = opts_ctx;
 
-    cmd_argv.push_back("--label");
-    cmd_argv.push_back(old_label);
-    cmd_argv.push_back("--label");
-    cmd_argv.push_back(new_label);
-    cmd_argv.push_back(old_arg);
-    cmd_argv.push_back(new_arg);
-
-    ProcessResult result = run_cmd(cmd_argv);
-    if (result.exit_code == 2) {
-        return {};
-    }
-
-    return result.out;
+    DiffResult result = builtin_diff(old_arg, new_arg, ctx,
+                                      old_label, new_label, diff_format,
+                                      diff_algorithm);
+    return result.output;
 }
 
 static std::string generate_file_diff(const QuiltState &q, std::string_view patch,
                                       std::string_view file,
                                       std::string_view p_format = "1",
                                       bool reverse = false,
-                                      std::span<const std::string> diff_cmd_base = {},
                                       int context_lines = 3,
                                       DiffFormat diff_format = DiffFormat::unified,
                                       bool no_timestamps = false,
@@ -562,7 +427,7 @@ static std::string generate_file_diff(const QuiltState &q, std::string_view patc
     std::string backup_path = path_join(pc_patch_dir(q, patch), file);
     std::string working_path = path_join(q.work_dir, file);
     return generate_path_diff(q, file, backup_path, true, working_path, false,
-                              p_format, reverse, diff_cmd_base,
+                              p_format, reverse,
                               context_lines, diff_format, no_timestamps,
                               diff_algorithm);
 }
@@ -1357,12 +1222,12 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
             std::string next_backup = path_join(pc_patch_dir(q, next), file);
             diff_out = generate_path_diff(q, file,
                 this_backup, true, next_backup, true,
-                p_format, false, {}, ctx_lines, diff_format, no_timestamps,
+                p_format, false, ctx_lines, diff_format, no_timestamps,
                 diff_algorithm);
             files_were_shadowed = true;
         } else {
             diff_out = generate_file_diff(q, patch, file, p_format,
-                                          false, {}, ctx_lines,
+                                          false, ctx_lines,
                                           diff_format, no_timestamps,
                                           diff_algorithm);
         }
@@ -1670,34 +1535,31 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
         ctx_lines = checked_cast<int>(parse_int(context_num));
     }
 
-    // Build diff command base for external diff utility (empty = use builtin)
-    bool convert_to_context = false;
-    std::vector<std::string> diff_cmd_base;
-    if (!diff_utility.empty()) {
-        auto parts = split_on_whitespace(diff_utility);
-        for (auto &p : parts) diff_cmd_base.push_back(std::move(p));
-        // External diff: always request unified, convert to context in-process
-        convert_to_context = (diff_type == "c" || diff_type == "C");
-        if (diff_type == "U" || diff_type == "C") {
-            diff_cmd_base.push_back("-U");
-            diff_cmd_base.push_back(context_num);
-        } else {
-            diff_cmd_base.push_back("-u");
+    // Like upstream's do_diff, a --diff utility gets just the two files,
+    // as upstream names them, with an empty or missing one as /dev/null.
+    // It runs only for files that differ, its output goes straight
+    // through, without an Index line, and its exit status is ignored.
+    auto run_diff_utility = [&](std::string old_f, std::string new_f) {
+        if (reverse) std::swap(old_f, new_f);
+        std::string base = q.work_dir + "/";
+        std::string old_data, new_data;
+        for (auto [path, data] : {std::pair{&old_f, &old_data}, std::pair{&new_f, &new_data}}) {
+            if (path->starts_with(base)) path->erase(0, base.size());
+            if (file_exists(*path)) *data = read_file(*path);
+            if (data->empty()) *path = "/dev/null";
         }
-    }
-
-    auto emit_diff = [&](std::string_view d) {
-        if (convert_to_context)
-            out(unified_to_context(d));
-        else
-            out(d);
+        if (old_f == new_f || old_data == new_data) return;
+        std::vector<std::string> cmd;
+        for (auto &part : split_on_whitespace(diff_utility)) cmd.push_back(std::move(part));
+        cmd.push_back(old_f);
+        cmd.push_back(new_f);
+        run_cmd_tty(cmd);
     };
 
-    // A changed binary file is reported as "Binary files differ". The
-    // original quilt aborts the whole command when diff fails, but with an
-    // external --diff utility it ignores the utility's exit status.
+    // A changed binary file is reported as "Binary files differ", and like
+    // the original quilt, a failed diff aborts the whole command
     auto abort_on_binary = [&](std::string_view diff_out, std::string_view file) {
-        if (diff_cmd_base.empty() && diff_out.starts_with("Binary files ")) {
+        if (diff_out.starts_with("Binary files ")) {
             err("Diff failed on file '"); err(file); err_line("', aborting");
             return true;
         }
@@ -1826,6 +1688,10 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                 new_src = path_join(pc_patch_dir(q, shadowing_patch), file);
             }
             if (!file_exists(new_src) && !file_exists(tmp_file)) continue;
+            if (!diff_utility.empty()) {
+                run_diff_utility(tmp_file, new_src);
+                continue;
+            }
 
             std::string old_label, new_label;
             if (p_format == "ab") {
@@ -1857,39 +1723,21 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
             }
 
             std::string diff_out;
-            if (diff_cmd_base.empty()) {
-                std::string old_data = old_f == "/dev/null" ? std::string() : read_file(old_f);
-                std::string new_data = new_f == "/dev/null" ? std::string() : read_file(new_f);
-                if (old_data != new_data &&
-                    (is_binary_data(old_data) || is_binary_data(new_data))) {
-                    diff_out = "Binary files differ\n";
-                } else {
-                    // Use built-in diff
-                    int ctx = ctx_lines;
-                    auto extra_diff_opts = shell_split(get_env("QUILT_DIFF_OPTS"));
-                    int opts_ctx = parse_diff_opts_context(extra_diff_opts);
-                    if (opts_ctx >= 0) ctx = opts_ctx;
-
-                    DiffResult dr = builtin_diff(old_f, new_f, ctx,
-                                                 old_label, new_label, diff_format,
-                                                 diff_algorithm);
-                    diff_out = std::move(dr.output);
-                }
+            std::string old_data = old_f == "/dev/null" ? std::string() : read_file(old_f);
+            std::string new_data = new_f == "/dev/null" ? std::string() : read_file(new_f);
+            if (old_data != new_data &&
+                (is_binary_data(old_data) || is_binary_data(new_data))) {
+                diff_out = "Binary files differ\n";
             } else {
-                std::vector<std::string> diff_cmd = diff_cmd_base;
+                int ctx = ctx_lines;
                 auto extra_diff_opts = shell_split(get_env("QUILT_DIFF_OPTS"));
-                for (const auto &opt : extra_diff_opts) diff_cmd.push_back(opt);
-                diff_cmd.push_back("--label");
-                diff_cmd.push_back(old_label);
-                diff_cmd.push_back("--label");
-                diff_cmd.push_back(new_label);
-                diff_cmd.push_back(old_f);
-                diff_cmd.push_back(new_f);
+                int opts_ctx = parse_diff_opts_context(extra_diff_opts);
+                if (opts_ctx >= 0) ctx = opts_ctx;
 
-                ProcessResult result = run_cmd(diff_cmd);
-                if (result.exit_code == 1) {
-                    diff_out = std::move(result.out);
-                }
+                DiffResult dr = builtin_diff(old_f, new_f, ctx,
+                                             old_label, new_label, diff_format,
+                                             diff_algorithm);
+                diff_out = std::move(dr.output);
             }
             if (abort_on_binary(diff_out, file)) {
                 delete_dir_recursive(tmp_dir);
@@ -1900,7 +1748,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                     out("Index: " + (p_format == "0" ? file : p_format == "ab" ? "b/" + file : work_base + "/" + file) + "\n");
                     out("===================================================================\n");
                 }
-                emit_diff(diff_out);
+                out(diff_out);
             }
         }
 
@@ -1930,9 +1778,17 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                 new_placeholder = true;
             }
 
+            if (!diff_utility.empty()) {
+
+                run_diff_utility(old_path, new_path);
+
+                continue;
+
+            }
+
             std::string diff_out = generate_path_diff(
                 q, file, old_path, old_placeholder, new_path, new_placeholder,
-                p_format, reverse, diff_cmd_base, ctx_lines, diff_format,
+                p_format, reverse, ctx_lines, diff_format,
                 no_timestamps, diff_algorithm);
             if (abort_on_binary(diff_out, file)) return 1;
             if (!diff_out.empty()) {
@@ -1940,7 +1796,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                     out("Index: " + (p_format == "0" ? file : p_format == "ab" ? "b/" + file : work_base + "/" + file) + "\n");
                     out("===================================================================\n");
                 }
-                emit_diff(diff_out);
+                out(diff_out);
             }
         }
     } else if (!combine_start.empty()) {
@@ -1973,9 +1829,17 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                 new_placeholder = true;
             }
 
+            if (!diff_utility.empty()) {
+
+                run_diff_utility(old_path, new_path);
+
+                continue;
+
+            }
+
             std::string diff_out = generate_path_diff(
                 q, file, old_path, true, new_path, new_placeholder,
-                p_format, reverse, diff_cmd_base, ctx_lines, diff_format,
+                p_format, reverse, ctx_lines, diff_format,
                 no_timestamps, diff_algorithm);
             if (abort_on_binary(diff_out, file)) return 1;
             if (!diff_out.empty()) {
@@ -1983,19 +1847,16 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                     out("Index: " + (p_format == "0" ? file : p_format == "ab" ? "b/" + file : work_base + "/" + file) + "\n");
                     out("===================================================================\n");
                 }
-                emit_diff(diff_out);
+                out(diff_out);
             }
         }
     } else {
-        // Warn if more recent patches modify files in this patch
-        bool warned_shadowing = false;
+        // Like upstream, warn after the diffs if more recent patches
+        // modify files in this patch
+        bool files_were_shadowed = false;
         for (const auto &file : tracked) {
             std::string shadowing = next_patch_for_file(q, patch, file);
-            if (!shadowing.empty() && !warned_shadowing) {
-                err("Warning: more recent patches modify files in patch ");
-                err_line(patch_path_display(q, patch));
-                warned_shadowing = true;
-            }
+            if (!shadowing.empty()) files_were_shadowed = true;
 
             std::string old_path = path_join(pc_patch_dir(q, patch), file);
             std::string new_path = path_join(q.work_dir, file);
@@ -2007,9 +1868,17 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                 new_placeholder = true;
             }
 
+            if (!diff_utility.empty()) {
+
+                run_diff_utility(old_path, new_path);
+
+                continue;
+
+            }
+
             std::string diff_out = generate_path_diff(
                 q, file, old_path, true, new_path, new_placeholder,
-                p_format, reverse, diff_cmd_base, ctx_lines, diff_format,
+                p_format, reverse, ctx_lines, diff_format,
                 no_timestamps, diff_algorithm);
             if (abort_on_binary(diff_out, file)) return 1;
             if (!diff_out.empty()) {
@@ -2017,8 +1886,12 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
                     out("Index: " + (p_format == "0" ? file : p_format == "ab" ? "b/" + file : work_base + "/" + file) + "\n");
                     out("===================================================================\n");
                 }
-                emit_diff(diff_out);
+                out(diff_out);
             }
+        }
+        if (files_were_shadowed) {
+            err("Warning: more recent patches modify files in patch ");
+            err_line(patch_path_display(q, patch));
         }
     }
 

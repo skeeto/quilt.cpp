@@ -529,6 +529,7 @@ set(QUILT_TEST_SCENARIOS
     refresh_backup_keeps_mtime
     files_combine_dash_patch_no_applied
     files_per_patch_listing
+    diff_utility_files
     fork_next_filename_shapes
     fork_target_exists
     fork_patches_prefix
@@ -673,12 +674,8 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     unknown_option_rejected
     color_option_no_escapes
     fold_empty_stdin
-    diff_external_context_format
-    diff_external_context_multiline
-    diff_external_with_C
     diff_quilt_diff_opts_combined
     diff_quilt_diff_opts_separate
-    diff_external_context_no_newline
     graph_lines_with_num
     graph_lines_nan
     graph_edge_labels_bad
@@ -4524,7 +4521,7 @@ function(qt_scenario_builtin_diff_vs_system_diff)
     # Builtin diff (default)
     qt_quilt_ok(OUTPUT builtin_out ERROR builtin_err ARGS diff --no-index MESSAGE "builtin diff failed")
     # External diff
-    qt_quilt_ok(OUTPUT external_out ERROR external_err ARGS diff --no-index --diff=diff MESSAGE "external diff failed")
+    qt_quilt_ok(OUTPUT external_out ERROR external_err ARGS diff --no-index "--diff=diff -u" MESSAGE "external diff failed")
 
     # Both should contain the same change markers
     qt_assert_contains("${builtin_out}" "-beta" "builtin should show -beta")
@@ -6115,36 +6112,6 @@ function(qt_scenario_refresh_C_combined)
     qt_assert_not_contains("${patch_text}" "! 1" "should not have line 1 with -C1")
 endfunction()
 
-function(qt_scenario_diff_external_context_multiline)
-    qt_begin_test("diff_external_context_multiline")
-    # 3-line file so unified diff produces @@ -1,3 +1,4 @@ (comma in counts)
-    qt_write_file("${QT_WORK_DIR}/f.txt" "line1\nline2\nline3\n")
-    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
-    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
-    # Change line2 and add new line: exercises hunk-count parsing and context/insertion paths
-    qt_write_file("${QT_WORK_DIR}/f.txt" "line1\nchanged\nline3\nextra\n")
-    # --diff=diff forces external unified diff; -c requests context conversion
-    qt_quilt_ok(OUTPUT diff_out ERROR diff_err ARGS diff "--diff=diff" -c MESSAGE "diff --diff=diff -c multiline failed")
-    qt_assert_contains("${diff_out}" "***" "context diff should have *** markers")
-    qt_assert_contains("${diff_out}" "line1" "context lines should be preserved")
-    qt_assert_contains("${diff_out}" "line3" "context lines should be preserved")
-    qt_assert_contains("${diff_out}" "! changed" "changed line should use ! prefix")
-    qt_assert_contains("${diff_out}" "+ extra" "added-only line should use + prefix")
-endfunction()
-
-function(qt_scenario_diff_external_with_C)
-    qt_begin_test("diff_external_with_C")
-    qt_write_file("${QT_WORK_DIR}/f.txt" "line1\nline2\nline3\n")
-    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
-    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
-    qt_write_file("${QT_WORK_DIR}/f.txt" "line1\nchanged\nline3\n")
-    # --diff=diff -C 3 exercises the diff_type=="C" branch that pushes -U + count
-    # to the external diff command, then converts the unified output to context.
-    qt_quilt_ok(OUTPUT diff_out ERROR diff_err ARGS diff "--diff=diff" -C 3 MESSAGE "diff --diff=diff -C 3 failed")
-    qt_assert_contains("${diff_out}" "***" "context diff with -C should have *** markers")
-    qt_assert_contains("${diff_out}" "! changed" "context diff with -C should show changed line")
-endfunction()
-
 function(qt_scenario_refresh_no_patches)
     qt_begin_test("refresh_no_patches")
     qt_write_file("${QT_WORK_DIR}/patches/series" "placeholder.patch\n")
@@ -6636,22 +6603,6 @@ function(qt_scenario_previous_unknown_target)
     qt_assert_failure("${rc}" "previous with unknown patch should fail")
     qt_combine_output(combined "${out}" "${err}")
     qt_assert_contains("${combined}" "not in series" "previous unknown should say not in series")
-endfunction()
-
-function(qt_scenario_diff_external_context_format)
-    qt_begin_test("diff_external_context_format")
-    qt_write_file("${QT_WORK_DIR}/f.txt" "old\n")
-    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
-    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
-    qt_write_file("${QT_WORK_DIR}/f.txt" "new\n")
-    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
-    # --diff=diff forces external diff; -c requests context format.
-    # quilt.cpp uses unified_to_context() to convert the unified output.
-    qt_quilt_ok(OUTPUT diff_out ERROR diff_err ARGS diff "--diff=diff" -c MESSAGE "diff --diff=diff -c failed")
-    qt_assert_contains("${diff_out}" "***" "external context diff should have *** headers")
-    qt_assert_not_contains("${diff_out}" "@@" "external context diff should not have @@ markers")
-    qt_assert_contains("${diff_out}" "! old" "context diff should show changed old line")
-    qt_assert_contains("${diff_out}" "! new" "context diff should show changed new line")
 endfunction()
 
 function(qt_scenario_refresh_diffstat_delete_file)
@@ -7812,8 +7763,6 @@ function(qt_run_named_scenario scenario)
         qt_scenario_builtin_patch_merge_diff3()
     elseif(scenario STREQUAL "fold_reverse_no_newline")
         qt_scenario_fold_reverse_no_newline()
-    elseif(scenario STREQUAL "diff_external_context_format")
-        qt_scenario_diff_external_context_format()
     elseif(scenario STREQUAL "delete_applied")
         qt_scenario_delete_applied()
     elseif(scenario STREQUAL "new_no_name")
@@ -7924,10 +7873,6 @@ function(qt_run_named_scenario scenario)
         qt_scenario_refresh_U_combined()
     elseif(scenario STREQUAL "refresh_C_combined")
         qt_scenario_refresh_C_combined()
-    elseif(scenario STREQUAL "diff_external_context_multiline")
-        qt_scenario_diff_external_context_multiline()
-    elseif(scenario STREQUAL "diff_external_with_C")
-        qt_scenario_diff_external_with_C()
     elseif(scenario STREQUAL "refresh_no_patches")
         qt_scenario_refresh_no_patches()
     elseif(scenario STREQUAL "revert_no_patches")
@@ -8088,8 +8033,6 @@ function(qt_run_named_scenario scenario)
         qt_scenario_builtin_patch_empty_file_content()
     elseif(scenario STREQUAL "builtin_patch_stray_minus")
         qt_scenario_builtin_patch_stray_minus()
-    elseif(scenario STREQUAL "diff_external_context_no_newline")
-        qt_scenario_diff_external_context_no_newline()
     elseif(scenario STREQUAL "diff_external_quilt_diff_opts")
         qt_scenario_diff_external_quilt_diff_opts()
     elseif(scenario STREQUAL "revert_subdir")
@@ -8268,6 +8211,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_refresh_shadowed_per_file()
     elseif(scenario STREQUAL "refresh_backup_keeps_mtime")
         qt_scenario_refresh_backup_keeps_mtime()
+    elseif(scenario STREQUAL "diff_utility_files")
+        qt_scenario_diff_utility_files()
     elseif(scenario STREQUAL "refresh_sorted_default")
         qt_scenario_refresh_sorted_default()
     elseif(scenario STREQUAL "diff_P_shadowed")
@@ -9426,27 +9371,6 @@ function(qt_scenario_builtin_patch_stray_minus)
     qt_assert_file_text("${QT_WORK_DIR}/f.txt" "new" "file should be modified after push")
 endfunction()
 
-# diff_external_context_no_newline: context diff via external tool on file without trailing newline
-# covers cmd_patch.cpp line 423 (unified_to_context skips "\ No newline" lines)
-function(qt_scenario_diff_external_context_no_newline)
-    qt_begin_test("diff_external_context_no_newline")
-    # Create file WITHOUT trailing newline
-    qt_write_file("${QT_WORK_DIR}/f.txt" "old")
-    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
-    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
-    # Modify (also no trailing newline)
-    qt_write_file("${QT_WORK_DIR}/f.txt" "new")
-    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
-    # External diff + context format: external diff outputs "\ No newline at end of file"
-    # unified_to_context hits the else branch (line 423) to skip these \ lines
-    qt_quilt_ok(OUTPUT diff_out ERROR diff_err ARGS diff "--diff=diff" -c MESSAGE "diff --diff=diff -c failed")
-    qt_assert_contains("${diff_out}" "***" "context diff should have *** markers")
-    # The \ No newline lines in the unified diff are skipped by unified_to_context (line 423)
-    # so they don't appear in the output, but the changed lines still show
-    qt_assert_contains("${diff_out}" "old" "context diff should show old content")
-    qt_assert_contains("${diff_out}" "new" "context diff should show new content")
-endfunction()
-
 # diff_external_quilt_diff_opts: QUILT_DIFF_OPTS appends extra options to external diff command
 # covers cmd_patch.cpp line 556 (appending QUILT_DIFF_OPTS to cmd_argv in external diff path)
 function(qt_scenario_diff_external_quilt_diff_opts)
@@ -9456,13 +9380,11 @@ function(qt_scenario_diff_external_quilt_diff_opts)
     qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
     qt_write_file("${QT_WORK_DIR}/f.txt" "new\n")
     qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
-    # QUILT_DIFF_OPTS=-u passes an extra -u flag to the external diff tool
-    # cmd_patch.cpp iterates over shell_split(QUILT_DIFF_OPTS) at line 556
+    # Like upstream, a --diff utility gets only the two files, not
+    # QUILT_DIFF_OPTS, so diff gives its default format
     qt_quilt_ok(OUTPUT diff_out ERROR diff_err ENV "QUILT_DIFF_OPTS=-u"
         ARGS diff "--diff=diff" MESSAGE "diff with QUILT_DIFF_OPTS failed")
-    qt_assert_contains("${diff_out}" "---" "diff output should have --- header")
-    qt_assert_contains("${diff_out}" "old" "diff output should show old content")
-    qt_assert_contains("${diff_out}" "new" "diff output should show new content")
+    qt_assert_equal("${diff_out}" "1c1\n< old\n---\n> new\n" "diff output")
 endfunction()
 
 # revert_subdir: revert a file in a subdirectory when the directory doesn't exist
@@ -11007,6 +10929,32 @@ function(qt_scenario_refresh_backup_keeps_mtime)
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh -f p.patch)
     qt_assert_success("${rc}" "refresh -f failed")
     qt_assert_equal("${out}" "Patch p.patch is unchanged\n" "the backup should keep the timestamp")
+endfunction()
+
+# Like upstream's do_diff, a --diff utility gets just the backup and the
+# file as quilt names them, with an empty or missing one as /dev/null,
+# after any -R swap. It runs only for files that differ, without Index
+# lines, and its exit status is ignored.
+function(qt_scenario_diff_utility_files)
+    qt_begin_test("diff_utility_files")
+    qt_write_file("${QT_WORK_DIR}/a" "a\n")
+    qt_write_file("${QT_WORK_DIR}/same" "same\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add a same n MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/a" "a1\n")
+    qt_write_file("${QT_WORK_DIR}/n" "n\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS diff -U 1 "--diff=diff -u")
+    qt_assert_success("${rc}" "diff --diff should ignore the utility's status")
+    qt_assert_not_contains("${out}" "Index:" "no Index lines")
+    qt_assert_not_contains("${out}" "same" "identical files are skipped")
+    qt_assert_contains("${out}" "--- .pc/p.patch/a\t" "old side is the backup")
+    qt_assert_contains("${out}" "+++ a\t" "new side is the file")
+    qt_assert_contains("${out}" "--- /dev/null\t" "an empty backup is /dev/null")
+    qt_assert_contains("${out}" "+++ n\t" "a new file is named as is")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS diff -R "--diff=diff -u" MESSAGE "diff -R failed")
+    qt_assert_contains("${out}" "--- a\t" "-R swaps the files")
+    qt_assert_contains("${out}" "+++ .pc/p.patch/a\t" "-R swaps the files")
+    qt_assert_contains("${out}" "+++ /dev/null\t" "-R swaps /dev/null")
 endfunction()
 
 function(qt_scenario_refresh_sorted_default)
