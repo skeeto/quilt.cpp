@@ -86,6 +86,12 @@ escapes), double quotes (with `\"`, `\\`, `\$` escapes), `$VAR` and
 quoted and unquoted segments merge into a single token, just as in a
 shell. This applies to all `QUILT_*_ARGS` and `QUILT_*_OPTS` variables.
 
+### Default fork names
+
+`fork` and `refresh -z` count up a `-N` suffix in decimal, so `p-08.patch`
+forks to `p-9.patch` and `p-010.patch` to `p-11.patch`, where the original
+Quilt's shell arithmetic reads it as octal (and fails on `08` and `09`).
+
 ## Fuzz Testing
 
 There are [libFuzzer][] harnesses for the patch engine, the

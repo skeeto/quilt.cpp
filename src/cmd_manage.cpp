@@ -1072,34 +1072,8 @@ int cmd_fork(QuiltState &q, int argc, char **argv) {
         break;
     }
 
-    // Generate default name if none given: increment "-N" suffix before extension
     if (new_name.empty()) {
-        auto dot = str_rfind(old_name, '.');
-        std::string base;
-        std::string ext;
-        if (dot > 0) {
-            base = old_name.substr(0, checked_cast<size_t>(dot));
-            ext = old_name.substr(checked_cast<size_t>(dot));
-        } else {
-            base = old_name;
-        }
-        // Check for existing -N suffix and increment it
-        auto dash = str_rfind(base, '-');
-        if (dash >= 0) {
-            std::string_view suffix = std::string_view(base).substr(
-                checked_cast<size_t>(dash) + 1);
-            int n = 0;
-            auto [ptr, ec] = std::from_chars(suffix.data(),
-                suffix.data() + suffix.size(), n);
-            if (ec == std::errc{} && ptr == suffix.data() + suffix.size()) {
-                new_name = base.substr(0, checked_cast<size_t>(dash) + 1)
-                    + std::to_string(n + 1) + ext;
-            } else {
-                new_name = base + "-2" + ext;
-            }
-        } else {
-            new_name = base + "-2" + ext;
-        }
+        new_name = next_filename(old_name);
     }
 
     // Check that the new name doesn't already exist in series

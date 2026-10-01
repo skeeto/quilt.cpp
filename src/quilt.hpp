@@ -163,6 +163,11 @@ inline std::string patch_path_display(const QuiltState &q, std::string_view name
     return format_patch(q, name);
 }
 
+// Default name for a fork of patch, like upstream's next_filename: a
+// trailing "-N" ahead of any .diff, .dif, or .patch and compression suffix
+// counts up, otherwise "-2" goes there (p.patch -> p-2.patch -> p-3.patch).
+std::string next_filename(std::string_view patch);
+
 // Resolve a user-supplied patch name that must be in the series and
 // applied, like upstream's find_applied_patch. On failure, prints
 // "is not in series" or "is not applied" and returns nullopt.

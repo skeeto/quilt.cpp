@@ -497,6 +497,9 @@ set(QUILT_TEST_SCENARIOS
     push_hunk_line_numbers
     push_delete_mismatch
     push_quoted_file_names
+    refresh_z_increments_suffix
+    refresh_z_next_filename_shapes
+    fork_next_filename_shapes
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -671,6 +674,7 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     series_insert_crlf
     push_context_diff_zero_context
     fold_fail_rollback_create_delete
+    fork_leading_zero_suffix
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -8263,6 +8267,14 @@ function(qt_run_named_scenario scenario)
         qt_scenario_push_header_only_section()
     elseif(scenario STREQUAL "fold_garbage_input")
         qt_scenario_fold_garbage_input()
+    elseif(scenario STREQUAL "refresh_z_increments_suffix")
+        qt_scenario_refresh_z_increments_suffix()
+    elseif(scenario STREQUAL "refresh_z_next_filename_shapes")
+        qt_scenario_refresh_z_next_filename_shapes()
+    elseif(scenario STREQUAL "fork_next_filename_shapes")
+        qt_scenario_fork_next_filename_shapes()
+    elseif(scenario STREQUAL "fork_leading_zero_suffix")
+        qt_scenario_fork_leading_zero_suffix()
     elseif(scenario STREQUAL "refresh_z_strip_migration")
         qt_scenario_refresh_z_strip_migration()
     elseif(scenario STREQUAL "annotate_P_missing_arg")
@@ -14378,4 +14390,122 @@ function(qt_scenario_push_quoted_file_names)
     qt_assert_contains("${out}" "${failed} -- saving rejects to file {.rej\n"
         "push -f should not quote {.rej")
     qt_assert_exists("${QT_WORK_DIR}/it's (1).txt.rej" "push -f should keep the rejects")
+endfunction()
+
+# refresh -z names the fork like upstream's next_filename, incrementing a
+# trailing -N instead of appending another -2
+function(qt_scenario_refresh_z_increments_suffix)
+    qt_begin_test("refresh_z_increments_suffix")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "c\n")
+    qt_quilt_ok(OUTPUT out ARGS refresh -z MESSAGE "first refresh -z failed")
+    qt_assert_equal("${out}" "Fork of patch p.patch created as p-2.patch\n"
+                    "the first fork should be p-2.patch")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "d\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh -z)
+    qt_assert_success("${rc}" "second refresh -z failed")
+    qt_assert_equal("${out}" "Fork of patch p-2.patch created as p-3.patch\n"
+                    "the second fork should be p-3.patch, not p-2-2.patch")
+    qt_assert_equal("${err}" "" "refresh -z should print nothing on stderr")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "p.patch\np-2.patch\np-3.patch"
+                        "series should hold all three patches")
+    qt_assert_file_text("${QT_WORK_DIR}/.pc/applied-patches" "p.patch\np-2.patch\np-3.patch"
+                        "all three patches should be applied")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/p-3.patch" "+d" "p-3.patch should hold the change")
+    qt_assert_not_exists("${QT_WORK_DIR}/patches/p-2-2.patch" "no p-2-2.patch")
+    # An explicit name is taken as given, and the next default counts on from it
+    qt_write_file("${QT_WORK_DIR}/f.txt" "e\n")
+    qt_quilt_ok(OUTPUT out ARGS refresh -zq-5.patch MESSAGE "refresh -zq-5.patch failed")
+    qt_assert_equal("${out}" "Fork of patch p-3.patch created as q-5.patch\n"
+                    "an explicit fork name should be used as given")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "f\n")
+    qt_quilt_ok(OUTPUT out ARGS refresh -z MESSAGE "refresh -z after q-5.patch failed")
+    qt_assert_equal("${out}" "Fork of patch q-5.patch created as q-6.patch\n"
+                    "the fork of q-5.patch should be q-6.patch")
+endfunction()
+
+# refresh -z keeps a suffix other than .diff/.dif/.patch as part of the name,
+# and never mistakes a dot in a directory name for one
+function(qt_scenario_refresh_z_next_filename_shapes)
+    qt_begin_test("refresh_z_next_filename_shapes")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "0\n")
+    set(n 0)
+    foreach(pair "r.txt=r.txt-2" "t-2=t-3" "v1.0/q=v1.0/q-2")
+        string(REPLACE "=" ";" pair "${pair}")
+        list(GET pair 0 name)
+        list(GET pair 1 fork)
+        qt_quilt_ok(ARGS new "${name}" MESSAGE "new ${name} failed")
+        qt_quilt_ok(ARGS add f.txt MESSAGE "add to ${name} failed")
+        math(EXPR n "${n} + 1")
+        qt_write_file("${QT_WORK_DIR}/f.txt" "${n}\n")
+        qt_quilt_ok(ARGS refresh MESSAGE "refresh ${name} failed")
+        math(EXPR n "${n} + 1")
+        qt_write_file("${QT_WORK_DIR}/f.txt" "${n}\n")
+        qt_quilt_ok(OUTPUT out ARGS refresh -z MESSAGE "refresh -z of ${name} failed")
+        qt_assert_equal("${out}" "Fork of patch ${name} created as ${fork}\n"
+                        "the fork of ${name} should be ${fork}")
+        qt_assert_file_contains("${QT_WORK_DIR}/patches/${fork}" "+${n}"
+                                "${fork} should hold the change")
+    endforeach()
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series"
+                        "r.txt\nr.txt-2\nt-2\nt-3\nv1.0/q\nv1.0/q-2"
+                        "series should hold each patch and its fork")
+    qt_assert_not_exists("${QT_WORK_DIR}/patches/v1-2.0" "no new patches directory")
+    qt_assert_not_exists("${QT_WORK_DIR}/.pc/v1-2.0" "no new .pc/ directory")
+endfunction()
+
+# fork names the new patch like upstream's next_filename
+function(qt_scenario_fork_next_filename_shapes)
+    qt_begin_test("fork_next_filename_shapes")
+    set(expected_series "")
+    foreach(pair "v1.0/p=v1.0/p-2" "x.txt=x.txt-2" "s-2=s-3" "u.patch.gz=u-2.patch.gz"
+                 "y.dif.zst=y-2.dif.zst" "w-99999999999.patch=w-100000000000.patch"
+                 "z.diff=z-2.diff" "k-3.diff.bz2=k-4.diff.bz2" "m.patch.xz=m-2.patch.xz"
+                 "n.lzma=n-2.lzma" "o.lz=o-2.lz")
+        string(REPLACE "=" ";" pair "${pair}")
+        list(GET pair 0 name)
+        list(GET pair 1 fork)
+        qt_quilt_ok(ARGS new "${name}" MESSAGE "new ${name} failed")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS fork)
+        qt_assert_success("${rc}" "fork of ${name} failed: ${err}")
+        qt_assert_equal("${out}" "Fork of patch ${name} created as ${fork}\n"
+                        "the fork of ${name} should be ${fork}")
+        qt_assert_equal("${err}" "" "fork of ${name} should print nothing on stderr")
+        qt_assert_exists("${QT_WORK_DIR}/.pc/${fork}" ".pc/ directory of ${fork} missing")
+        qt_assert_not_exists("${QT_WORK_DIR}/.pc/${name}" ".pc/ directory of ${name} left behind")
+        string(APPEND expected_series "${fork}\n")
+    endforeach()
+    qt_strip_trailing_newlines(expected_series "${expected_series}")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "${expected_series}"
+                        "series should hold each fork in place of its patch")
+    qt_assert_not_exists("${QT_WORK_DIR}/patches/v1-2.0" "no new patches directory")
+    qt_assert_not_exists("${QT_WORK_DIR}/.pc/v1-2.0" "no new .pc/ directory")
+endfunction()
+
+# quilt.cpp reads a -N suffix with leading zeros as decimal, where upstream's
+# shell arithmetic reads it as octal (p-010 -> p-9) or fails (p-08)
+function(qt_scenario_fork_leading_zero_suffix)
+    qt_begin_test("fork_leading_zero_suffix")
+    foreach(pair "p-08.patch=p-9.patch" "p-010.patch=p-11.patch" "p-0099=p-100")
+        string(REPLACE "=" ";" pair "${pair}")
+        list(GET pair 0 name)
+        list(GET pair 1 fork)
+        qt_quilt_ok(ARGS new "${name}" MESSAGE "new ${name} failed")
+        qt_quilt_ok(OUTPUT out ARGS fork MESSAGE "fork of ${name} failed")
+        qt_assert_equal("${out}" "Fork of patch ${name} created as ${fork}\n"
+                        "the fork of ${name} should be ${fork}")
+    endforeach()
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new r-09.patch MESSAGE "new r-09.patch failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "c\n")
+    qt_quilt_ok(OUTPUT out ARGS refresh -z MESSAGE "refresh -z of r-09.patch failed")
+    qt_assert_equal("${out}" "Fork of patch r-09.patch created as r-10.patch\n"
+                    "the fork of r-09.patch should be r-10.patch")
 endfunction()

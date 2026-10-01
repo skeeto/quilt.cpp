@@ -119,6 +119,49 @@ std::string format_patch(const QuiltState &q, std::string_view name) {
     return std::string(name);
 }
 
+std::string next_filename(std::string_view patch) {
+    // Set aside one compression suffix, then one patch suffix
+    std::string_view base = patch;
+    for (std::string_view ext : {".gz", ".bz2", ".xz", ".lzma", ".lz", ".zst"}) {
+        if (base.ends_with(ext)) {
+            base.remove_suffix(ext.size());
+            break;
+        }
+    }
+    for (std::string_view ext : {".diff", ".dif", ".patch"}) {
+        if (base.ends_with(ext)) {
+            base.remove_suffix(ext.size());
+            break;
+        }
+    }
+    std::string_view ext = patch.substr(base.size());
+
+    // Take a trailing "-N" as decimal even with leading zeros, which
+    // upstream's shell arithmetic reads as octal
+    std::string_view stem = base;
+    while (!stem.empty() && stem.back() >= '0' && stem.back() <= '9')
+        stem.remove_suffix(1);
+    std::string_view digits = base.substr(stem.size());
+    std::string num = "1";
+    if (!digits.empty() && stem.ends_with('-')) {
+        while (std::ssize(digits) > 1 && digits.front() == '0')
+            digits.remove_prefix(1);
+        num = digits;
+        stem.remove_suffix(1);
+    } else {
+        stem = base;
+    }
+
+    // Count up in the string itself, so that no N is too long
+    auto it = num.rbegin();
+    for (; it != num.rend() && *it == '9'; ++it)
+        *it = '0';
+    if (it == num.rend()) num.insert(num.begin(), '1');
+    else ++*it;
+
+    return std::string(stem) + "-" + num + std::string(ext);
+}
+
 std::optional<std::string> find_applied_patch(const QuiltState &q, std::string_view name) {
     std::string_view patch = strip_patches_prefix(q, name);
     if (!q.find_in_series(patch)) {
@@ -1115,7 +1158,9 @@ static Command commands[] = {
      "\n"
      "Copy the topmost patch to a new name. The series is updated to\n"
      "reference the copy; the original file is kept but removed from\n"
-     "the series. If no name is given, -2 is appended (or -3, etc.).\n",
+     "the series. If no name is given, -2 goes ahead of any .diff or\n"
+     ".patch suffix, or a -N already there counts up (patch.diff,\n"
+     "patch-2.diff, patch-3.diff).\n",
      "Create a copy of the topmost patch under a new name"},
 
     // Implemented analysis commands

@@ -1399,18 +1399,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         }
         std::string old_name(patch);
 
-        // Generate fork name
-        std::string new_name;
-        if (!fork_name.empty()) {
-            new_name = fork_name;
-        } else {
-            auto dot = str_rfind(old_name, '.');
-            if (dot > 0) {
-                new_name = old_name.substr(0, checked_cast<size_t>(dot)) + "-2" + old_name.substr(checked_cast<size_t>(dot));
-            } else {
-                new_name = old_name + "-2";
-            }
-        }
+        std::string new_name = fork_name.empty() ? next_filename(old_name) : fork_name;
 
         if (file_exists(path_join(q.work_dir, q.patches_dir, new_name))) {
             err("Patch "); err(patch_path_display(q, new_name));
