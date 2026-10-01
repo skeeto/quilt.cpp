@@ -485,6 +485,7 @@ set(QUILT_TEST_SCENARIOS
     push_failed_hunk_output
     fold_failed_hunk_output
     push_crlf_patch_output
+    diff_last_line_newline_change
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -8170,6 +8171,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_fold_subdirectory()
     elseif(scenario STREQUAL "fold_subdirectory_rollback")
         qt_scenario_fold_subdirectory_rollback()
+    elseif(scenario STREQUAL "diff_last_line_newline_change")
+        qt_scenario_diff_last_line_newline_change()
     elseif(scenario STREQUAL "push_context_diff_zero_context")
         qt_scenario_push_context_diff_zero_context()
     elseif(scenario STREQUAL "push_missing_patch_file")
@@ -13755,4 +13758,24 @@ function(qt_scenario_push_crlf_patch_output)
     qt_assert_success("${rc}" "fold of a CRLF patch should succeed")
     qt_assert_equal("${out}" "${patched}" "fold should note the CRs it strips")
     qt_assert_equal("${err}" "" "fold should print nothing on stderr")
+endfunction()
+
+# diff_last_line_newline_change: a last line that loses or gains its newline
+# is replaced even when the line after it is deleted or inserted and no
+# context surrounds it.  In "lose", "a\nb\n" becomes "a"; in "gain", the
+# reverse.  In "add", the incomplete "a" is replaced, and the markers follow
+# only "-a" and "+b".
+function(qt_scenario_diff_last_line_newline_change)
+    qt_begin_test("diff_last_line_newline_change")
+    set(nl "\\ No newline at end of file\n")
+    qt_check_diff_round_trip(lose "a\nb\n" "a" -U0
+        "--- a/lose\n+++ b/lose\n@@ -1,2 +1 @@\n-a\n-b\n+a\n${nl}")
+    qt_check_diff_round_trip(lose "a\nb\n" "a" -c
+        "*** a/lose\n--- b/lose\n***************\n*** 1,2 ****\n! a\n! b\n--- 1 ----\n! a\n${nl}")
+    qt_check_diff_round_trip(gain "a" "a\nb\n" -U0
+        "--- a/gain\n+++ b/gain\n@@ -1 +1,2 @@\n-a\n${nl}+a\n+b\n")
+    qt_check_diff_round_trip(gain "a" "a\nb\n" -c
+        "*** a/gain\n--- b/gain\n***************\n*** 1 ****\n! a\n${nl}--- 1,2 ----\n! a\n! b\n")
+    qt_check_diff_round_trip(add "a" "a\nb" -u
+        "--- a/add\n+++ b/add\n@@ -1 +1,2 @@\n-a\n${nl}+a\n+b\n${nl}")
 endfunction()
