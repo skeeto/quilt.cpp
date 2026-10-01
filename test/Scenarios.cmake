@@ -381,6 +381,7 @@ set(QUILT_TEST_SCENARIOS
     push_merge_short
     push_quilt_patch_opts_reverse
     push_quiet_all
+    push_empty_patch_file
     pop_quiet_all
     pop_count_clamp
     pop_refresh_needs_refresh
@@ -7822,6 +7823,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_push_quilt_patch_opts_reverse()
     elseif(scenario STREQUAL "push_quiet_all")
         qt_scenario_push_quiet_all()
+    elseif(scenario STREQUAL "push_empty_patch_file")
+        qt_scenario_push_empty_patch_file()
     elseif(scenario STREQUAL "pop_quiet_all")
         qt_scenario_pop_quiet_all()
     elseif(scenario STREQUAL "pop_count_clamp")
@@ -11080,6 +11083,26 @@ function(qt_scenario_push_quiet_all)
     qt_quilt_ok(OUTPUT out ERROR err ARGS push -q -a MESSAGE "push -q -a failed")
     qt_assert_equal("${out}" "Applying patch a.patch\nApplying patch b.patch\nNow at patch b.patch\n"
                     "quiet push should not print blank lines")
+endfunction()
+
+# Pushing a zero-byte patch file reports it on stdout, even with -q, but a
+# patch that changes files does not
+function(qt_scenario_push_empty_patch_file)
+    qt_begin_test("push_empty_patch_file")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "a.patch\nb.patch\n")
+    qt_write_file("${QT_WORK_DIR}/patches/a.patch" "")
+    qt_write_file("${QT_WORK_DIR}/patches/b.patch" "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+y\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_success("${rc}" "push of empty patch should succeed")
+    qt_assert_equal("${out}" "Applying patch a.patch\nPatch a.patch appears to be empty; applied\n\nNow at patch a.patch\n"
+                    "push should report the empty patch")
+    qt_assert_equal("${err}" "" "push should print nothing on stderr")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS push -q -a MESSAGE "push -q -a failed")
+    qt_assert_equal("${out}" "Applying patch a.patch\nPatch a.patch appears to be empty; applied\nApplying patch b.patch\nNow at patch b.patch\n"
+                    "quiet push should still report the empty patch")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "y" "b.patch should be applied")
 endfunction()
 
 function(qt_scenario_pop_quiet_all)

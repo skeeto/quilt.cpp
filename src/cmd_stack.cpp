@@ -555,6 +555,11 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
         // Create .timestamp
         write_file(path_join(pc_dir, ".timestamp"), "");
 
+        // Like upstream, report a patch that backed up no files, even with -q
+        if (affected.empty()) {
+            out_line("Patch " + display + " appears to be empty; applied");
+        }
+
         if (do_refresh) {
             char arg0[] = "refresh";
             char *refresh_argv[] = {arg0, nullptr};
