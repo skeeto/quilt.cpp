@@ -1002,7 +1002,7 @@ static Command commands[] = {
      "List all patches in the series file, both applied and unapplied.\n"
      "\n"
      "Options:\n"
-     "  -v          Mark applied patches with = and the top with =.\n",
+     "  -v          Mark applied patches with + and the top with =.\n",
      "List all patches in the series"},
 
     {"applied", cmd_applied,

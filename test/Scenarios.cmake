@@ -425,6 +425,7 @@ set(QUILT_TEST_SCENARIOS
     revert_P_unapplied
     snapshot_no_series
     series_empty_and_comments
+    series_rejects_arguments
     color_option_forms
     files_all_no_applied
     delete_n_explicit
@@ -8291,6 +8292,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_snapshot_no_series()
     elseif(scenario STREQUAL "series_empty_and_comments")
         qt_scenario_series_empty_and_comments()
+    elseif(scenario STREQUAL "series_rejects_arguments")
+        qt_scenario_series_rejects_arguments()
     elseif(scenario STREQUAL "color_option_forms")
         qt_scenario_color_option_forms()
     elseif(scenario STREQUAL "files_all_no_applied")
@@ -12260,6 +12263,27 @@ function(qt_scenario_series_empty_and_comments)
     qt_write_file("${QT_WORK_DIR}/patches/series" "# comment\n\na.patch\n# another\n")
     qt_quilt_ok(OUTPUT out2 ERROR err2 ARGS series MESSAGE "series with comments failed")
     qt_assert_equal("${out2}" "a.patch\n" "comments and blank lines should be skipped")
+endfunction()
+
+# series takes no arguments, so any argument prints the usage and fails,
+# including a --color value given as a separate word. A trailing "--" is
+# just the end of the options.
+function(qt_scenario_series_rejects_arguments)
+    qt_begin_test("series_rejects_arguments")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new a.patch MESSAGE "new failed")
+    foreach(args IN ITEMS "foo" "foo;-v" "--color;always" "--;foo" "--;-v")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS series ${args})
+        string(REPLACE ";" " " shown "series ${args}")
+        qt_assert_equal("${rc}" "1" "${shown} should fail")
+        qt_combine_output(combined "${out}" "${err}")
+        qt_assert_contains("${combined}"
+            "Usage: quilt series [--color[=always|auto|never]] [-v]"
+            "${shown} should print usage")
+        qt_assert_not_contains("${combined}" "a.patch" "${shown} should not list patches")
+    endforeach()
+    qt_quilt_ok(OUTPUT out ERROR err ARGS series -v -- MESSAGE "series -v -- failed")
+    qt_assert_equal("${out}" "= a.patch\n" "series -v -- should list the series")
 endfunction()
 
 function(qt_scenario_files_all_no_applied)

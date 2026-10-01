@@ -145,17 +145,28 @@ static void show_rollback(const QuiltState &q, std::span<const std::string> file
 
 int cmd_series(QuiltState &q, int argc, char **argv) {
     bool verbose = false;
+    constexpr std::string_view usage =
+        "Usage: quilt series [--color[=always|auto|never]] [-v]";
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
-        if (arg == "-v") {
+        if (arg == "--") {
+            // Ends the options, and series takes no arguments
+            if (i + 1 < argc) {
+                err_line(usage);
+                return 1;
+            }
+        } else if (arg == "-v") {
             verbose = true;
         } else if (arg == "--color" || arg.starts_with("--color=")) {
             if (!valid_color_option(arg)) {
-                err_line("Usage: quilt series [--color[=always|auto|never]] [-v]");
+                err_line(usage);
                 return 1;
             }
-        } else if (arg[0] == '-') {
+        } else if (std::ssize(arg) > 1 && arg[0] == '-') {
             err("Unrecognized option: "); err_line(arg);
+            return 1;
+        } else {
+            err_line(usage);
             return 1;
         }
     }
