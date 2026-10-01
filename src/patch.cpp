@@ -1176,6 +1176,68 @@ static std::string_view raw_line(std::string_view text, ptrdiff_t k)
     return nl < 0 ? text : text.substr(0, checked_cast<size_t>(nl + 1));
 }
 
+// A file name as GNU patch shows it, quoted as gnulib's quotearg does in
+// its default "shell" style, in the C locale: as is unless the shell would
+// take it otherwise, and then in single quotes, each single quote written
+// as '\''.  A name with a single quote and otherwise only printable ASCII
+// that needs no escaping in C goes in double quotes instead.
+static std::string quote_name(std::string_view name)
+{
+    bool quote = name.empty();
+    bool apostrophe = false;
+    bool plain = true;  // fit for double quotes
+    for (ptrdiff_t k = 0; k < std::ssize(name); ++k) {
+        unsigned char c = static_cast<unsigned char>(name[checked_cast<size_t>(k)]);
+        switch (c) {
+        case '{': case '}':  // special alone
+            if (std::ssize(name) == 1) {
+                quote = true;
+            } else {
+                plain = false;
+            }
+            break;
+        case '#': case '~':  // special at the start
+            if (k == 0) {
+                quote = true;
+            } else {
+                plain = false;
+            }
+            break;
+        case '\'':
+            apostrophe = true;
+            quote = true;
+            break;
+        case ' ':
+            quote = true;
+            break;
+        case '\t': case '\n': case '\r': case '\\': case '?':
+        case '!': case '"': case '$': case '&': case '(': case ')': case '*':
+        case ';': case '<': case '=': case '>': case '[': case '^': case '`':
+        case '|':
+            quote = true;
+            plain = false;
+            break;
+        default:
+            // Any other byte goes as it is, though only printable ASCII
+            // suits double quotes
+            if (c < 0x20 || c > 0x7e) plain = false;
+        }
+    }
+
+    if (!quote) return std::string(name);
+    if (apostrophe && plain) return "\"" + std::string(name) + "\"";
+    std::string result = "'";
+    for (char c : name) {
+        if (c == '\'') {
+            result += "'\\''";
+        } else {
+            result += c;
+        }
+    }
+    result += '\'';
+    return result;
+}
+
 PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
 {
     PatchResult result;
@@ -1242,7 +1304,7 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                 "The next patch{} would {} the file {},\nwhich {}!  Applying it anyway.\n",
                 opts.reverse ? ", when reversed," : "",
                 !file_existed ? "delete" : is_empty ? "empty out" : "create",
-                pf.target_path,
+                quote_name(pf.target_path),
                 !file_existed ? "does not exist" : is_empty ? "is already empty"
                                                             : "already exists");
         }
@@ -1293,7 +1355,7 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
         patched.push_back(pf.target_path);
 
         if (!opts.quiet) {
-            result.out += "patching file " + pf.target_path + "\n";
+            result.out += "patching file " + quote_name(pf.target_path) + "\n";
         }
         FileContent fc = load_file_lines(original);
 
@@ -1449,7 +1511,7 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                     !(opts.merge && result.exit_code != 0)) {
                     result.exit_code = 1;
                     if (!opts.quiet) {
-                        result.out += "Not deleting file " + pf.target_path +
+                        result.out += "Not deleting file " + quote_name(pf.target_path) +
                                       " as content differs from patch\n";
                     }
                 }
@@ -1463,10 +1525,10 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                 ptrdiff_t rej_count = 0;
                 for (bool r : rejected) if (r) ++rej_count;
                 result.out += std::format(
-                    "{} out of {} {} FAILED -- saving rejects to file {}.rej\n",
+                    "{} out of {} {} FAILED -- saving rejects to file {}\n",
                     rej_count, std::ssize(pf.hunks),
                     std::ssize(pf.hunks) == 1 ? "hunk" : "hunks",
-                    pf.target_path);
+                    quote_name(pf.target_path + ".rej"));
             }
         }
     }

@@ -492,6 +492,7 @@ set(QUILT_TEST_SCENARIOS
     push_reject_format
     push_hunk_line_numbers
     push_delete_mismatch
+    push_quoted_file_names
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -8221,6 +8222,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_push_hunk_line_numbers()
     elseif(scenario STREQUAL "push_delete_mismatch")
         qt_scenario_push_delete_mismatch()
+    elseif(scenario STREQUAL "push_quoted_file_names")
+        qt_scenario_push_quoted_file_names()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -14198,4 +14201,44 @@ function(qt_scenario_push_delete_mismatch)
     qt_combine_output(combined "${out}" "${err}")
     qt_assert_not_contains("${combined}" "Not deleting"
         "push --merge should not say that it keeps f.txt after a failed hunk")
+endfunction()
+
+# push_quoted_file_names: GNU patch quotes a file name that the shell would
+# not take as is, in single quotes, or in double quotes when it has a
+# single quote and nothing else the shell would expand.  A lone "{" needs
+# quotes, but "{.rej" does not.  Upstream push names the file with the
+# rejects as the "patching file" line quotes it.
+function(qt_scenario_push_quoted_file_names)
+    qt_begin_test("push_quoted_file_names")
+    set(patch "")
+    foreach(name "a b.txt" "it's.txt" "it's (1).txt" "{")
+        qt_write_file("${QT_WORK_DIR}/${name}" "y\n")
+        string(APPEND patch "--- a/${name}\t2020-01-01\n+++ b/${name}\t2020-01-01\n@@ -1 +1 @@\n-q\n+Q\n")
+    endforeach()
+    qt_write_file("${QT_WORK_DIR}/d e.txt" "x\n")
+    qt_write_file("${QT_WORK_DIR}/n e.txt" "x\n")
+    string(APPEND patch
+        "--- a/d e.txt\t2020-01-01\n+++ /dev/null\n@@ -1 +0,0 @@\n-a\n"
+        "--- /dev/null\n+++ b/n e.txt\t2020-01-01\n@@ -0,0 +1 @@\n+n\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff" "${patch}")
+    set(failed "Hunk #1 FAILED at 1.\n1 out of 1 hunk FAILED")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_failure("${rc}" "push of a patch with failed hunks should fail")
+    qt_assert_equal("${out}"
+        "Applying patch p.diff\npatching file 'a b.txt'\n${failed} -- rejects in file 'a b.txt'\npatching file \"it's.txt\"\n${failed} -- rejects in file \"it's.txt\"\npatching file 'it'\\''s (1).txt'\n${failed} -- rejects in file 'it'\\''s (1).txt'\npatching file '{'\n${failed} -- rejects in file '{'\npatching file 'd e.txt'\nHunk #1 FAILED at 1.\nNot deleting file 'd e.txt' as content differs from patch\n1 out of 1 hunk FAILED -- rejects in file 'd e.txt'\nThe next patch would create the file 'n e.txt',\nwhich already exists!  Applying it anyway.\npatching file 'n e.txt'\n${failed} -- rejects in file 'n e.txt'\nPatch p.diff does not apply (enforce with -f)\n"
+        "push should quote the file names")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -f)
+    qt_assert_failure("${rc}" "push -f of a patch with failed hunks should fail")
+    qt_assert_contains("${out}" "${failed} -- saving rejects to file 'a b.txt.rej'\n"
+        "push -f should quote a reject file name with a space")
+    qt_assert_contains("${out}" "${failed} -- saving rejects to file \"it's.txt.rej\"\n"
+        "push -f should double-quote a reject file name with a single quote")
+    qt_assert_contains("${out}" "${failed} -- saving rejects to file 'it'\\''s (1).txt.rej'\n"
+        "push -f should single-quote a reject file name with a single quote and parentheses")
+    qt_assert_contains("${out}" "${failed} -- saving rejects to file {.rej\n"
+        "push -f should not quote {.rej")
+    qt_assert_exists("${QT_WORK_DIR}/it's (1).txt.rej" "push -f should keep the rejects")
 endfunction()
