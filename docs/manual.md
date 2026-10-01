@@ -364,7 +364,7 @@ quilt grep -rn "buffer_size" src/
 
 #### `quilt fork [new_name]`
 
-Creates a verbatim copy of the topmost patch under a new name. The series file is updated to reference the new name; the original patch file is preserved but no longer referenced by the series. All `.pc/` metadata is updated. If no name is given, a trailing `-N` counts up, or else `-2` is added, ahead of any `.diff`, `.dif`, or `.patch` and compression suffix (`fix.patch` → `fix-2.patch` → `fix-3.patch`, `fix.patch.gz` → `fix-2.patch.gz`, `fix.txt` → `fix.txt-2`).
+Creates a verbatim copy of the topmost patch under a new name. The series file is updated to reference the new name; the original patch file is preserved but no longer referenced by the series. All `.pc/` metadata is updated. If no name is given, a trailing `-N` counts up, or else `-2` is added, ahead of any `.diff`, `.dif`, or `.patch` and compression suffix (`fix.patch` → `fix-2.patch` → `fix-3.patch`, `fix.patch.gz` → `fix-2.patch.gz`, `fix.txt` → `fix.txt-2`). Refuses a name that is already in the series, has a `.pc/` directory, or has a patch file.
 
 **Use case**: When you need to modify a patch but preserve the original — for example, the original is shared across multiple series files.
 

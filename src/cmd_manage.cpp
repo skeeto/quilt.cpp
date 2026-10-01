@@ -1076,9 +1076,11 @@ int cmd_fork(QuiltState &q, int argc, char **argv) {
         new_name = next_filename(old_name);
     }
 
-    // Check that the new name doesn't already exist in series
-    if (q.find_in_series(new_name)) {
-        err("Patch "); err(new_name); err_line(" already exists in series");
+    // Like upstream, refuse a name in any use, so nothing is overwritten
+    if (q.find_in_series(new_name) || is_directory(pc_patch_dir(q, new_name)) ||
+        file_exists(path_join(q.work_dir, q.patches_dir, new_name))) {
+        err("Patch "); err(patch_path_display(q, new_name));
+        err_line(" exists already, please choose a new name");
         return 1;
     }
 
@@ -1153,8 +1155,8 @@ int cmd_fork(QuiltState &q, int argc, char **argv) {
 
     q.applied = std::move(new_applied);
 
-    out_line("Fork of patch " + old_name +
-             " created as " + new_name);
+    out_line("Fork of patch " + patch_path_display(q, old_name) +
+             " created as " + patch_path_display(q, new_name));
     return 0;
 }
 
