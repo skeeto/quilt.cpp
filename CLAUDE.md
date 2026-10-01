@@ -207,6 +207,9 @@ endfunction()
 | `qt_assert_file_text(path expected msg)` | File contents equal (stripped) |
 | `qt_assert_file_contains(path needle msg)` | File contains substring |
 | `qt_assert_file_not_contains(path needle msg)` | File doesn't contain substring |
+| `qt_write_bytes(path printf_format)` | Write exact bytes via printf(1), e.g. `"a\\r\\n\\0"` |
+| `qt_assert_file_hex(path hex msg)` | File bytes equal (lowercase hex) |
+| `qt_assert_file_contains_hex(path hex msg)` | File contains byte sequence (lowercase hex) |
 | `qt_assert_exists(path msg)` / `qt_assert_not_exists(path msg)` | File existence |
 | `qt_assert_line_count(text N msg)` | Count newlines |
 | `qt_fail(msg)` | Unconditional failure |
@@ -214,7 +217,8 @@ endfunction()
 **Patterns:**
 - **Environment variables**: `qt_quilt_ok(ENV "QUILT_PATCHES=/abs/path" ARGS series)`
 - **Stdin data**: `qt_quilt_ok(ARGS fold -f INPUT "--- a/f.txt\n+++ b/f.txt\n...")` — for multi-line patches use CMake bracket syntax: `INPUT [=[ ... ]=]`
-- **Binary data**: CMake can't handle null bytes in strings. Use `execute_process(COMMAND printf "\\0\\001")` to write binary files.
+- **Binary data**: CMake can't handle null bytes in strings. Use `qt_write_bytes(path "\\0\\001")` to write binary files.
+- **Exact bytes / CRLF**: `file(READ)` (and so `qt_read_file_raw`) folds CRLF into LF. To assert exact bytes, use `qt_assert_file_hex` or `qt_assert_file_contains_hex`.
 - **Combined output checking**: `qt_combine_output(combined "${out}" "${err}")` then `qt_assert_contains("${combined}" "error text" "msg")` — use this when you don't know if output goes to stdout or stderr.
 
 ## Design decisions

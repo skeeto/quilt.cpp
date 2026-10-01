@@ -1030,8 +1030,169 @@ static std::string remove_diffstat_section(std::string_view header) {
     return result;
 }
 
-// Strip trailing whitespace from diff output lines.
-// Returns the cleaned diff and emits warnings to stderr.
+// Split text into lines, each keeping its '\n' terminator (the last line
+// may have none).
+static std::vector<std::string_view> split_lines_keep_eol(std::string_view s)
+{
+    std::vector<std::string_view> lines;
+    while (!s.empty()) {
+        ptrdiff_t nl = str_find(s, '\n');
+        ptrdiff_t len = nl < 0 ? std::ssize(s) : nl + 1;
+        lines.push_back(s.substr(0, checked_cast<size_t>(len)));
+        s.remove_prefix(checked_cast<size_t>(len));
+    }
+    return lines;
+}
+
+// Length of the run of spaces and tabs ending a line, just before its '\n'
+// (if any), not counting into the first `keep` bytes. As in upstream, '\r'
+// is not whitespace here, so a CRLF line is left alone.
+static ptrdiff_t trailing_ws_len(std::string_view line, ptrdiff_t keep)
+{
+    if (line.ends_with('\n')) line.remove_suffix(1);
+    keep = std::min(keep, std::ssize(line));
+    std::string_view tail = line.substr(checked_cast<size_t>(keep));
+    auto last = tail.find_last_not_of(" \t");
+    if (last == std::string_view::npos) return std::ssize(tail);
+    return std::ssize(tail) - checked_cast<ptrdiff_t>(last) - 1;
+}
+
+// Append a line less the `n` bytes just before its '\n' (if any).
+static void append_without_trailing_ws(std::string &out,
+                                       std::string_view line, ptrdiff_t n)
+{
+    bool eol = line.ends_with('\n');
+    if (eol) line.remove_suffix(1);
+    out += line.substr(0, checked_cast<size_t>(std::ssize(line) - n));
+    if (eol) out += '\n';
+}
+
+// Parse a decimal number at s[pos], advancing pos past it.
+static ptrdiff_t parse_diff_num(std::string_view s, ptrdiff_t &pos)
+{
+    ptrdiff_t n = 0;
+    auto first = s.data() + pos;
+    auto [ptr, ec] = std::from_chars(first, s.data() + s.size(), n);
+    pos += ptr - first;
+    return n;
+}
+
+static bool char_at_is(std::string_view s, ptrdiff_t pos, char c)
+{
+    return pos < std::ssize(s) && s[checked_cast<size_t>(pos)] == c;
+}
+
+static bool digit_at(std::string_view s, ptrdiff_t pos)
+{
+    return pos < std::ssize(s) && s[checked_cast<size_t>(pos)] >= '0' &&
+           s[checked_cast<size_t>(pos)] <= '9';
+}
+
+// Strip trailing whitespace from the lines a single-file diff (unified or
+// context format) adds, like upstream's remove-trailing-ws script. Returns
+// the line numbers, in the new file, of the lines that were stripped.
+static std::vector<ptrdiff_t> strip_diff_trailing_ws(std::string &diff)
+{
+    std::vector<ptrdiff_t> stripped_lines;
+    auto lines = split_lines_keep_eol(diff);
+    std::string result;
+    ptrdiff_t n = std::ssize(lines);
+    ptrdiff_t i = 0;
+    auto line_at = [&](ptrdiff_t k) { return lines[checked_cast<size_t>(k)]; };
+
+    // Strip a line that adds content after a `keep`-byte prefix
+    auto take_added = [&](std::string_view line, ptrdiff_t keep,
+                          ptrdiff_t line_number) {
+        ptrdiff_t ws = trailing_ws_len(line, keep);
+        if (ws > 0) stripped_lines.push_back(line_number);
+        append_without_trailing_ws(result, line, ws);
+    };
+
+    bool context = false;
+    for (; i < n; ++i) {
+        result += line_at(i);
+        if (line_at(i).starts_with("--- ")) { ++i; break; }
+        if (line_at(i).starts_with("*** ")) { context = true; ++i; break; }
+    }
+
+    while (i < n) {
+        std::string_view line = line_at(i++);
+        result += line;
+        if (!context && line.starts_with("@@ -") && digit_at(line, 4)) {
+            // @@ -a[,b] +c[,d] @@
+            ptrdiff_t pos = 4;
+            parse_diff_num(line, pos);
+            ptrdiff_t removed = 1, added = 1;
+            if (char_at_is(line, pos, ',')) removed = parse_diff_num(line, ++pos);
+            if (!char_at_is(line, pos, ' ') || !char_at_is(line, pos + 1, '+') ||
+                !digit_at(line, pos + 2)) {
+                continue;
+            }
+            pos += 2;
+            ptrdiff_t line_number = parse_diff_num(line, pos);
+            if (char_at_is(line, pos, ',')) added = parse_diff_num(line, ++pos);
+            while ((removed > 0 || added > 0) && i < n) {
+                std::string_view hl = line_at(i++);
+                if (hl.starts_with('+')) {
+                    take_added(hl, 1, line_number);
+                    added--;
+                    line_number++;
+                    continue;
+                }
+                if (hl.starts_with('-')) {
+                    removed--;
+                } else if (hl.starts_with(' ') || hl == "\n") {
+                    removed--;
+                    added--;
+                    line_number++;
+                }
+                result += hl;
+            }
+        } else if (context && line.starts_with("--- ") && digit_at(line, 4) &&
+                   line.ends_with(" ----\n")) {
+            // --- c[,d] ----
+            ptrdiff_t pos = 4;
+            ptrdiff_t line_number = parse_diff_num(line, pos);
+            ptrdiff_t last_line = line_number;
+            if (char_at_is(line, pos, ',')) last_line = parse_diff_num(line, ++pos);
+            for (; line_number <= last_line && i < n; ++line_number) {
+                std::string_view hl = line_at(i++);
+                if (hl.starts_with("+ ") || hl.starts_with("! ")) {
+                    take_added(hl, 2, line_number);
+                } else {
+                    result += hl;
+                }
+                if (hl.starts_with("****") || hl.starts_with("*** ")) break;
+            }
+        }
+    }
+
+    diff = std::move(result);
+    return stripped_lines;
+}
+
+// Remove trailing spaces and tabs from the given (ascending, 1-based) lines
+// of a file, leaving all other bytes alone. The file is rewritten only if
+// something changed.
+static bool strip_file_trailing_ws(const std::string &path,
+                                   std::span<const ptrdiff_t> line_numbers)
+{
+    std::string content = read_file(path);
+    std::string result;
+    ptrdiff_t lineno = 0;
+    auto next = line_numbers.begin();
+    for (auto line : split_lines_keep_eol(content)) {
+        ++lineno;
+        while (next != line_numbers.end() && *next < lineno) ++next;
+        ptrdiff_t ws = 0;
+        if (next != line_numbers.end() && *next == lineno) {
+            ws = trailing_ws_len(line, 0);
+        }
+        append_without_trailing_ws(result, line, ws);
+    }
+    if (result == content) return true;
+    return write_file(path, result);
+}
 
 int cmd_refresh(QuiltState &q, int argc, char **argv) {
     if (q.applied.empty()) {
@@ -1385,6 +1546,10 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     // Generate diffs
     std::string work_base = basename(q.work_dir);
     std::string patch_content = header;
+    // Lines (per file) whose trailing whitespace --strip-trailing-whitespace
+    // removed from the diff, to be removed from the files once every diff
+    // has succeeded
+    std::map<std::string, std::vector<ptrdiff_t>> ws_lines;
 
     for (const auto &file : tracked) {
         if (shadowed.contains(file)) {
@@ -1418,92 +1583,6 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
             }
             continue;
         }
-        // Strip trailing whitespace from lines modified by this patch
-        if (opt_strip_whitespace) {
-            std::string working_path = path_join(q.work_dir, file);
-            if (file_exists(working_path)) {
-                // Find which lines are modified by diffing backup vs working
-                std::set<int> modified_lines;
-                std::string diff_check = generate_file_diff(
-                    q, patch, file, "1", false, {}, 0,
-                    DiffFormat::unified, true, diff_algorithm);
-                if (!diff_check.empty()) {
-                    auto dlines = split_lines(diff_check);
-                    int new_lineno = 0;
-                    for (const auto &dl : dlines) {
-                        if (dl.starts_with("---") || dl.starts_with("+++")) {
-                            continue;
-                        }
-                        if (dl.starts_with("@@")) {
-                            // Parse @@ -X,Y +N,M @@
-                            auto plus = str_find(dl, '+');
-                            if (plus >= 0) {
-                                auto comma = str_find(
-                                    std::string_view(dl).substr(
-                                        checked_cast<size_t>(plus)), ',');
-                                std::string_view num_str;
-                                if (comma >= 0) {
-                                    num_str = std::string_view(dl).substr(
-                                        checked_cast<size_t>(plus) + 1,
-                                        checked_cast<size_t>(comma) - 1);
-                                } else {
-                                    auto sp = str_find(
-                                        std::string_view(dl).substr(
-                                            checked_cast<size_t>(plus)), ' ');
-                                    if (sp >= 0) {
-                                        num_str = std::string_view(dl).substr(
-                                            checked_cast<size_t>(plus) + 1,
-                                            checked_cast<size_t>(sp) - 1);
-                                    }
-                                }
-                                if (!num_str.empty()) {
-                                    int n = 0;
-                                    std::from_chars(num_str.data(),
-                                        num_str.data() + num_str.size(), n);
-                                    new_lineno = n - 1;  // will be incremented
-                                }
-                            }
-                        } else if (dl.starts_with("+")) {
-                            new_lineno++;
-                            modified_lines.insert(new_lineno);
-                        } else if (!dl.starts_with("-")) {
-                            new_lineno++;  // context line
-                        }
-                    }
-                }
-
-                std::string content = read_file(working_path);
-                std::string stripped;
-                auto lines = split_lines(content);
-                int lineno = 0;
-                for (const auto &line : lines) {
-                    lineno++;
-                    std::string_view l = line;
-                    bool is_modified = modified_lines.contains(lineno);
-                    auto end = l.find_last_not_of(" \t");
-                    if (is_modified && end == std::string::npos) {
-                        if (!l.empty()) {
-                            out_line("Removing trailing whitespace from line "
-                                     + std::to_string(lineno) + " of " + file);
-                        }
-                        stripped += '\n';
-                    } else if (is_modified &&
-                               static_cast<ptrdiff_t>(end) + 1 < std::ssize(l)) {
-                        out_line("Removing trailing whitespace from line "
-                                 + std::to_string(lineno) + " of " + file);
-                        stripped += l.substr(0, end + 1);
-                        stripped += '\n';
-                    } else {
-                        stripped += l;
-                        stripped += '\n';
-                    }
-                }
-                if (stripped != content) {
-                    write_file(working_path, stripped);
-                }
-            }
-        }
-
         std::string diff_out = generate_file_diff(q, patch, file, p_format,
                                                    false, {}, ctx_lines,
                                                    diff_format, no_timestamps,
@@ -1511,6 +1590,10 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         if (diff_out.starts_with("Binary files ")) {
             err("Diff failed on file '"); err(file); err_line("', aborting");
             return 1;
+        }
+        if (opt_strip_whitespace) {
+            auto lines = strip_diff_trailing_ws(diff_out);
+            if (!lines.empty()) ws_lines[file] = std::move(lines);
         }
         if (!diff_out.empty()) {
             if (!no_index) {
@@ -1526,6 +1609,21 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
             if (!patch_content.empty() && patch_content.back() != '\n') {
                 patch_content += '\n';
             }
+        }
+    }
+
+    for (const auto &[file, lines] : ws_lines) {
+        std::string list;
+        for (auto n : lines) {
+            if (!list.empty()) list += ',';
+            list += std::to_string(n);
+        }
+        err(std::ssize(lines) == 1 ? "Removing trailing whitespace from line "
+                                   : "Removing trailing whitespace from lines ");
+        err(list); err(" of "); err_line(file);
+        if (!strip_file_trailing_ws(path_join(q.work_dir, file), lines)) {
+            err("Failed to write "); err_line(file);
+            return 1;
         }
     }
 

@@ -234,6 +234,12 @@ set(QUILT_TEST_SCENARIOS
     refresh_backup
     refresh_backup_no_existing
     refresh_strip_whitespace
+    refresh_strip_whitespace_warning
+    refresh_strip_whitespace_binary
+    refresh_strip_whitespace_no_eol
+    refresh_strip_whitespace_crlf
+    refresh_strip_whitespace_context
+    refresh_strip_whitespace_diff_fail
     refresh_fork_named
     refresh_fork_not_top
     refresh_diffstat
@@ -511,7 +517,6 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     init_help_text
     init_extra_args
     init_from_subdir
-    refresh_strip_whitespace_warning
     refresh_fork
     refresh_strip_ws_blank_context
     header_dep3_template
@@ -4604,7 +4609,107 @@ function(qt_scenario_refresh_strip_whitespace_warning)
     qt_write_file("${QT_WORK_DIR}/f.txt" "trailing   \n")
     qt_quilt(RESULT rc OUTPUT ref_out ERROR ref_err ARGS refresh --strip-trailing-whitespace)
     qt_assert_success("${rc}" "refresh should succeed")
-    qt_assert_contains("${ref_out}" "Removing trailing whitespace" "should warn about trailing whitespace")
+    qt_combine_output(combined "${ref_out}" "${ref_err}")
+    qt_assert_contains("${combined}" "Removing trailing whitespace from line 1 of f.txt" "should warn about trailing whitespace")
+endfunction()
+
+# refresh --strip-trailing-whitespace must leave an unchanged binary file alone
+function(qt_scenario_refresh_strip_whitespace_binary)
+    qt_begin_test("refresh_strip_whitespace_binary")
+    qt_write_bytes("${QT_WORK_DIR}/t.txt" "x\\n")
+    qt_write_bytes("${QT_WORK_DIR}/f.bin" "\\0\\001")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add t.txt f.bin MESSAGE "add failed")
+    qt_write_bytes("${QT_WORK_DIR}/t.txt" "y \\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh --strip-trailing-whitespace)
+    qt_assert_success("${rc}" "refresh should succeed with an unchanged binary file")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Removing trailing whitespace from line 1 of t.txt" "should report stripped line")
+    qt_assert_contains("${combined}" "Refreshed patch" "should refresh patch")
+    qt_assert_file_hex("${QT_WORK_DIR}/f.bin" "0001" "binary file must be untouched")
+    qt_assert_file_hex("${QT_WORK_DIR}/t.txt" "790a" "t.txt should lose its trailing space")
+    qt_read_file_raw(patch_text "${QT_WORK_DIR}/patches/p.patch")
+    qt_assert_contains("${patch_text}" "\n-x\n+y\n" "patch should add the stripped line")
+    qt_assert_not_contains("${patch_text}" "f.bin" "patch should not mention the binary file")
+endfunction()
+
+# refresh --strip-trailing-whitespace must keep a missing final newline, both
+# in an unchanged file and on a stripped last line
+function(qt_scenario_refresh_strip_whitespace_no_eol)
+    qt_begin_test("refresh_strip_whitespace_no_eol")
+    qt_write_bytes("${QT_WORK_DIR}/t.txt" "x\\n")
+    qt_write_bytes("${QT_WORK_DIR}/nonl" "keep\\nnonl")
+    qt_write_bytes("${QT_WORK_DIR}/eof.txt" "a\\nb")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add t.txt nonl eof.txt MESSAGE "add failed")
+    qt_write_bytes("${QT_WORK_DIR}/t.txt" "y\\t\\n")
+    qt_write_bytes("${QT_WORK_DIR}/eof.txt" "a\\nc \\t")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh --strip-trailing-whitespace)
+    qt_assert_success("${rc}" "refresh should succeed")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Removing trailing whitespace from line 2 of eof.txt" "should report eof.txt")
+    qt_assert_contains("${combined}" "Removing trailing whitespace from line 1 of t.txt" "should report t.txt")
+    qt_assert_file_hex("${QT_WORK_DIR}/nonl" "6b6565700a6e6f6e6c" "unchanged file must keep its missing final newline")
+    qt_assert_file_hex("${QT_WORK_DIR}/eof.txt" "610a63" "stripped last line must not gain a newline")
+    qt_assert_file_hex("${QT_WORK_DIR}/t.txt" "790a" "t.txt should lose its trailing tab")
+    qt_read_file_raw(patch_text "${QT_WORK_DIR}/patches/p.patch")
+    qt_assert_not_contains("${patch_text}" "nonl" "patch should not touch the unchanged file")
+    qt_assert_contains("${patch_text}" "\n-b\n\\ No newline at end of file\n+c\n\\ No newline at end of file\n" "patch should keep the missing newline")
+    qt_assert_contains("${patch_text}" "\n-x\n+y\n" "patch should add the stripped line")
+endfunction()
+
+# refresh --strip-trailing-whitespace must keep CRLF line endings. As in
+# upstream, whitespace before a '\r' is not trailing whitespace.
+function(qt_scenario_refresh_strip_whitespace_crlf)
+    qt_begin_test("refresh_strip_whitespace_crlf")
+    qt_write_bytes("${QT_WORK_DIR}/crlf.txt" "a\\r\\nb\\r\\nc\\r\\nd\\r\\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add crlf.txt MESSAGE "add failed")
+    qt_write_bytes("${QT_WORK_DIR}/crlf.txt" "a\\r\\nB\\r\\nc\\r\\nd \\r\\ne \\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh --strip-trailing-whitespace)
+    qt_assert_success("${rc}" "refresh should succeed")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Removing trailing whitespace from line 5 of crlf.txt" "should strip only the LF line")
+    # "a\r\nB\r\nc\r\nd \r\ne\n"
+    qt_assert_file_hex("${QT_WORK_DIR}/crlf.txt" "610d0a420d0a630d0a64200d0a650a" "CRLF lines must be kept")
+    # "\n a\r\n-b\r\n+B\r\n c\r\n-d\r\n+d \r\n+e\n"
+    qt_assert_file_contains_hex("${QT_WORK_DIR}/patches/p.patch"
+        "0a20610d0a2d620d0a2b420d0a20630d0a2d640d0a2b64200d0a2b650a"
+        "patch should change only lines 2, 4 and 5, keeping CRLF")
+endfunction()
+
+# refresh -c --strip-trailing-whitespace strips added lines of a context diff
+function(qt_scenario_refresh_strip_whitespace_context)
+    qt_begin_test("refresh_strip_whitespace_context")
+    qt_write_bytes("${QT_WORK_DIR}/f.txt" "1\\n2\\n3\\n4\\n5\\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_bytes("${QT_WORK_DIR}/f.txt" "1 \\n2\\n3\\n4 \\n5\\n6\\t\\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh -c --strip-trailing-whitespace)
+    qt_assert_success("${rc}" "refresh should succeed")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Removing trailing whitespace from lines 1,4,6 of f.txt" "should report stripped lines")
+    qt_assert_file_hex("${QT_WORK_DIR}/f.txt" "310a320a330a340a350a360a" "added lines should be stripped")
+    qt_read_file_raw(patch_text "${QT_WORK_DIR}/patches/p.patch")
+    qt_assert_contains("${patch_text}" "\n! 1\n  2\n  3\n! 4\n  5\n+ 6\n" "patch should have stripped lines")
+endfunction()
+
+# A refresh --strip-trailing-whitespace that fails must not touch any file
+function(qt_scenario_refresh_strip_whitespace_diff_fail)
+    qt_begin_test("refresh_strip_whitespace_diff_fail")
+    qt_write_bytes("${QT_WORK_DIR}/a.txt" "x\\n")
+    qt_write_bytes("${QT_WORK_DIR}/f.bin" "\\0\\001")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add a.txt f.bin MESSAGE "add failed")
+    qt_write_bytes("${QT_WORK_DIR}/a.txt" "y \\n")
+    qt_write_bytes("${QT_WORK_DIR}/f.bin" "\\0\\002")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh --strip-trailing-whitespace)
+    qt_assert_failure("${rc}" "refresh should fail on a changed binary file")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Diff failed on file 'f.bin'" "should report diff failure")
+    qt_assert_not_contains("${combined}" "Removing trailing whitespace" "should not strip anything")
+    qt_assert_file_hex("${QT_WORK_DIR}/a.txt" "79200a" "a.txt must be untouched")
+    qt_assert_file_hex("${QT_WORK_DIR}/f.bin" "0002" "f.bin must be untouched")
 endfunction()
 
 function(qt_scenario_refresh_fork)
@@ -7054,6 +7159,16 @@ function(qt_run_named_scenario scenario)
         qt_scenario_refresh_strip_whitespace()
     elseif(scenario STREQUAL "refresh_strip_whitespace_warning")
         qt_scenario_refresh_strip_whitespace_warning()
+    elseif(scenario STREQUAL "refresh_strip_whitespace_binary")
+        qt_scenario_refresh_strip_whitespace_binary()
+    elseif(scenario STREQUAL "refresh_strip_whitespace_no_eol")
+        qt_scenario_refresh_strip_whitespace_no_eol()
+    elseif(scenario STREQUAL "refresh_strip_whitespace_crlf")
+        qt_scenario_refresh_strip_whitespace_crlf()
+    elseif(scenario STREQUAL "refresh_strip_whitespace_context")
+        qt_scenario_refresh_strip_whitespace_context()
+    elseif(scenario STREQUAL "refresh_strip_whitespace_diff_fail")
+        qt_scenario_refresh_strip_whitespace_diff_fail()
     elseif(scenario STREQUAL "refresh_fork")
         qt_scenario_refresh_fork()
     elseif(scenario STREQUAL "refresh_fork_named")

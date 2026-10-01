@@ -135,6 +135,33 @@ function(qt_assert_file_text path expected message_text)
     qt_assert_equal("${actual}" "${expected}" "${message_text}")
 endfunction()
 
+# Exact-bytes helpers. file(WRITE) cannot hold NUL, and file(READ) without
+# HEX folds CRLF into LF, so these use printf(1) and hex instead.
+
+# Write exact bytes given as a printf format (e.g. "a\\r\\n\\0")
+function(qt_write_bytes path format)
+    execute_process(COMMAND ${CMAKE_COMMAND} -E env printf "${format}"
+        OUTPUT_FILE "${path}" RESULT_VARIABLE rc)
+    if(NOT rc EQUAL 0)
+        qt_fail("printf failed writing ${path}")
+    endif()
+endfunction()
+
+# Compare a file's exact bytes, given as lowercase hex (e.g. "0d0a" for CRLF)
+function(qt_assert_file_hex path expected_hex message_text)
+    file(READ "${path}" actual HEX)
+    qt_assert_equal("${actual}" "${expected_hex}" "${message_text}")
+endfunction()
+
+# Assert a file contains a byte sequence, given as lowercase hex
+function(qt_assert_file_contains_hex path needle_hex message_text)
+    file(READ "${path}" content HEX)
+    # (..)* keeps the match aligned to whole bytes
+    if(NOT content MATCHES "^(..)*${needle_hex}")
+        qt_fail("${message_text}")
+    endif()
+endfunction()
+
 function(qt_assert_file_contains path needle message_text)
     qt_read_file_raw(content "${path}")
     qt_assert_contains("${content}" "${needle}" "${message_text}")
