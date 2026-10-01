@@ -721,8 +721,11 @@ static std::vector<Hunk> build_hunks(const std::vector<EditOp> &ops,
     std::vector<ChangeRange> merged;
     merged.push_back(changes[0]);
     for (ptrdiff_t i = 1; i < std::ssize(changes); ++i) {
-        // If the context windows overlap or are adjacent, merge
-        if (changes[checked_cast<size_t>(i)].first - merged.back().last <= 2 * context_lines) {
+        // Like GNU diff, merge when no more than twice the context
+        // lines separate the changes, so the context windows overlap or
+        // are adjacent
+        ptrdiff_t gap = changes[checked_cast<size_t>(i)].first - merged.back().last - 1;
+        if (gap <= 2 * context_lines) {
             merged.back().last = changes[checked_cast<size_t>(i)].last;
         } else {
             merged.push_back(changes[checked_cast<size_t>(i)]);

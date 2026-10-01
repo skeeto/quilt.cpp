@@ -475,6 +475,7 @@ set(QUILT_TEST_SCENARIOS
     fold_subdirectory
     fold_subdirectory_rollback
     diff_context_line_ranges
+    diff_hunk_context_gap
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -8170,6 +8171,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_fold_fail_rollback_create_delete()
     elseif(scenario STREQUAL "diff_context_line_ranges")
         qt_scenario_diff_context_line_ranges()
+    elseif(scenario STREQUAL "diff_hunk_context_gap")
+        qt_scenario_diff_hunk_context_gap()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -13426,4 +13429,27 @@ function(qt_scenario_diff_context_line_ranges)
     qt_assert_equal("${out}"
         "*** a/g.txt\n--- b/g.txt\n***************\n*** 1 ****\n--- 1,2 ----\n+ X\n  a\n"
         "a one-line old range should be a single number")
+endfunction()
+
+# diff_hunk_context_gap: like GNU diff, changes no more than twice the
+# context lines apart share one hunk
+function(qt_scenario_diff_hunk_context_gap)
+    qt_begin_test("diff_hunk_context_gap")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "1\na\nb\nc\nd\ne\nf\n2\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "X\na\nb\nc\nd\ne\nf\nY\n")
+    set(diff_args diff -p ab --no-index --no-timestamps)
+    qt_quilt_ok(OUTPUT out ARGS ${diff_args} -u MESSAGE "diff -u failed")
+    qt_assert_equal("${out}"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -1,8 +1,8 @@\n-1\n+X\n a\n b\n c\n d\n e\n f\n-2\n+Y\n"
+        "changes six unchanged lines apart should share a hunk with -u")
+    qt_quilt_ok(OUTPUT out ARGS ${diff_args} -c MESSAGE "diff -c failed")
+    qt_assert_equal("${out}"
+        "*** a/f.txt\n--- b/f.txt\n***************\n*** 1,8 ****\n! 1\n  a\n  b\n  c\n  d\n  e\n  f\n! 2\n--- 1,8 ----\n! X\n  a\n  b\n  c\n  d\n  e\n  f\n! Y\n"
+        "changes six unchanged lines apart should share a hunk with -c")
+    qt_quilt_ok(OUTPUT out ARGS ${diff_args} -U 2 MESSAGE "diff -U 2 failed")
+    qt_assert_equal("${out}"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n-1\n+X\n a\n b\n@@ -6,3 +6,3 @@\n e\n f\n-2\n+Y\n"
+        "changes six unchanged lines apart should get two hunks with -U 2")
 endfunction()
