@@ -266,6 +266,7 @@ inline std::string subdir_path(const QuiltState &q, std::string_view file) {
 bool ensure_pc_dir(QuiltState &q);
 std::string pc_patch_dir(const QuiltState &q, std::string_view patch);
 std::vector<std::string> files_in_patch(const QuiltState &q, std::string_view patch);
+std::vector<std::string> files_in_patch_ordered(const QuiltState &q, std::string_view patch);
 bool backup_file(QuiltState &q, std::string_view patch, std::string_view file);
 bool restore_file(QuiltState &q, std::string_view patch, std::string_view file);
 std::vector<std::string> read_series(std::string_view path,

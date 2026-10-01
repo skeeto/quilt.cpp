@@ -524,6 +524,7 @@ set(QUILT_TEST_SCENARIOS
     refresh_z_increments_suffix
     refresh_z_next_filename_shapes
     refresh_z_patches_dir_name
+    refresh_diff_patch_order
     fork_next_filename_shapes
     fork_target_exists
     fork_patches_prefix
@@ -8256,6 +8257,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_refresh_empty_unchanged()
     elseif(scenario STREQUAL "diff_combine_equals")
         qt_scenario_diff_combine_equals()
+    elseif(scenario STREQUAL "refresh_diff_patch_order")
+        qt_scenario_refresh_diff_patch_order()
     elseif(scenario STREQUAL "refresh_sorted_default")
         qt_scenario_refresh_sorted_default()
     elseif(scenario STREQUAL "diff_P_shadowed")
@@ -10845,6 +10848,62 @@ function(qt_scenario_diff_combine_equals)
 endfunction()
 
 # refresh_sorted_default: refresh should output files in sorted order by default
+# Without --sort, refresh and diff list files in the order the patch file
+# names them, then the rest sorted, like upstream's files_in_patch_ordered
+function(qt_order_of out_var text)
+    string(REGEX MATCHALL "\n\\+\\+\\+ b/[a-z]" lines "\n${text}")
+    string(REPLACE "\n+++ b/" "" lines "${lines}")
+    string(REPLACE ";" "" lines "${lines}")
+    set(${out_var} "${lines}" PARENT_SCOPE)
+endfunction()
+
+function(qt_scenario_refresh_diff_patch_order)
+    qt_begin_test("refresh_diff_patch_order")
+    foreach(f a b c d)
+        qt_write_file("${QT_WORK_DIR}/${f}" "${f}\n")
+    endforeach()
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add a c d MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch" [=[--- a/d
++++ b/d
+@@ -1 +1 @@
+-d
++d1
+--- a/c
++++ b/c
+@@ -1 +1 @@
+-c
++c1
+]=])
+    foreach(f a c d)
+        qt_write_file("${QT_WORK_DIR}/${f}" "${f}1\n")
+    endforeach()
+    qt_quilt_ok(OUTPUT out ERROR err ARGS diff -p ab MESSAGE "diff failed")
+    qt_order_of(order "${out}")
+    qt_assert_equal("${order}" "dca" "diff should follow the patch's order")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS diff -p ab --sort MESSAGE "diff --sort failed")
+    qt_order_of(order "${out}")
+    qt_assert_equal("${order}" "acd" "diff --sort should sort")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS diff -p ab a c MESSAGE "diff a c failed")
+    qt_order_of(order "${out}")
+    qt_assert_equal("${order}" "ca" "diff with files should follow the patch's order")
+
+    qt_quilt_ok(ARGS refresh -p ab MESSAGE "refresh failed")
+    qt_read_file_raw(text "${QT_WORK_DIR}/patches/p.patch")
+    qt_order_of(order "${text}")
+    qt_assert_equal("${order}" "dca" "refresh should follow the patch's order")
+    qt_quilt_ok(ARGS add b MESSAGE "add b failed")
+    qt_write_file("${QT_WORK_DIR}/b" "b1\n")
+    qt_quilt_ok(ARGS refresh -p ab MESSAGE "refresh with b failed")
+    qt_read_file_raw(text "${QT_WORK_DIR}/patches/p.patch")
+    qt_order_of(order "${text}")
+    qt_assert_equal("${order}" "dcab" "a new file should follow the patch's files")
+    qt_quilt_ok(ARGS refresh -p ab --sort MESSAGE "refresh --sort failed")
+    qt_read_file_raw(text "${QT_WORK_DIR}/patches/p.patch")
+    qt_order_of(order "${text}")
+    qt_assert_equal("${order}" "abcd" "refresh --sort should sort")
+endfunction()
+
 function(qt_scenario_refresh_sorted_default)
     qt_begin_test("refresh_sorted_default")
     qt_write_file("${QT_WORK_DIR}/z.txt" "z\n")
@@ -10855,12 +10914,13 @@ function(qt_scenario_refresh_sorted_default)
     qt_write_file("${QT_WORK_DIR}/z.txt" "Z\n")
     qt_write_file("${QT_WORK_DIR}/a.txt" "A\n")
     qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
-    # In the patch file, a.txt should come before z.txt
+    # With no patch file yet to give an order, files are sorted, so a.txt
+    # comes before z.txt
     file(READ "${QT_WORK_DIR}/patches/p.patch" patch_text)
     string(FIND "${patch_text}" "a.txt" a_pos)
     string(FIND "${patch_text}" "z.txt" z_pos)
     if(a_pos GREATER_EQUAL z_pos)
-        qt_fail("refresh should output files in sorted order (a.txt before z.txt)")
+        qt_fail("a first refresh should output files in sorted order (a.txt before z.txt)")
     endif()
 endfunction()
 

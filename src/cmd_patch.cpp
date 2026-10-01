@@ -645,7 +645,7 @@ static std::vector<std::string> collect_files_for_patches(
     std::vector<std::string> files;
     std::set<std::string> seen;
     for (const auto &patch : patches) {
-        append_unique_files(files, seen, files_in_patch(q, patch));
+        append_unique_files(files, seen, files_in_patch_ordered(q, patch));
     }
     return files;
 }
@@ -1106,7 +1106,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     std::string p_format;
     bool no_timestamps = !get_env("QUILT_NO_DIFF_TIMESTAMPS").empty();
     bool no_index = !get_env("QUILT_NO_DIFF_INDEX").empty();
-    bool sort_files = true;
+    bool sort_files = false;
     bool force = false;
     std::string diff_type;
     std::string context_num;
@@ -1327,9 +1327,13 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     }
 
     // Get files tracked by this patch
-    auto tracked = files_in_patch(q, patch);
+    // Like upstream, the patch's own order unless --sort is given
+    std::vector<std::string> tracked;
     if (sort_files) {
+        tracked = files_in_patch(q, patch);
         std::ranges::sort(tracked);
+    } else {
+        tracked = files_in_patch_ordered(q, patch);
     }
 
     // Read existing patch file for header
@@ -1553,7 +1557,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
     bool since_refresh = false;
     bool against_snapshot = false;
     bool reverse = false;
-    bool sort_files = true;
+    bool sort_files = false;
     std::string diff_utility;
     std::optional<std::string_view> combine_arg;
     std::string diff_type = "u";
@@ -1730,7 +1734,9 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
         }
 
         std::set<std::string> seen;
-        append_unique_files(tracked, seen, files_in_patch(q, SNAPSHOT_PATCH));
+        auto snapshot_files = files_in_patch(q, SNAPSHOT_PATCH);
+        std::ranges::sort(snapshot_files);
+        append_unique_files(tracked, seen, snapshot_files);
         append_unique_files(tracked, seen, collect_files_for_patches(q, patches));
     } else if (!combine_start.empty()) {
         // Collect files across the combine range
@@ -1743,11 +1749,12 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
         }
         tracked = collect_files_for_patches(q, combine_range);
     } else {
-        tracked = files_in_patch(q, patch);
+        tracked = files_in_patch_ordered(q, patch);
     }
 
     apply_file_filter(tracked, file_filter);
 
+    // Like upstream, files go in the order first seen unless --sort is given
     if (sort_files) {
         std::ranges::sort(tracked);
     }

@@ -1046,6 +1046,82 @@ std::vector<std::string> files_in_patch(const QuiltState &q, std::string_view pa
     return result;
 }
 
+// File names in the patch file, in order, like upstream's
+// filenames_in_patch: a loose scan of ---, +++, and *** lines anywhere in
+// the file, with the series strip level applied.
+static std::vector<std::string> filenames_in_patch(const QuiltState &q,
+                                                   std::string_view patch) {
+    std::vector<std::string> names;
+    std::string path = path_join(q.work_dir, q.patches_dir, patch);
+    if (!file_exists(path)) return names;
+    std::string content = read_file(path);
+    int strip = q.get_strip_level(patch);
+    std::set<std::string, std::less<>> seen;
+
+    std::string_view rest = content;
+    while (!rest.empty()) {
+        ptrdiff_t nl = str_find(rest, '\n');
+        std::string_view line = nl < 0 ? rest : rest.substr(0, checked_cast<size_t>(nl));
+        rest.remove_prefix(nl < 0 ? rest.size() : checked_cast<size_t>(nl + 1));
+
+        // The first and third whitespace-separated fields, like awk's
+        std::string_view fields[3];
+        std::string_view scan = line;
+        for (auto &field : fields) {
+            while (!scan.empty() && (scan[0] == ' ' || scan[0] == '\t')) scan.remove_prefix(1);
+            ptrdiff_t end = 0;
+            while (end < std::ssize(scan) && scan[checked_cast<size_t>(end)] != ' ' &&
+                   scan[checked_cast<size_t>(end)] != '\t') ++end;
+            field = scan.substr(0, checked_cast<size_t>(end));
+            scan.remove_prefix(checked_cast<size_t>(end));
+        }
+        if (!(fields[0] == "+++" || (fields[0] == "---" && fields[2] != "----") ||
+              (fields[0] == "***" && fields[2] != "****"))) continue;
+        if (std::ssize(line) < 4 || line[3] != ' ') continue;
+        std::string_view name = line.substr(4);
+
+        if (name.starts_with('"')) {
+            // Up to the first quote that ends the line or precedes a tab
+            name.remove_prefix(1);
+            for (ptrdiff_t i = 0; i < std::ssize(name); ++i) {
+                if (name[checked_cast<size_t>(i)] == '"' &&
+                    (i + 1 == std::ssize(name) || name[checked_cast<size_t>(i + 1)] == '\t')) {
+                    name = name.substr(0, checked_cast<size_t>(i));
+                    break;
+                }
+            }
+        } else {
+            ptrdiff_t tab = str_find(name, '\t');
+            if (tab >= 0) name = name.substr(0, checked_cast<size_t>(tab));
+        }
+        if (name.empty() || name == "/dev/null") continue;
+
+        for (int n = 0; n < strip; ++n) {
+            ptrdiff_t slash = str_find(name, '/');
+            if (slash > 0) name.remove_prefix(checked_cast<size_t>(slash + 1));
+        }
+        if (seen.insert(std::string(name)).second) names.emplace_back(name);
+    }
+    return names;
+}
+
+std::vector<std::string> files_in_patch_ordered(const QuiltState &q, std::string_view patch) {
+    // Like upstream: the patch's files in the order its patch file names
+    // them, then any others in sorted order
+    auto files = files_in_patch(q, patch);
+    std::ranges::sort(files);
+    std::set<std::string, std::less<>> tracked(files.begin(), files.end());
+    std::vector<std::string> result;
+    std::set<std::string, std::less<>> placed;
+    for (auto &name : filenames_in_patch(q, patch)) {
+        if (tracked.contains(name) && placed.insert(name).second) result.push_back(name);
+    }
+    for (auto &file : files) {
+        if (!placed.contains(file)) result.push_back(file);
+    }
+    return result;
+}
+
 bool backup_file(QuiltState &q, std::string_view patch, std::string_view file) {
     std::string src = path_join(q.work_dir, file);
     std::string dst = path_join(pc_patch_dir(q, patch), file);
