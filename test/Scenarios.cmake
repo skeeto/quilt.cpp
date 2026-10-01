@@ -9956,8 +9956,10 @@ function(qt_scenario_fork_applied_not_in_series)
     file(MAKE_DIRECTORY "${QT_WORK_DIR}/patches")
     file(MAKE_DIRECTORY "${QT_WORK_DIR}/.pc")
     # Series has "other.patch" only; applied-patches has "ghost.patch" (not in series)
-    qt_write_file("${QT_WORK_DIR}/patches/series" "other.patch\n")
+    # Upstream checks the series against the applied patches only when
+    # applied-patches is not newer, so write it first
     qt_write_file("${QT_WORK_DIR}/.pc/applied-patches" "ghost.patch\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "other.patch\n")
     qt_write_file("${QT_WORK_DIR}/.pc/.version" "2\n")
     qt_write_file("${QT_WORK_DIR}/.pc/.quilt_patches" "patches\n")
     qt_write_file("${QT_WORK_DIR}/.pc/.quilt_series" "series\n")
@@ -10044,8 +10046,10 @@ function(qt_scenario_top_index_applied_not_in_series)
     file(MAKE_DIRECTORY "${QT_WORK_DIR}/patches")
     file(MAKE_DIRECTORY "${QT_WORK_DIR}/.pc")
     # Series: "other.patch" only. Applied: "ghost.patch" (not in series).
-    qt_write_file("${QT_WORK_DIR}/patches/series" "other.patch\n")
+    # Upstream checks the series against the applied patches only when
+    # applied-patches is not newer, so write it first
     qt_write_file("${QT_WORK_DIR}/.pc/applied-patches" "ghost.patch\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "other.patch\n")
     qt_write_file("${QT_WORK_DIR}/.pc/.version" "2\n")
     qt_write_file("${QT_WORK_DIR}/.pc/.quilt_patches" "patches\n")
     qt_write_file("${QT_WORK_DIR}/.pc/.quilt_series" "series\n")
