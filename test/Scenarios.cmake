@@ -36,6 +36,9 @@ set(QUILT_TEST_SCENARIOS
     import_missing_source
     import_strip_level
     import_strip_level_default
+    import_strip_level_attached
+    import_attached_P_d
+    import_dup_invalid_mode
     import_reversed
     import_reversed_strip
     import_dup_keep_old
@@ -1246,6 +1249,60 @@ function(qt_scenario_import_strip_level_default)
     qt_quilt_ok(ARGS import "${QT_TEST_BASE}/ext.patch" MESSAGE "import failed")
     # Series should NOT contain -p (default strip level 1)
     qt_assert_file_not_contains("${QT_WORK_DIR}/patches/series" "-p" "series should not contain -p for default strip level")
+endfunction()
+
+function(qt_scenario_import_strip_level_attached)
+    qt_begin_test("import_strip_level_attached")
+    qt_write_file("${QT_WORK_DIR}/x.diff" [=[--- f.txt
++++ f.txt
+@@ -1 +1 @@
+-x
++y
+]=])
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    # getopt accepts the value attached to the option
+    qt_quilt_ok(ARGS import -p0 x.diff MESSAGE "import -p0 failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "x.diff -p0" "series should record -p0")
+    qt_quilt_ok(ARGS push MESSAGE "push after import -p0 failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "y" "file content after push with -p0")
+endfunction()
+
+function(qt_scenario_import_attached_P_d)
+    qt_begin_test("import_attached_P_d")
+    qt_write_file("${QT_TEST_BASE}/old.patch" [=[Old Header Line
+--- a/f.txt
++++ b/f.txt
+@@ -1 +1 @@
+-x
++y
+]=])
+    qt_write_file("${QT_TEST_BASE}/new.patch" [=[New Header Line
+--- a/f.txt
++++ b/f.txt
+@@ -1 +1 @@
+-x
++z
+]=])
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS import -Pfoo.diff "${QT_TEST_BASE}/old.patch" MESSAGE "import -Pfoo.diff failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "foo.diff" "series should name the -P patch")
+    qt_quilt_ok(ARGS import -f -do -Pfoo.diff "${QT_TEST_BASE}/new.patch" MESSAGE "import -f -do failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "foo.diff" "re-import should not add a series entry")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/foo.diff" "Old Header" "-do should keep the old header")
+    qt_assert_file_not_contains("${QT_WORK_DIR}/patches/foo.diff" "New Header" "-do should drop the new header")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/foo.diff" "+z" "-do should use the new diff")
+endfunction()
+
+function(qt_scenario_import_dup_invalid_mode)
+    qt_begin_test("import_dup_invalid_mode")
+    qt_write_file("${QT_WORK_DIR}/x.diff" "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+y\n")
+    foreach(args IN ITEMS "-d;x" "-dx")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS import ${args} x.diff)
+        qt_assert_failure("${rc}" "import ${args} should reject the header mode")
+        qt_combine_output(combined "${out}" "${err}")
+        qt_assert_contains("${combined}" "Usage: quilt import" "import ${args} should print usage")
+        qt_assert_not_exists("${QT_WORK_DIR}/patches/x.diff" "import ${args} should not store the patch")
+    endforeach()
 endfunction()
 
 function(qt_scenario_import_reversed)
@@ -6840,6 +6897,12 @@ function(qt_run_named_scenario scenario)
         qt_scenario_import_strip_level()
     elseif(scenario STREQUAL "import_strip_level_default")
         qt_scenario_import_strip_level_default()
+    elseif(scenario STREQUAL "import_strip_level_attached")
+        qt_scenario_import_strip_level_attached()
+    elseif(scenario STREQUAL "import_attached_P_d")
+        qt_scenario_import_attached_P_d()
+    elseif(scenario STREQUAL "import_dup_invalid_mode")
+        qt_scenario_import_dup_invalid_mode()
     elseif(scenario STREQUAL "import_reversed")
         qt_scenario_import_reversed()
     elseif(scenario STREQUAL "import_reversed_strip")

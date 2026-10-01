@@ -310,18 +310,31 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
     bool reversed = false;
     std::vector<std::string> patchfiles;
 
+    constexpr std::string_view usage =
+        "Usage: quilt import [-p num] [-R] [-P patch] [-f] [-d {o|a|n}] patchfile ...";
+
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
         if (arg == "-p" && i + 1 < argc) {
             strip_level = checked_cast<int>(parse_int(argv[++i]));
+        } else if (arg.starts_with("-p") && std::ssize(arg) > 2) {
+            strip_level = checked_cast<int>(parse_int(arg.substr(2)));
         } else if (arg == "-R") {
             reversed = true;
         } else if (arg == "-P" && i + 1 < argc) {
             target_name = strip_patches_prefix(q, argv[++i]);
+        } else if (arg.starts_with("-P") && std::ssize(arg) > 2) {
+            target_name = strip_patches_prefix(q, arg.substr(2));
         } else if (arg == "-f") {
             force = true;
-        } else if (arg == "-d" && i + 1 < argc) {
-            dup_mode = argv[++i][0];
+        } else if ((arg == "-d" && i + 1 < argc) ||
+                   (arg.starts_with("-d") && std::ssize(arg) > 2)) {
+            std::string_view mode = arg == "-d" ? argv[++i] : arg.substr(2);
+            if (mode != "o" && mode != "a" && mode != "n") {
+                err_line(usage);
+                return 1;
+            }
+            dup_mode = mode[0];
         } else if (arg[0] == '-') {
             err("Unrecognized option: "); err_line(arg);
             return 1;
@@ -331,7 +344,7 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
     }
 
     if (patchfiles.empty()) {
-        err_line("Usage: quilt import [-p num] [-R] [-P patch] [-f] [-d {o|a|n}] patchfile ...");
+        err_line(usage);
         return 1;
     }
 
