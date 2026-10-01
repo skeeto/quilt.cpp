@@ -474,6 +474,7 @@ set(QUILT_TEST_SCENARIOS
     fold_fail_rollback
     fold_subdirectory
     fold_subdirectory_rollback
+    diff_context_line_ranges
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -8167,6 +8168,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_fold_fail_rollback()
     elseif(scenario STREQUAL "fold_fail_rollback_create_delete")
         qt_scenario_fold_fail_rollback_create_delete()
+    elseif(scenario STREQUAL "diff_context_line_ranges")
+        qt_scenario_diff_context_line_ranges()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -13401,4 +13404,26 @@ function(qt_scenario_fold_fail_rollback_create_delete)
     qt_assert_equal("${out}" "" "fold should add no files to the top patch")
     qt_assert_not_exists("${QT_WORK_DIR}/.pc/top.diff/sub" "no backup directory should remain")
     qt_assert_not_exists("${QT_WORK_DIR}/.pc/top.diff/d" "no backup directory should remain")
+endfunction()
+
+# diff_context_line_ranges: like GNU diff, a context diff names a range of
+# one line, or the line before an empty range, by a single number
+function(qt_scenario_diff_context_line_ranges)
+    qt_begin_test("diff_context_line_ranges")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nb\nc\n")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt g.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "X\na\nc\n")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "X\na\n")
+    qt_quilt_ok(OUTPUT out ARGS diff -p ab --no-index --no-timestamps -C 0 f.txt
+                MESSAGE "diff -C 0 failed")
+    qt_assert_equal("${out}"
+        "*** a/f.txt\n--- b/f.txt\n***************\n*** 0 ****\n--- 1 ----\n+ X\n***************\n*** 2 ****\n- b\n--- 2 ----\n"
+        "one-line and empty ranges should be a single number")
+    qt_quilt_ok(OUTPUT out ARGS diff -p ab --no-index --no-timestamps -c g.txt
+                MESSAGE "diff -c failed")
+    qt_assert_equal("${out}"
+        "*** a/g.txt\n--- b/g.txt\n***************\n*** 1 ****\n--- 1,2 ----\n+ X\n  a\n"
+        "a one-line old range should be a single number")
 endfunction()

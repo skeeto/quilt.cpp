@@ -883,6 +883,15 @@ static std::string format_unified(
     return result;
 }
 
+// A context diff range: "start,end", or like GNU diff a single number for
+// one line, or for an empty range the line before it.
+static std::string context_range(ptrdiff_t start, ptrdiff_t count)
+{
+    if (count > 1)
+        return std::format("{},{}", start, start + count - 1);
+    return std::format("{}", start);
+}
+
 // Format context diff output
 static std::string format_context(
     std::span<const std::string_view> old_lines,
@@ -948,8 +957,8 @@ static std::string format_context(
         }
 
         // Old range header
-        ptrdiff_t oe = hunk.old_count == 0 ? hunk.old_start : hunk.old_start + hunk.old_count - 1;
-        result += std::format("*** {},{} ****\n", hunk.old_start, oe);
+        result += std::format("*** {} ****\n",
+                              context_range(hunk.old_start, hunk.old_count));
 
         // Print old-side lines only if there are changes (not just context)
         bool has_old_changes = false;
@@ -969,8 +978,8 @@ static std::string format_context(
         }
 
         // New range header
-        ptrdiff_t ne = hunk.new_count == 0 ? hunk.new_start : hunk.new_start + hunk.new_count - 1;
-        result += std::format("--- {},{} ----\n", hunk.new_start, ne);
+        result += std::format("--- {} ----\n",
+                              context_range(hunk.new_start, hunk.new_count));
 
         // Print new-side lines only if there are changes
         bool has_new_changes = false;
