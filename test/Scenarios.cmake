@@ -323,6 +323,7 @@ set(QUILT_TEST_SCENARIOS
     push_offset_one_line
     push_backward_offset
     push_hunk_past_eof
+    push_hunk_huge_line_number
     push_new_file_subdir
     push_crlf_patch
     push_fuzz_preserves_lines
@@ -7742,6 +7743,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_push_backward_offset()
     elseif(scenario STREQUAL "push_hunk_past_eof")
         qt_scenario_push_hunk_past_eof()
+    elseif(scenario STREQUAL "push_hunk_huge_line_number")
+        qt_scenario_push_hunk_huge_line_number()
     elseif(scenario STREQUAL "push_new_file_subdir")
         qt_scenario_push_new_file_subdir()
     elseif(scenario STREQUAL "builtin_patch_empty_file_content")
@@ -8768,6 +8771,29 @@ function(qt_scenario_push_hunk_past_eof)
     qt_assert_success("${rc}" "push should apply the hunk at line 1")
     qt_combine_output(combined "${out}" "${err}")
     qt_assert_contains("${combined}" "Hunk #1 succeeded at 1 (offset -99999999998 lines)." "should report the offset")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "a\nB\nc" "push should apply the change")
+endfunction()
+
+# push_hunk_huge_line_number: a hunk header line number near the ptrdiff_t
+# limit must not overflow the hunk search. UBSAN_OPTIONS makes undefined
+# behavior fatal in sanitized builds; other builds ignore it.
+function(qt_scenario_push_hunk_huge_line_number)
+    qt_begin_test("push_hunk_huge_line_number")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nb\nc\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.patch\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch" [=[
+--- a/f.txt
++++ b/f.txt
+@@ -5555555255554555554,3 +5555555255554555554,3 @@
+ a
+-b
++B
+ c
+]=])
+    qt_quilt(RESULT rc OUTPUT out ERROR err ENV "UBSAN_OPTIONS=halt_on_error=1" ARGS push)
+    qt_assert_success("${rc}" "push should apply the hunk at line 1")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Hunk #1 succeeded at 1 (offset -5555555255554555553 lines)." "should report the offset")
     qt_assert_file_text("${QT_WORK_DIR}/f.txt" "a\nB\nc" "push should apply the change")
 endfunction()
 

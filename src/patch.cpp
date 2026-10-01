@@ -808,19 +808,26 @@ static ptrdiff_t locate_hunk(std::span<const std::string> file_lines,
                                         first_guess - max_search});
 
         for (ptrdiff_t delta = min_range; delta <= max_range; ++delta) {
+            // Each direction is bounded before its position is computed,
+            // so a guess from a huge line number cannot overflow.
+
             // Try forward
-            ptrdiff_t pos = first_guess + delta;
-            if (pos >= 0 && pos <= max_search && pos > last_frozen_line - 1) {
-                if (try_match(file_lines, pos, pattern, fuzz, ctx.prefix, ctx.suffix)) {
-                    return pos;
+            if (delta <= max_offset_forward) {
+                ptrdiff_t pos = first_guess + delta;
+                if (pos >= 0 && pos <= max_search && pos > last_frozen_line - 1) {
+                    if (try_match(file_lines, pos, pattern, fuzz, ctx.prefix, ctx.suffix)) {
+                        return pos;
+                    }
                 }
             }
 
             // Try backward
-            pos = first_guess - delta;
-            if (pos >= 0 && pos <= max_search && pos > last_frozen_line - 1) {
-                if (try_match(file_lines, pos, pattern, fuzz, ctx.prefix, ctx.suffix)) {
-                    return pos;
+            if (delta <= max_offset_backward) {
+                ptrdiff_t pos = first_guess - delta;
+                if (pos >= 0 && pos <= max_search && pos > last_frozen_line - 1) {
+                    if (try_match(file_lines, pos, pattern, fuzz, ctx.prefix, ctx.suffix)) {
+                        return pos;
+                    }
                 }
             }
         }
