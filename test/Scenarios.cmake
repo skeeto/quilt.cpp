@@ -376,7 +376,11 @@ set(QUILT_TEST_SCENARIOS
     pop_force_refresh_conflict
     pop_empty_patch
     applied_patches_removed_when_empty
+    files_all_no_applied
     delete_n_explicit
+    header_mode_conflict
+    header_empty_stdin
+    import_preserves_series_args
     prefixed_args_delete
 )
 
@@ -7593,8 +7597,16 @@ function(qt_run_named_scenario scenario)
         qt_scenario_pop_empty_patch()
     elseif(scenario STREQUAL "applied_patches_removed_when_empty")
         qt_scenario_applied_patches_removed_when_empty()
+    elseif(scenario STREQUAL "files_all_no_applied")
+        qt_scenario_files_all_no_applied()
     elseif(scenario STREQUAL "delete_n_explicit")
         qt_scenario_delete_n_explicit()
+    elseif(scenario STREQUAL "header_mode_conflict")
+        qt_scenario_header_mode_conflict()
+    elseif(scenario STREQUAL "header_empty_stdin")
+        qt_scenario_header_empty_stdin()
+    elseif(scenario STREQUAL "import_preserves_series_args")
+        qt_scenario_import_preserves_series_args()
     elseif(scenario STREQUAL "prefixed_args_delete")
         qt_scenario_prefixed_args_delete()
     else()
@@ -10776,6 +10788,32 @@ function(qt_scenario_applied_patches_removed_when_empty)
     qt_assert_not_exists("${QT_WORK_DIR}/.pc/applied-patches" "applied-patches should be removed when delete empties the stack")
 endfunction()
 
+function(qt_scenario_files_all_no_applied)
+    qt_begin_test("files_all_no_applied")
+    # No series file at all
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS files -a)
+    qt_assert_failure("${rc}" "files -a without a series file should fail")
+    qt_assert_contains("${err}" "No series file found" "missing series file should be reported")
+    qt_quilt(RESULT rc1 OUTPUT out1 ERROR err1 ARGS files)
+    qt_assert_failure("${rc1}" "files without a series file should fail")
+    qt_assert_contains("${err1}" "No series file found" "missing series file should be reported")
+    # Empty series file
+    qt_write_file("${QT_WORK_DIR}/patches/series" "")
+    qt_quilt(RESULT rc2 OUTPUT out2 ERROR err2 ARGS files -a)
+    qt_assert_failure("${rc2}" "files -a with an empty series should fail")
+    qt_assert_contains("${err2}" "No patches in series" "empty series should be reported")
+    # Series file with a patch, but nothing applied
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_quilt(RESULT rc3 OUTPUT out3 ERROR err3 ARGS files -a)
+    qt_assert_failure("${rc3}" "files -a with nothing applied should fail")
+    qt_assert_contains("${err3}" "No patches applied" "empty stack should be reported")
+endfunction()
+
 function(qt_scenario_delete_n_explicit)
     qt_begin_test("delete_n_explicit")
     qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
@@ -10796,6 +10834,61 @@ function(qt_scenario_delete_n_explicit)
     qt_assert_contains("${combined2}" "Usage: quilt delete" "usage should be printed")
     qt_assert_file_text("${QT_WORK_DIR}/patches/series" "p.patch\nq.patch" "series should be unchanged")
     qt_assert_exists("${QT_WORK_DIR}/patches/p.patch" "patch file should be kept")
+endfunction()
+
+function(qt_scenario_header_mode_conflict)
+    qt_begin_test("header_mode_conflict")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS header -r INPUT "orig\n" MESSAGE "header -r failed")
+    # Different modes cannot be combined
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS header -a -r INPUT "new\n")
+    qt_assert_failure("${rc}" "header -a -r should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Usage: quilt header" "usage should be printed")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/p.patch" "orig" "header should be unchanged")
+    qt_assert_file_not_contains("${QT_WORK_DIR}/patches/p.patch" "new" "header should be unchanged")
+    # Repeating the same mode is fine
+    qt_quilt_ok(ARGS header -r -r INPUT "twice\n" MESSAGE "header -r -r failed")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/p.patch" "twice" "header should be replaced")
+    # Only one patch may be named
+    qt_quilt(RESULT rc2 OUTPUT out2 ERROR err2 ARGS header -r p.patch p.patch INPUT "x\n")
+    qt_assert_failure("${rc2}" "header with two patch arguments should fail")
+    qt_combine_output(combined2 "${out2}" "${err2}")
+    qt_assert_contains("${combined2}" "Usage: quilt header" "usage should be printed")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/p.patch" "twice" "header should be unchanged")
+endfunction()
+
+function(qt_scenario_header_empty_stdin)
+    qt_begin_test("header_empty_stdin")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS header -a INPUT "old header\n" MESSAGE "header -a failed")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/p.patch" "old header" "header should be appended")
+    # Replacing the header with empty input removes it
+    qt_quilt_ok(ARGS header -r MESSAGE "header -r failed")
+    qt_assert_file_not_contains("${QT_WORK_DIR}/patches/p.patch" "old header" "header should be removed")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/p.patch" "+y" "diff should be kept")
+endfunction()
+
+function(qt_scenario_import_preserves_series_args)
+    qt_begin_test("import_preserves_series_args")
+    qt_write_file("${QT_WORK_DIR}/p.patch" "--- a/b/f.txt\n+++ a/b/f.txt\n@@ -1 +1 @@\n-x\n+y\n")
+    qt_quilt_ok(ARGS import -R -p 2 p.patch MESSAGE "import -R -p 2 failed")
+    qt_append_file("${QT_WORK_DIR}/patches/series" "# keep me\n")
+    qt_quilt_ok(ARGS import -f p.patch MESSAGE "re-import failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "p.patch -p2 -R\n# keep me"
+                        "re-import should leave the series untouched")
+    # Options given on a re-import are ignored for the existing entry
+    qt_quilt_ok(ARGS import -f -p 0 p.patch MESSAGE "re-import with -p 0 failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "p.patch -p2 -R\n# keep me"
+                        "re-import options should be ignored")
 endfunction()
 
 function(qt_scenario_prefixed_args_delete)

@@ -508,20 +508,21 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
             }
         }
 
-        // Update per-patch metadata
-        if (strip_level >= 0 && strip_level != 1) {
-            q.patch_strip_level[name] = strip_level;
-        } else if (strip_level < 0) {
-            q.patch_strip_level.erase(name);
-        }
-        if (reversed) {
-            q.patch_reversed.insert(name);
-        } else {
-            q.patch_reversed.erase(name);
-        }
-
-        // Add to series if not already present
+        // Update per-patch metadata. When replacing an existing patch the
+        // original quilt leaves the series entry (and thus its -p/-R args)
+        // untouched.
         if (!existing) {
+            if (strip_level >= 0 && strip_level != 1) {
+                q.patch_strip_level[name] = strip_level;
+            } else if (strip_level < 0) {
+                q.patch_strip_level.erase(name);
+            }
+            if (reversed) {
+                q.patch_reversed.insert(name);
+            } else {
+                q.patch_reversed.erase(name);
+            }
+
             // Insert after top applied patch, or at end if none applied
             ptrdiff_t top_idx = q.top_index();
             auto new_series = q.series;
@@ -535,11 +536,6 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
                 return 1;
             }
             q.series = std::move(new_series);
-        } else {
-            // Overwriting existing patch — rewrite series for metadata update
-            if (!write_series_checked(q, q.series)) {
-                return 1;
-            }
         }
 
         if (existing && force) {
@@ -645,15 +641,22 @@ int cmd_header(QuiltState &q, int argc, char **argv) {
     bool opt_strip_ds = false;
     bool opt_strip_ws = false;
     std::string_view patch_arg;
+    bool mode_conflict = false;
+    int positional_count = 0;
+    // Repeating a mode is fine; combining different modes is not.
+    auto set_mode = [&](Mode m) {
+        if (mode != PRINT && mode != m) mode_conflict = true;
+        mode = m;
+    };
 
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
         if (arg == "-a") {
-            mode = APPEND;
+            set_mode(APPEND);
         } else if (arg == "-r") {
-            mode = REPLACE;
+            set_mode(REPLACE);
         } else if (arg == "-e") {
-            mode = EDIT;
+            set_mode(EDIT);
         } else if (arg == "--backup") {
             opt_backup = true;
         } else if (arg == "--dep3") {
@@ -667,7 +670,13 @@ int cmd_header(QuiltState &q, int argc, char **argv) {
             return 1;
         } else {
             patch_arg = strip_patches_prefix(q, arg);
+            ++positional_count;
         }
+    }
+
+    if (mode_conflict || positional_count > 1) {
+        err_line("Usage: quilt header [-a|-r|-e] [--backup] [--strip-diffstat] [--strip-trailing-whitespace] [patch]");
+        return 1;
     }
 
     // Determine patch
@@ -795,8 +804,14 @@ int cmd_files(QuiltState &q, int argc, char **argv) {
         target_patch = patch_arg;
     } else if (!q.applied.empty()) {
         target_patch = q.applied.back();
-    } else if (!opt_all) {
-        err_line("No patches applied");
+    } else {
+        if (!q.series_file_exists) {
+            err_line("No series file found");
+        } else if (q.series.empty()) {
+            err_line("No patches in series");
+        } else {
+            err_line("No patches applied");
+        }
         return 1;
     }
 
@@ -830,6 +845,12 @@ int cmd_files(QuiltState &q, int argc, char **argv) {
         }
     } else {
         patches_to_show.push_back(target_patch);
+    }
+
+    // files -a <patch> with nothing applied
+    if (patches_to_show.empty()) {
+        err_line("No patches applied");
+        return 1;
     }
 
     // With labels (-l): iterate patches, output per-patch file listings
