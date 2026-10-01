@@ -848,10 +848,10 @@ static std::string generate_diffstat(std::string_view diff)
             stats.back().removed++;
     }
 
-    if (stats.empty()) return {};
+    // Like diffstat(1), an empty diff gives just the summary
+    if (stats.empty()) return " 0 files changed\n";
 
-    // Leading "---" separator (matches git format-patch / original quilt)
-    std::string result = "---\n";
+    std::string result;
 
     // Find max filename width and max change count
     ptrdiff_t max_name = 0;
@@ -937,54 +937,6 @@ static std::string generate_diffstat(std::string_view diff)
     }
     result += '\n';
 
-    return result;
-}
-
-// Remove an existing diffstat section from a patch header.
-// Detects "---" separator followed by " file | N ++--" lines ending
-// with a "N file(s) changed" summary line.
-static std::string remove_diffstat_section(std::string_view header) {
-    auto lines = split_lines(header);
-    std::string result;
-    for (ptrdiff_t i = 0; i < std::ssize(lines); ++i) {
-        const auto &line = lines[checked_cast<size_t>(i)];
-
-        // Detect "---" separator followed by diffstat, or bare diffstat
-        ptrdiff_t ds_start = i;
-        if (line == "---" && i + 1 < std::ssize(lines)) {
-            ds_start = i + 1;
-        }
-
-        const auto &first = lines[checked_cast<size_t>(ds_start)];
-        if (!first.empty() && first[0] == ' ' &&
-            str_find(first, '|') >= 0) {
-            // Look ahead to confirm this is a diffstat block
-            bool found_summary = false;
-            ptrdiff_t summary_end = -1;
-            for (ptrdiff_t j = ds_start; j < std::ssize(lines); ++j) {
-                const auto &l = lines[checked_cast<size_t>(j)];
-                if (l.find("changed") != std::string::npos &&
-                    l.find("file") != std::string::npos) {
-                    found_summary = true;
-                    summary_end = j;
-                    break;
-                }
-                // If we hit an empty line or non-diffstat line, stop
-                if (l.empty() || (l[0] != ' ' && str_find(l, '|') < 0))
-                    break;
-            }
-            if (found_summary) {
-                // Skip the entire diffstat block including summary
-                i = summary_end;
-                // Also skip a trailing blank line after diffstat
-                if (i + 1 < std::ssize(lines) && lines[checked_cast<size_t>(i + 1)].empty())
-                    i++;
-                continue;
-            }
-        }
-        result += line;
-        result += '\n';
-    }
     return result;
 }
 
@@ -1603,29 +1555,13 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     }
     if (strip_patch) patch_content = std::move(stripped_content);
 
-    // Add diffstat to header if requested
+    // Like upstream, --diffstat replaces the diffstat in the old header,
+    // or adds one at its end, even when the diff is empty
     if (opt_diffstat) {
-        std::string diff_portion = patch_content.substr(checked_cast<size_t>(std::ssize(header)));
-        if (!diff_portion.empty()) {
-            std::string ds_out = generate_diffstat(diff_portion);
-            if (!ds_out.empty()) {
-                std::string clean_header = remove_diffstat_section(header);
-                // Remove trailing blank lines from header
-                while (std::ssize(clean_header) > 1 &&
-                       clean_header[checked_cast<size_t>(std::ssize(clean_header) - 1)] == '\n' &&
-                       clean_header[checked_cast<size_t>(std::ssize(clean_header) - 2)] == '\n') {
-                    clean_header.pop_back();
-                }
-                patch_content = clean_header;
-                if (!patch_content.empty() && patch_content.back() != '\n')
-                    patch_content += '\n';
-                patch_content += ds_out;
-                if (!ds_out.empty() && ds_out.back() != '\n')
-                    patch_content += '\n';
-                patch_content += '\n';
-                patch_content += diff_portion;
-            }
-        }
+        std::string diff_portion =
+            patch_content.substr(checked_cast<size_t>(std::ssize(header)));
+        patch_content = replace_diffstat(header, generate_diffstat(diff_portion)) +
+                        diff_portion;
     }
 
     // Like upstream, refreshing clears the .needs_refresh marker left by a

@@ -314,6 +314,23 @@ std::string patch_body(std::string_view patch) {
     return awk_lines(patch.substr(checked_cast<size_t>(split.body_start)));
 }
 
+// Remove the first line from s and return it without its '\n'
+static std::string_view take_line(std::string_view &s) {
+    ptrdiff_t nl = str_find(s, '\n');
+    ptrdiff_t len = nl < 0 ? std::ssize(s) : nl;
+    std::string_view line = s.substr(0, checked_cast<size_t>(len));
+    s.remove_prefix(checked_cast<size_t>(nl < 0 ? len : len + 1));
+    return line;
+}
+
+// /^#? .* files? changed/, how upstream's diffstat summary patterns start
+static bool is_diffstat_summary(std::string_view line) {
+    ptrdiff_t p = line.starts_with('#') ? 1 : 0;
+    return std::ssize(line) > p && line[checked_cast<size_t>(p)] == ' ' &&
+           (str_find(line, " file changed", p + 1) >= 0 ||
+            str_find(line, " files changed", p + 1) >= 0);
+}
+
 // Like upstream: lines matching /#? .* \| / are held until a line matching
 // /^#? .* files? changed/ drops them and itself, or any other line puts
 // them back. The awk script has no END rule, so lines still held at the
@@ -322,21 +339,14 @@ std::string strip_diffstat(std::string_view header) {
     std::string result;
     std::string held;
     while (!header.empty()) {
-        ptrdiff_t nl = str_find(header, '\n');
-        ptrdiff_t len = nl < 0 ? std::ssize(header) : nl;
-        std::string_view line = header.substr(0, checked_cast<size_t>(len));
-        header.remove_prefix(checked_cast<size_t>(nl < 0 ? len : len + 1));
-
+        std::string_view line = take_line(header);
         ptrdiff_t space = str_find(line, ' ');
         if (space >= 0 && str_find(line, " | ", space + 1) >= 0) {
             held += line;
             held += '\n';
             continue;
         }
-        ptrdiff_t p = line.starts_with('#') ? 1 : 0;
-        if (std::ssize(line) > p && line[checked_cast<size_t>(p)] == ' ' &&
-            (str_find(line, " file changed", p + 1) >= 0 ||
-             str_find(line, " files changed", p + 1) >= 0)) {
+        if (is_diffstat_summary(line)) {
             held.clear();
             continue;
         }
@@ -344,6 +354,75 @@ std::string strip_diffstat(std::string_view header) {
         result += line;
         result += '\n';
         held.clear();
+    }
+    return result;
+}
+
+// /^#? .* \|  *[1-9][0-9]* /, upstream refresh's diffstat file line
+static bool is_diffstat_file_line(std::string_view line) {
+    ptrdiff_t n = std::ssize(line);
+    ptrdiff_t p = line.starts_with('#') ? 1 : 0;
+    if (n <= p || line[checked_cast<size_t>(p)] != ' ') return false;
+    auto at = [&](ptrdiff_t i) { return line[checked_cast<size_t>(i)]; };
+    for (ptrdiff_t bar = str_find(line, " |", p + 1); bar >= 0;
+         bar = str_find(line, " |", bar + 1)) {
+        ptrdiff_t i = bar + 2;
+        if (i >= n || at(i) != ' ') continue;
+        while (i < n && at(i) == ' ') ++i;
+        if (i >= n || at(i) < '1' || at(i) > '9') continue;
+        while (i < n && at(i) >= '0' && at(i) <= '9') ++i;
+        if (i < n && at(i) == ' ') return true;
+    }
+    return false;
+}
+
+// Like upstream refresh --diffstat's awk script: diffstat file lines are
+// held. A summary line drops them and itself for the new diffstat, with
+// each line prefixed by "#" when the summary line starts with one. Any
+// other line puts the held lines back. With no summary line, the held
+// lines stay, and "---", the new diffstat and a line holding just the last
+// line's "#" prefix (if any) are added at the end, so an empty header
+// becomes "---", the diffstat and a blank line. Every other byte, CRs and
+// blank lines included, is kept.
+std::string replace_diffstat(std::string_view header, std::string_view diffstat) {
+    std::string result;
+    std::string held;
+    std::string_view prefix;
+    bool replaced = false;
+    auto put_diffstat = [&] {
+        for (std::string_view s = diffstat; !s.empty();) {
+            ptrdiff_t nl = str_find(s, '\n');
+            ptrdiff_t len = nl < 0 ? std::ssize(s) : nl + 1;
+            result += prefix;
+            result += s.substr(0, checked_cast<size_t>(len));
+            s.remove_prefix(checked_cast<size_t>(len));
+        }
+    };
+    while (!header.empty()) {
+        std::string_view line = take_line(header);
+        prefix = line.starts_with('#') ? "#" : "";
+        if (is_diffstat_file_line(line)) {
+            held += line;
+            held += '\n';
+            continue;
+        }
+        if (is_diffstat_summary(line)) {
+            put_diffstat();
+            replaced = true;
+            held.clear();
+            continue;
+        }
+        result += held;
+        result += line;
+        result += '\n';
+        held.clear();
+    }
+    result += held;
+    if (!replaced) {
+        result += "---\n";
+        put_diffstat();
+        result += prefix;
+        result += '\n';
     }
     return result;
 }

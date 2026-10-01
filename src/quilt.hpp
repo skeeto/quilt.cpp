@@ -99,6 +99,9 @@ std::vector<std::string> shell_split(std::string_view s);
 std::string patch_header(std::string_view patch);
 std::string patch_body(std::string_view patch);
 std::string strip_diffstat(std::string_view header);
+// A description with its diffstat replaced by (or, if it has none,
+// followed by) a new one, as upstream's refresh --diffstat does it
+std::string replace_diffstat(std::string_view header, std::string_view diffstat);
 
 // Built-in patch engine.  Like GNU patch given the -f that quilt always
 // passes, it never asks questions: it applies what it can and skips

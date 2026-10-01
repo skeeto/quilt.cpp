@@ -285,6 +285,7 @@ set(QUILT_TEST_SCENARIOS
     header_strip_diffstat_upstream
     header_lookahead_edges
     refresh_keeps_lookalike_header
+    refresh_diffstat_in_place
     color_option_accepted
     color_option_invalid
     trace_option_accepted
@@ -6126,8 +6127,8 @@ function(qt_scenario_refresh_re_diffstat)
     qt_quilt_ok(ARGS refresh --diffstat MESSAGE "first refresh --diffstat failed")
     qt_read_file_strip(patch1 "${QT_WORK_DIR}/patches/p.patch")
     qt_assert_contains("${patch1}" "file changed" "first diffstat should appear")
-    # Second refresh with --diffstat: remove_diffstat_section is called on the
-    # existing header (which starts with bare diffstat lines like " f.txt | 1 +")
+    # Second refresh with --diffstat: the diffstat in the header (after its
+    # "---" line) is replaced where it stands
     qt_write_file("${QT_WORK_DIR}/f.txt" "line1\nUPDATED\nline3\n")
     qt_quilt_ok(ARGS refresh --diffstat MESSAGE "second refresh --diffstat failed")
     qt_read_file_raw(patch2 "${QT_WORK_DIR}/patches/p.patch")
@@ -8056,6 +8057,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_header_lookahead_edges()
     elseif(scenario STREQUAL "refresh_keeps_lookalike_header")
         qt_scenario_refresh_keeps_lookalike_header()
+    elseif(scenario STREQUAL "refresh_diffstat_in_place")
+        qt_scenario_refresh_diffstat_in_place()
     elseif(scenario STREQUAL "mail_subject_lookalike")
         qt_scenario_mail_subject_lookalike()
     elseif(scenario STREQUAL "annotate_no_series_file")
@@ -9525,10 +9528,8 @@ QUILT_PATCHES_PREFIX=1
     qt_assert_contains("${series_out}" "patches/" "QUILT_PATCHES_PREFIX should be active")
 endfunction()
 
-# refresh_diffstat_twice: cmd_patch.cpp remove_diffstat_section lines 921,926,928-936,942,944,946-948
-# Running quilt refresh --diffstat twice causes the second call to remove the
-# existing diffstat from the header before regenerating it, covering the
-# remove_diffstat_section code path.
+# Running quilt refresh --diffstat twice makes the second call replace the
+# diffstat the first one added, rather than add another.
 function(qt_scenario_refresh_diffstat_twice)
     qt_begin_test("refresh_diffstat_twice")
     qt_write_file("${QT_WORK_DIR}/f.txt" "original\n")
@@ -9543,7 +9544,7 @@ function(qt_scenario_refresh_diffstat_twice)
     qt_assert_contains("${patch1}" "---" "first refresh should add diffstat separator")
     qt_assert_contains("${patch1}" "changed" "first refresh should add diffstat summary")
     # Modify file and run --diffstat refresh again
-    # This triggers remove_diffstat_section to strip the old ---/diffstat block
+    # The old diffstat is replaced in place, after the same "---" line
     qt_write_file("${QT_WORK_DIR}/f.txt" "second change\n")
     qt_quilt_ok(ARGS refresh --diffstat MESSAGE "second refresh --diffstat failed")
     file(READ "${QT_WORK_DIR}/patches/p.patch" patch2)
@@ -9554,9 +9555,8 @@ function(qt_scenario_refresh_diffstat_twice)
     qt_assert_equal("${num_changed}" "1" "should have exactly one diffstat summary line")
 endfunction()
 
-# refresh_diffstat_header_replace: cmd_patch.cpp line 1239 (clean_header.pop_back)
-# When the patch has a description before the diffstat, remove_diffstat_section
-# returns the description with a trailing blank line. The pop_back loop strips it.
+# refresh_diffstat_header_replace: with a description before the diffstat,
+# a second refresh --diffstat replaces the diffstat and keeps the description.
 function(qt_scenario_refresh_diffstat_header_replace)
     qt_begin_test("refresh_diffstat_header_replace")
     qt_write_file("${QT_WORK_DIR}/f.txt" "original\n")
@@ -9573,8 +9573,7 @@ function(qt_scenario_refresh_diffstat_header_replace)
     # First --diffstat: creates ---\ndiffstat\n\n appended after description
     qt_quilt_ok(ARGS refresh --diffstat MESSAGE "first refresh --diffstat failed")
     # Modify file and do second --diffstat refresh
-    # remove_diffstat_section returns "This patch changes stuff.\n\n"
-    # The pop_back loop (line 1239) strips the trailing blank line
+    # The diffstat after the description is replaced in place
     qt_write_file("${QT_WORK_DIR}/f.txt" "changed again\n")
     qt_quilt_ok(ARGS refresh --diffstat MESSAGE "second refresh --diffstat failed")
     file(READ "${QT_WORK_DIR}/patches/p.patch" patch_content)
@@ -9738,9 +9737,8 @@ function(qt_scenario_fork_applied_not_in_series)
     qt_assert_contains("${err}" "is not in series" "should report patch not in series")
 endfunction()
 
-# refresh_diffstat_double_newline: cmd_patch.cpp line 1239
-# When a patch header ends with two consecutive newlines and --diffstat is requested,
-# the while loop in cmd_refresh removes the extra trailing newline (line 1239).
+# refresh_diffstat_double_newline: like upstream, refresh --diffstat keeps a
+# blank line ending the header and adds the diffstat after it.
 # The header is set to "Description\n\n" (trailing blank line) via quilt header -r.
 function(qt_scenario_refresh_diffstat_double_newline)
     qt_begin_test("refresh_diffstat_double_newline")
@@ -9752,11 +9750,11 @@ function(qt_scenario_refresh_diffstat_double_newline)
     # Set a header that ends with a blank line (double trailing newline).
     # INPUT "Description\n\n" gives "Description" + LF + LF → header ends with \n\n.
     qt_quilt_ok(ARGS header -r INPUT "Description\n\n" MESSAGE "header -r failed")
-    # refresh --diffstat removes the extra trailing blank line from the header
-    # before inserting the diffstat block (line 1239 is hit).
+    # refresh --diffstat keeps the blank line and adds "---" and the diffstat
     qt_quilt_ok(ARGS refresh --diffstat MESSAGE "refresh --diffstat failed")
     qt_read_file_raw(patch_content "${QT_WORK_DIR}/patches/p.patch")
-    qt_assert_contains("${patch_content}" "Description" "patch should still have description")
+    qt_assert_matches("${patch_content}" "^Description\n\n---\n f\\.txt \\|"
+                      "the diffstat should follow the blank line")
     qt_assert_contains("${patch_content}" "1 file changed" "patch should contain diffstat")
 endfunction()
 
@@ -9832,13 +9830,9 @@ function(qt_scenario_top_index_applied_not_in_series)
         "series should remain unchanged after the failed new")
 endfunction()
 
-# refresh_diffstat_bare_header: cmd_patch.cpp remove_diffstat_section lines 926,928-936,939,942,944,946-948
-# remove_diffstat_section handles a bare diffstat block in the header (no "---" separator).
-# read_patch_header stops at "---" lines, so a "---"-prefixed diffstat never appears in header.
-# A bare diffstat (lines starting with ' ' containing '|', followed by "N files changed")
-# CAN appear in the header if the patch was manually written or imported with such content.
-# This test prepends a bare diffstat to an existing patch file, then calls refresh --diffstat
-# to trigger remove_diffstat_section's bare-diffstat detection and removal logic.
+# refresh_diffstat_bare_header: a bare diffstat block in the header (no "---"
+# separator), as in a hand-written or imported patch, is replaced in place
+# by refresh --diffstat, like upstream.
 function(qt_scenario_refresh_diffstat_bare_header)
     qt_begin_test("refresh_diffstat_bare_header")
     qt_write_file("${QT_WORK_DIR}/f.txt" "old\n")
@@ -9847,28 +9841,27 @@ function(qt_scenario_refresh_diffstat_bare_header)
     qt_write_file("${QT_WORK_DIR}/f.txt" "new\n")
     qt_quilt_ok(ENV "QUILT_NO_DIFF_TIMESTAMPS=1" ARGS refresh MESSAGE "initial refresh failed")
     # Prepend a bare diffstat header (no "---" separator) to the patch file.
-    # remove_diffstat_section detects the " f.txt | 2 +-" pattern (line 926),
-    # looks ahead and finds the summary "1 file changed" (lines 928-936),
-    # then skips the entire block including the trailing blank line (lines 942,944,946-948).
+    # The " f.txt | 2 +-" line is held, and the summary line after it
+    # replaces both with the new diffstat. The blank line after it stays.
     file(READ "${QT_WORK_DIR}/patches/p.patch" existing_patch)
     file(WRITE "${QT_WORK_DIR}/patches/p.patch"
         "Description\n\n f.txt | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n\n${existing_patch}")
     qt_quilt_ok(ENV "QUILT_NO_DIFF_TIMESTAMPS=1" ARGS refresh --diffstat
         MESSAGE "refresh --diffstat with bare diffstat header failed")
     file(READ "${QT_WORK_DIR}/patches/p.patch" result_patch)
-    # The old bare diffstat should be stripped and replaced with one new diffstat
+    # The old bare diffstat should be replaced with one new diffstat
     string(REGEX MATCHALL "file changed" count_matches "${result_patch}")
     list(LENGTH count_matches num_changed)
     qt_assert_equal("${num_changed}" "1" "should have exactly one diffstat summary")
+    qt_assert_matches("${result_patch}" "^Description\n\n f\\.txt \\|    2 \\+-\n 1 file changed, 1 insertion\\(\\+\\), 1 deletion\\(-\\)\n\nIndex: "
+                      "the diffstat should be replaced where it stands")
     # The description should be preserved
     qt_assert_contains("${result_patch}" "Description" "description should be preserved")
 endfunction()
 
-# refresh_diffstat_bare_false_positive: cmd_patch.cpp remove_diffstat_section lines 939-940
-# When the header has a diffstat-like block (lines starting with ' ' containing '|')
-# NOT followed by a valid summary line (interrupted by an empty line instead),
-# remove_diffstat_section's look-ahead breaks at the empty line (line 939-940 break taken),
-# found_summary stays false, and the block is preserved (not removed).
+# refresh_diffstat_bare_false_positive: diffstat-like lines (a " | N " after
+# some space) NOT followed by a summary line (an empty line comes first) are
+# kept, and refresh --diffstat adds a new diffstat at the end of the header.
 function(qt_scenario_refresh_diffstat_bare_false_positive)
     qt_begin_test("refresh_diffstat_bare_false_positive")
     qt_write_file("${QT_WORK_DIR}/f.txt" "old\n")
@@ -9876,9 +9869,8 @@ function(qt_scenario_refresh_diffstat_bare_false_positive)
     qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
     qt_write_file("${QT_WORK_DIR}/f.txt" "new\n")
     qt_quilt_ok(ENV "QUILT_NO_DIFF_TIMESTAMPS=1" ARGS refresh MESSAGE "initial refresh failed")
-    # Prepend a "false positive" diffstat: two diffstat-looking lines (start with ' ', have '|')
-    # followed by an EMPTY LINE before any summary → look-ahead breaks, found_summary=false,
-    # the block is NOT stripped (triggers the break at lines 939-940 in remove_diffstat_section).
+    # Prepend a "false positive" diffstat: two diffstat-looking lines followed
+    # by an EMPTY LINE before any summary, so the lines are not replaced
     file(READ "${QT_WORK_DIR}/patches/p.patch" existing_patch)
     file(WRITE "${QT_WORK_DIR}/patches/p.patch"
         "Description\n\n f.txt | 2 +-\n g.txt | 3 +++\n\n${existing_patch}")
@@ -15301,6 +15293,51 @@ function(qt_scenario_refresh_keeps_lookalike_header)
     qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
     qt_quilt_ok(OUTPUT out ARGS refresh MESSAGE "refresh failed")
     qt_assert_equal("${out}" "Nothing in patch p.patch\n" "an empty diff should be nothing")
+endfunction()
+
+# Like upstream, refresh --diffstat swaps a diffstat in the header for the
+# new one where it stands, "#" prefix included, and keeps every other byte,
+# CRs and blank lines too. A header without one gets "---", the diffstat
+# and a blank line at its end, even when the diff is empty.
+function(qt_scenario_refresh_diffstat_in_place)
+    qt_begin_test("refresh_diffstat_in_place")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    set(refresh refresh -p ab --no-index --no-timestamps --diffstat)
+    set(diff "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-a\n+b\n")
+    set(diff_hex "2d2d2d20612f662e7478740a2b2b2b20622f662e7478740a4040202d31202b312040400a2d610a2b620a")
+    set(stat " f.txt |    2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n")
+
+    qt_write_bytes("${QT_WORK_DIR}/patches/p.patch"
+        "Desc\\r\\n\\r\\n---\\r\\n f.txt | 9 +++\\r\\n 1 file changed, 9 insertions(+)\\r\\n\\r\\nTrailer\\r\\n\\r\\n${diff}")
+    qt_quilt_ok(ARGS ${refresh} MESSAGE "refresh of CRLF header failed")
+    qt_assert_file_hex("${QT_WORK_DIR}/patches/p.patch"
+        "446573630d0a0d0a2d2d2d0d0a20662e747874207c2020202032202b2d0a20312066696c65206368616e6765642c203120696e73657274696f6e282b292c20312064656c6574696f6e282d290a0d0a547261696c65720d0a0d0a${diff_hex}"
+        "the diffstat should be replaced in place, keeping CRs")
+
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch"
+        "#  f.txt |    9 +++\n#  1 file changed, 9 insertions(+)\n#\nDesc\n${diff}")
+    qt_quilt_ok(ARGS ${refresh} MESSAGE "refresh of # diffstat failed")
+    qt_read_file_raw(patch "${QT_WORK_DIR}/patches/p.patch")
+    qt_assert_equal("${patch}"
+        "# f.txt |    2 +-\n# 1 file changed, 1 insertion(+), 1 deletion(-)\n#\nDesc\n${diff}"
+        "a # diffstat should be replaced in place, prefix included")
+
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch" "Desc\n\n${diff}")
+    qt_quilt_ok(ARGS ${refresh} MESSAGE "refresh without a diffstat failed")
+    qt_read_file_raw(patch "${QT_WORK_DIR}/patches/p.patch")
+    qt_assert_equal("${patch}" "Desc\n\n---\n${stat}\n${diff}"
+                    "a diffstat should be added at the end of the header")
+
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch" "Desc\n\n${diff}")
+    qt_quilt_ok(OUTPUT out ARGS ${refresh} MESSAGE "refresh of empty diff failed")
+    qt_assert_equal("${out}" "Nothing in patch p.patch\n" "wrong empty diff message")
+    qt_read_file_raw(patch "${QT_WORK_DIR}/patches/p.patch")
+    qt_assert_equal("${patch}" "Desc\n\n---\n 0 files changed\n\n"
+                    "an empty diff should get an empty diffstat")
 endfunction()
 
 # The mail subject and body come from the whole description.
