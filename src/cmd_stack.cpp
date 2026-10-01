@@ -614,6 +614,10 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
         return 2;
     }
 
+    // Like push, honor -R in QUILT_PATCH_OPTS
+    auto extra_patch_opts = shell_split(get_env("QUILT_PATCH_OPTS"));
+    bool opts_reverse = std::ranges::find(extra_patch_opts, "-R") != extra_patch_opts.end();
+
     // Pop from the top down to stop_idx
     bool first_pop = true;
     while (std::ssize(q.applied) > stop_idx) {
@@ -645,7 +649,8 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
                 int strip_level = q.get_strip_level(name);
                 PatchOptions verify_opts;
                 verify_opts.strip_level = strip_level;
-                verify_opts.reverse = true;
+                // Undo the patch opposite to how push applied it
+                verify_opts.reverse = !(opts_reverse || q.patch_reversed.contains(name));
                 verify_opts.dry_run = true;
                 verify_opts.force = true;
                 verify_opts.quiet = true;

@@ -414,6 +414,7 @@ set(QUILT_TEST_SCENARIOS
     fold_deletion
     files_unapplied_strip_deletion
     patches_unapplied_strip_deletion
+    pop_reversed_patch
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -7707,6 +7708,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_files_unapplied_strip_deletion()
     elseif(scenario STREQUAL "patches_unapplied_strip_deletion")
         qt_scenario_patches_unapplied_strip_deletion()
+    elseif(scenario STREQUAL "pop_reversed_patch")
+        qt_scenario_pop_reversed_patch()
     elseif(scenario STREQUAL "refresh_z_strip_migration")
         qt_scenario_refresh_z_strip_migration()
     elseif(scenario STREQUAL "annotate_P_missing_arg")
@@ -11619,6 +11622,58 @@ function(qt_scenario_patches_unapplied_strip_deletion)
     qt_assert_equal("${gone_out}" "del.patch\n" "patches should find a deleted file")
     qt_quilt_ok(OUTPUT short_out ERROR short_err ARGS patches f.txt MESSAGE "patches f.txt failed")
     qt_assert_equal("${short_out}" "" "-p0 patch should not match an over-stripped name")
+endfunction()
+
+# A patch that push applied in reverse (-R in the series or in
+# QUILT_PATCH_OPTS) must be checked against a forward application when
+# popped, or every such patch "does not remove cleanly".
+function(qt_scenario_pop_reversed_patch)
+    qt_begin_test("pop_reversed_patch")
+    # Reversed file creation: push deletes sub/n.txt, pop restores it.
+    qt_write_file("${QT_WORK_DIR}/sub/n.txt" "keep\n")
+    qt_write_file("${QT_WORK_DIR}/patches/create.patch" [=[--- /dev/null
++++ b/sub/n.txt
+@@ -0,0 +1 @@
++keep
+]=])
+    qt_write_file("${QT_WORK_DIR}/patches/series" "create.patch -R\n")
+    qt_quilt_ok(ARGS push MESSAGE "push of reversed creation patch failed")
+    qt_assert_not_exists("${QT_WORK_DIR}/sub/n.txt" "reversed creation patch should delete the file")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS pop MESSAGE "pop of reversed creation patch failed")
+    qt_assert_contains("${out}" "Restoring sub/n.txt" "pop should restore the deleted file")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/n.txt" "keep" "pop should restore the original content")
+
+    # Reversed modification: push turns new into old, pop turns it back.
+    qt_write_file("${QT_WORK_DIR}/m.txt" "new\n")
+    qt_write_file("${QT_WORK_DIR}/patches/modify.patch" [=[--- a/m.txt
++++ b/m.txt
+@@ -1 +1 @@
+-old
++new
+]=])
+    qt_write_file("${QT_WORK_DIR}/patches/series" "modify.patch -R\n")
+    qt_quilt_ok(ARGS push MESSAGE "push of reversed modification patch failed")
+    qt_assert_file_text("${QT_WORK_DIR}/m.txt" "old" "reversed patch should change new to old")
+    qt_quilt_ok(ARGS pop MESSAGE "pop of reversed modification patch failed")
+    qt_assert_file_text("${QT_WORK_DIR}/m.txt" "new" "pop should restore the original content")
+
+    # The check still catches pending changes in a reversed patch.
+    qt_quilt_ok(ARGS push MESSAGE "second push of reversed patch failed")
+    qt_write_file("${QT_WORK_DIR}/m.txt" "dirty\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS pop)
+    qt_assert_failure("${rc}" "pop should fail with pending changes")
+    qt_assert_contains("${err}" "does not remove cleanly" "pop should explain the failure")
+    qt_quilt_ok(ARGS pop -f MESSAGE "pop -f of dirty reversed patch failed")
+    qt_assert_file_text("${QT_WORK_DIR}/m.txt" "new" "pop -f should restore the original content")
+
+    # QUILT_PATCH_OPTS=-R reverses the patch the same way.
+    qt_write_file("${QT_WORK_DIR}/patches/series" "modify.patch\n")
+    qt_quilt_ok(ENV "QUILT_PATCH_OPTS=-R" ARGS push
+                MESSAGE "push with QUILT_PATCH_OPTS=-R failed")
+    qt_assert_file_text("${QT_WORK_DIR}/m.txt" "old" "patch should be reverse-applied")
+    qt_quilt_ok(ENV "QUILT_PATCH_OPTS=-R" ARGS pop
+                MESSAGE "pop with QUILT_PATCH_OPTS=-R failed")
+    qt_assert_file_text("${QT_WORK_DIR}/m.txt" "new" "pop should restore the original content")
 endfunction()
 
 # quilt.cpp copies the strip level (and -R) to the fork created by
