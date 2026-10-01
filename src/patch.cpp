@@ -597,6 +597,14 @@ static bool try_match(std::span<const std::string> file_lines,
     return true;
 }
 
+// 0-based file position of the hunk's old range.  An empty range names the
+// line it follows, as in "@@ -5,0 +6 @@" or "*** 5 ****" from diff -U0/-C0.
+static ptrdiff_t old_range_pos(const PatchHunk &hunk)
+{
+    if (hunk.old_count == 0) return hunk.old_start;
+    return std::max(hunk.old_start, ptrdiff_t{1}) - 1;
+}
+
 // Spiral search: find where a hunk matches in the file.
 // Returns the 0-based file position, or -1 if not found.
 // Updates cumulative_offset on success.
@@ -613,8 +621,8 @@ static ptrdiff_t locate_hunk(std::span<const std::string> file_lines,
     // Get real prefix/suffix context from full hunk (not just old-side pattern)
     auto ctx = get_hunk_context(hunk);
 
-    // First guess: hunk header's old_start (1-based) converted to 0-based + offset
-    ptrdiff_t first_guess = hunk.old_start - 1 + cumulative_offset;
+    // First guess: the position the hunk header names, plus the offset
+    ptrdiff_t first_guess = old_range_pos(hunk) + cumulative_offset;
 
     // Clamp to valid range
     ptrdiff_t max_pos = file_len - pat_old_count;
@@ -810,7 +818,7 @@ static std::string build_merge_output(std::span<const std::string> file_lines,
             if (last_copied > file_len) last_copied = file_len;
         } else {
             // Rejected — insert per-change conflict markers at expected position
-            ptrdiff_t expected = hunk.old_start - 1;
+            ptrdiff_t expected = old_range_pos(hunk);
             if (expected < last_copied) expected = last_copied;
             if (expected > file_len) expected = file_len;
 
@@ -1036,7 +1044,7 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
             if (pos >= 0) {
                 hunk_positions[checked_cast<size_t>(h)] = pos;
                 ptrdiff_t pat_len = std::ssize(pattern);
-                ptrdiff_t actual_offset = pos - (std::max(hunk.old_start, ptrdiff_t{1}) - 1);
+                ptrdiff_t actual_offset = pos - old_range_pos(hunk);
                 auto ctx = get_hunk_context(hunk);
 
                 // Determine fuzz level used for this hunk

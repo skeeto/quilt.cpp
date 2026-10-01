@@ -445,6 +445,7 @@ set(QUILT_TEST_SCENARIOS
     push_context_diff
     push_context_diff_strip
     push_malformed_hunk
+    push_zero_context_insert
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -618,6 +619,7 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     refresh_series_split_p_option
     refresh_z_fork_series_args
     series_insert_crlf
+    push_context_diff_zero_context
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -7959,6 +7961,10 @@ function(qt_run_named_scenario scenario)
         qt_scenario_push_context_diff_strip()
     elseif(scenario STREQUAL "push_malformed_hunk")
         qt_scenario_push_malformed_hunk()
+    elseif(scenario STREQUAL "push_zero_context_insert")
+        qt_scenario_push_zero_context_insert()
+    elseif(scenario STREQUAL "push_context_diff_zero_context")
+        qt_scenario_push_context_diff_zero_context()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -12530,4 +12536,44 @@ function(qt_scenario_push_malformed_hunk)
         qt_assert_contains("${combined}" "${error_${n}}" "push should explain malformed patch ${n}")
         qt_assert_file_text("${QT_WORK_DIR}/f.txt" "a\nb\nc" "malformed patch ${n} should leave f.txt alone")
     endforeach()
+endfunction()
+
+# push_zero_context_insert: a hunk with no context that only adds lines has
+# an empty old range, which names the line to insert after.  Covers the
+# unified form from refresh -U 0 and the context form from diff -C0.
+function(qt_scenario_push_zero_context_insert)
+    qt_begin_test("push_zero_context_insert")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nb\nc\n")
+    qt_quilt_ok(ARGS new q.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nb\nX\nc\n")
+    qt_quilt_ok(ARGS refresh -U 0 MESSAGE "refresh -U 0 failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop after refresh -U 0 failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "a\nb\nc" "pop should restore f.txt")
+    qt_quilt_ok(ARGS push MESSAGE "push of -U 0 patch failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "a\nb\nX\nc" "push should insert X after b (-U 0)")
+    qt_quilt_ok(ARGS pop MESSAGE "pop of -U 0 patch failed")
+    qt_write_file("${QT_WORK_DIR}/patches/q.patch"
+        "*** a/f.txt\n--- b/f.txt\n***************\n*** 2 ****\n--- 3 ----\n+ X\n")
+    qt_quilt_ok(ARGS push MESSAGE "push of -C0 patch failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "a\nb\nX\nc" "push should insert X after b (-C0)")
+endfunction()
+
+# push_context_diff_zero_context: a context diff from refresh -C 0, whose
+# hunks have empty ranges, applies and pops.  Native only because GNU patch
+# rejects the zero-context deletion hunks that diff -C0 writes ("replacement
+# text or line numbers mangled").
+function(qt_scenario_push_context_diff_zero_context)
+    qt_begin_test("push_context_diff_zero_context")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nb\nc\nd\ne\n")
+    qt_quilt_ok(ARGS new q.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nb\nX\nc\ne\n")
+    qt_quilt_ok(ARGS refresh -C 0 MESSAGE "refresh -C 0 failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop after refresh -C 0 failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "a\nb\nc\nd\ne" "pop should restore f.txt")
+    qt_quilt_ok(ARGS push MESSAGE "push of -C 0 patch failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "a\nb\nX\nc\ne" "push should insert X and remove d")
+    qt_quilt_ok(ARGS pop MESSAGE "pop of -C 0 patch failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "a\nb\nc\nd\ne" "pop should restore f.txt again")
 endfunction()
