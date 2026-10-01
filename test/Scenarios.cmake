@@ -379,6 +379,7 @@ set(QUILT_TEST_SCENARIOS
     refresh_invalid_p
     series_invalid_strip_level
     diff_invalid_p
+    snapshot_no_series
     files_all_no_applied
     delete_n_explicit
     header_mode_conflict
@@ -7606,6 +7607,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_series_invalid_strip_level()
     elseif(scenario STREQUAL "diff_invalid_p")
         qt_scenario_diff_invalid_p()
+    elseif(scenario STREQUAL "snapshot_no_series")
+        qt_scenario_snapshot_no_series()
     elseif(scenario STREQUAL "files_all_no_applied")
         qt_scenario_files_all_no_applied()
     elseif(scenario STREQUAL "delete_n_explicit")
@@ -10849,6 +10852,21 @@ function(qt_scenario_diff_invalid_p)
     qt_assert_equal("${out}" "" "no diff should be printed")
     qt_assert_contains("${err}" "Cannot diff patches with -p9, please specify -p0, -p1, or -pab instead"
                        "invalid strip level should be rejected")
+endfunction()
+
+function(qt_scenario_snapshot_no_series)
+    qt_begin_test("snapshot_no_series")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS snapshot)
+    qt_assert_equal("${rc}" "1" "snapshot without a series file should exit 1")
+    qt_assert_contains("${err}" "No series file found" "missing series file should be reported")
+    qt_assert_not_exists("${QT_WORK_DIR}/.pc" "snapshot without a series file must not create .pc")
+    # -d must not discard an existing snapshot when the series file is missing
+    qt_write_file("${QT_WORK_DIR}/.pc/.version" "2\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/.snap/f.txt" "x\n")
+    qt_quilt(RESULT rc2 OUTPUT out2 ERROR err2 ARGS snapshot -d)
+    qt_assert_equal("${rc2}" "1" "snapshot -d without a series file should exit 1")
+    qt_assert_contains("${err2}" "No series file found" "missing series file should be reported")
+    qt_assert_exists("${QT_WORK_DIR}/.pc/.snap/f.txt" "snapshot -d must keep the snapshot")
 endfunction()
 
 function(qt_scenario_files_all_no_applied)

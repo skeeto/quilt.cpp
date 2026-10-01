@@ -798,6 +798,11 @@ int cmd_snapshot(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
+    if (!q.series_file_exists) {
+        err_line("No series file found");
+        return 1;
+    }
+
     std::string snap_dir = pc_patch_dir(q, SNAPSHOT_PATCH);
     if (is_directory(snap_dir) && !delete_dir_recursive(snap_dir)) {
         err_line("Failed to remove " + snap_dir);
