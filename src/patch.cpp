@@ -1243,7 +1243,11 @@ static std::string quote_name(std::string_view name)
     return result;
 }
 
-void set_fuzz_option(PatchOptions &opts, std::string_view value)
+// Read value as GNU patch reads a number for an option: an optional sign,
+// then digits, and not negative. A value too large for an int is clamped.
+// A bad value, the first one only, goes in opts.option_error, named by what.
+static void set_number_option(PatchOptions &opts, int &number, std::string_view what,
+                              std::string_view value)
 {
     std::string_view digits = value;
     bool negative = digits.starts_with('-');
@@ -1258,17 +1262,26 @@ void set_fuzz_option(PatchOptions &opts, std::string_view value)
     }
     if (!problem.empty()) {
         if (opts.option_error.empty()) {
-            opts.option_error = "fuzz factor " + quote_name(value) + " " +
+            opts.option_error = std::string(what) + " " + quote_name(value) + " " +
                                 std::string(problem);
         }
         return;
     }
 
-    auto [ptr, ec] = std::from_chars(digits.data(), digits.data() + digits.size(),
-                                     opts.fuzz);
+    auto [ptr, ec] = std::from_chars(digits.data(), digits.data() + digits.size(), number);
     if (ec == std::errc::result_out_of_range) {
-        opts.fuzz = std::numeric_limits<int>::max();
+        number = std::numeric_limits<int>::max();
     }
+}
+
+void set_fuzz_option(PatchOptions &opts, std::string_view value)
+{
+    set_number_option(opts, opts.fuzz, "fuzz factor", value);
+}
+
+void set_strip_option(PatchOptions &opts, std::string_view value)
+{
+    set_number_option(opts, opts.strip_level, "strip count", value);
 }
 
 PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)

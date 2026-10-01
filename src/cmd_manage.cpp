@@ -72,34 +72,31 @@ static std::optional<std::string> merge_patches(std::string_view old_patch,
 
 
 int cmd_delete(QuiltState &q, int argc, char **argv) {
+    enum { BACKUP = 256 };
+    static constexpr LongOpt longopts[] = {
+        {"backup", OptArg::none, BACKUP},
+    };
+    auto args = parse_options(argc, argv, "nrh", longopts);
+    if (!args) return 1;
     bool opt_remove = false;
     bool opt_backup = false;
     bool opt_next = false;
-    std::string_view patch_arg;
-    int positional_count = 0;
-
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
-        if (arg == "-r") {
-            opt_remove = true;
-        } else if (arg == "--backup") {
-            opt_backup = true;
-        } else if (arg == "-n") {
-            opt_next = true;
-        } else if (arg.starts_with('-')) {
-            err("Unrecognized option: "); err_line(arg);
-            return 1;
-        } else {
-            patch_arg = arg;
-            ++positional_count;
+    for (const auto &opt : args->options) {
+        switch (opt.key) {
+        case 'n': opt_next = true; break;
+        case 'r': opt_remove = true; break;
+        case 'h': return command_help(argv[0]);
+        case BACKUP: opt_backup = true; break;
         }
     }
+    const auto &operands = args->operands;
+    if (std::ssize(operands) > 1 || (opt_next && !operands.empty())) {
+        return usage_error(argv[0]);
+    }
+    std::string_view patch_arg;
+    if (!operands.empty()) patch_arg = operands[0];
 
     std::string patch;
-    if (positional_count > 1 || (opt_next && positional_count > 0)) {
-        err_line("Usage: quilt delete [-r] [--backup] [patch|-n]");
-        return 1;
-    }
     if (opt_next) {
         // Next unapplied patch
         ptrdiff_t top_idx = q.top_index();
@@ -171,27 +168,15 @@ int cmd_delete(QuiltState &q, int argc, char **argv) {
 }
 
 int cmd_rename(QuiltState &q, int argc, char **argv) {
+    auto args = parse_options(argc, argv, "P:h");
+    if (!args) return 1;
     std::string_view old_arg;
-    std::string new_name;
-    int positional_count = 0;
-
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
-        if (arg == "-P" && i + 1 < argc) {
-            old_arg = argv[++i];
-        } else if (arg.starts_with('-')) {
-            err("Unrecognized option: "); err_line(arg);
-            return 1;
-        } else {
-            new_name = strip_patches_prefix(q, arg);
-            ++positional_count;
-        }
+    for (const auto &opt : args->options) {
+        if (opt.key == 'h') return command_help(argv[0]);
+        old_arg = opt.value;
     }
-
-    if (positional_count != 1) {
-        err_line("Usage: quilt rename [-P patch] new_name");
-        return 1;
-    }
+    if (std::ssize(args->operands) != 1) return usage_error(argv[0]);
+    std::string new_name(strip_patches_prefix(q, args->operands[0]));
 
     // No -P, or an empty one, means the top patch
     auto found = find_patch_in_series(q, old_arg);
@@ -292,61 +277,27 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
     bool reversed = false;
     std::vector<std::string> patchfiles;
 
-    constexpr std::string_view usage =
-        "Usage: quilt import [-p num] [-R] [-P patch] [-f] [-d {o|a|n}] patchfile ...";
-
-    // Parse like getopt(1) with "P:d:fp:Rh": options may be grouped (-fR),
-    // take a value attached or as the next word (-p0, -p 0), and may follow
-    // patch files. "--" ends the options.
-    bool options_done = false;
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
-        if (options_done || std::ssize(arg) < 2 || arg[0] != '-') {
-            patchfiles.emplace_back(arg);
-            continue;
-        }
-        if (arg == "--") {
-            options_done = true;
-            continue;
-        }
-        for (ptrdiff_t j = 1; j < std::ssize(arg); ++j) {
-            char opt = arg[checked_cast<size_t>(j)];
-            if (opt == 'f') {
-                force = true;
-            } else if (opt == 'R') {
-                reversed = true;
-            } else if (opt == 'p' || opt == 'P' || opt == 'd') {
-                std::string_view value;
-                if (j + 1 < std::ssize(arg)) {
-                    value = arg.substr(checked_cast<size_t>(j + 1));
-                } else if (i + 1 < argc) {
-                    value = argv[++i];
-                } else {
-                    err_line(usage);
-                    return 1;
-                }
-                if (opt == 'p') {
-                    strip_arg = value;
-                } else if (opt == 'P') {
-                    target_name = strip_patches_prefix(q, value);
-                } else if (value == "o" || value == "a" || value == "n") {
-                    dup_mode = value[0];
-                } else {
-                    err_line(usage);
-                    return 1;
-                }
-                break;
-            } else {
-                err("Unrecognized option: "); err_line(arg);
-                return 1;
+    auto args = parse_options(argc, argv, "P:d:fp:Rh");
+    if (!args) return 1;
+    for (const auto &opt : args->options) {
+        switch (opt.key) {
+        case 'P': target_name = strip_patches_prefix(q, opt.value); break;
+        case 'p': strip_arg = opt.value; break;
+        case 'R': reversed = true; break;
+        case 'd':
+            if (opt.value != "o" && opt.value != "a" && opt.value != "n") {
+                return usage_error(argv[0]);
             }
+            dup_mode = opt.value[0];
+            break;
+        case 'f': force = true; break;
+        case 'h': return command_help(argv[0]);
         }
     }
+    for (auto file : args->operands) patchfiles.emplace_back(file);
 
-    if (patchfiles.empty()) {
-        err_line(usage);
-        return 1;
-    }
+    // Like upstream, importing no patches does nothing
+    if (patchfiles.empty()) return 0;
 
     if (!target_name.empty() && patchfiles.size() > 1) {
         err_line("Option `-P' can only be used when importing a single patch");
@@ -481,44 +432,38 @@ int cmd_header(QuiltState &q, int argc, char **argv) {
     bool opt_dep3 = false;
     bool opt_strip_ds = false;
     bool opt_strip_ws = false;
-    std::string_view patch_arg;
     bool mode_conflict = false;
-    int positional_count = 0;
     // Repeating a mode is fine; combining different modes is not.
     auto set_mode = [&](Mode m) {
         if (mode != PRINT && mode != m) mode_conflict = true;
         mode = m;
     };
 
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
-        if (arg == "-a") {
-            set_mode(APPEND);
-        } else if (arg == "-r") {
-            set_mode(REPLACE);
-        } else if (arg == "-e") {
-            set_mode(EDIT);
-        } else if (arg == "--backup") {
-            opt_backup = true;
-        } else if (arg == "--dep3") {
-            opt_dep3 = true;
-        } else if (arg == "--strip-diffstat") {
-            opt_strip_ds = true;
-        } else if (arg == "--strip-trailing-whitespace") {
-            opt_strip_ws = true;
-        } else if (arg.starts_with('-')) {
-            err("Unrecognized option: "); err_line(arg);
-            return 1;
-        } else {
-            patch_arg = arg;
-            ++positional_count;
+    enum { BACKUP = 256, STRIP_TRAILING_WHITESPACE, STRIP_DIFFSTAT, DEP3 };
+    static constexpr LongOpt longopts[] = {
+        {"backup", OptArg::none, BACKUP},
+        {"strip-trailing-whitespace", OptArg::none, STRIP_TRAILING_WHITESPACE},
+        {"strip-diffstat", OptArg::none, STRIP_DIFFSTAT},
+        {"dep3", OptArg::none, DEP3, true},
+    };
+    auto args = parse_options(argc, argv, "areh", longopts);
+    if (!args) return 1;
+    for (const auto &opt : args->options) {
+        switch (opt.key) {
+        case 'a': set_mode(APPEND); break;
+        case 'r': set_mode(REPLACE); break;
+        case 'e': set_mode(EDIT); break;
+        case BACKUP: opt_backup = true; break;
+        case STRIP_DIFFSTAT: opt_strip_ds = true; break;
+        case STRIP_TRAILING_WHITESPACE: opt_strip_ws = true; break;
+        case DEP3: opt_dep3 = true; break;
+        case 'h': return command_help(argv[0]);
         }
     }
 
-    if (mode_conflict || positional_count > 1) {
-        err_line("Usage: quilt header [-a|-r|-e] [--backup] [--strip-diffstat] [--strip-trailing-whitespace] [patch]");
-        return 1;
-    }
+    if (mode_conflict || std::ssize(args->operands) > 1) return usage_error(argv[0]);
+    std::string_view patch_arg;
+    if (!args->operands.empty()) patch_arg = args->operands[0];
 
     // No argument, or an empty one, means the top patch
     auto found = find_patch_in_series(q, patch_arg);
@@ -601,25 +546,25 @@ int cmd_files(QuiltState &q, int argc, char **argv) {
     bool opt_all = false;
     bool opt_labels = false;
     std::optional<std::string_view> combine_arg;
-    std::string_view patch_arg;
 
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
-        if (arg == "-v") {
-            opt_verbose = true;
-        } else if (arg == "-a") {
-            opt_all = true;
-        } else if (arg == "-l") {
-            opt_labels = true;
-        } else if (arg == "--combine" && i + 1 < argc) {
-            combine_arg = argv[++i];
-        } else if (arg.starts_with('-')) {
-            err("Unrecognized option: "); err_line(arg);
-            return 1;
-        } else {
-            patch_arg = arg;
+    enum { COMBINE = 256 };
+    static constexpr LongOpt longopts[] = {
+        {"combine", OptArg::required, COMBINE},
+    };
+    auto args = parse_options(argc, argv, "vhal", longopts);
+    if (!args) return 1;
+    for (const auto &opt : args->options) {
+        switch (opt.key) {
+        case 'v': opt_verbose = true; break;
+        case 'a': opt_all = true; break;
+        case 'l': opt_labels = true; break;
+        case 'h': return command_help(argv[0]);
+        case COMBINE: combine_arg = opt.value; break;
         }
     }
+    if (std::ssize(args->operands) > 1) return usage_error(argv[0]);
+    std::string_view patch_arg;
+    if (!args->operands.empty()) patch_arg = args->operands[0];
 
     // Like upstream, resolve --combine first. Both "-" and an empty name
     // stand for the first applied patch, resolved below.
@@ -714,32 +659,24 @@ int cmd_files(QuiltState &q, int argc, char **argv) {
 
 int cmd_patches(QuiltState &q, int argc, char **argv) {
     bool opt_verbose = false;
-    std::vector<std::string> target_files;
-
-    constexpr std::string_view usage =
-        "Usage: quilt patches [-v] [--color[=always|auto|never]] {file} [files...]";
-
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
-        if (arg == "-v") {
-            opt_verbose = true;
-        } else if (arg == "--color" || arg.starts_with("--color=")) {
-            if (!valid_color_option(arg)) {
-                err_line(usage);
-                return 1;
-            }
-        } else if (arg[0] == '-') {
-            err("Unrecognized option: "); err_line(arg);
-            return 1;
-        } else {
-            target_files.push_back(subdir_path(q, arg));
+    enum { COLOR = 256 };
+    static constexpr LongOpt longopts[] = {
+        {"color", OptArg::optional, COLOR},
+    };
+    auto args = parse_options(argc, argv, "vh", longopts);
+    if (!args) return 1;
+    for (const auto &opt : args->options) {
+        switch (opt.key) {
+        case 'v': opt_verbose = true; break;
+        case COLOR:
+            if (!valid_color_value(opt.value)) return usage_error(argv[0]);
+            break;
+        case 'h': return command_help(argv[0]);
         }
     }
-
-    if (target_files.empty()) {
-        err_line(usage);
-        return 1;
-    }
+    if (args->operands.empty()) return usage_error(argv[0]);
+    std::vector<std::string> target_files;
+    for (auto file : args->operands) target_files.push_back(subdir_path(q, file));
 
     for (const auto &patch : q.series) {
         bool touches = false;
@@ -792,26 +729,20 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
     bool opt_reverse = false;
     bool opt_quiet = false;
     bool opt_force = false;
-    int strip_level = 1;
+    std::string_view strip_arg;
 
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
-        if (arg == "-R") {
-            opt_reverse = true;
-        } else if (arg == "-q") {
-            opt_quiet = true;
-        } else if (arg == "-f") {
-            opt_force = true;
-        } else if (arg == "-p" && i + 1 < argc) {
-            strip_level = checked_cast<int>(parse_int(argv[++i]));
-        } else if (arg.starts_with("-p") && arg.size() > 2 &&
-                   arg[2] >= '0' && arg[2] <= '9') {
-            strip_level = checked_cast<int>(parse_int(arg.substr(2)));
-        } else if (arg[0] == '-') {
-            err("Unrecognized option: "); err_line(arg);
-            return 1;
+    auto args = parse_options(argc, argv, "Rp:qfh");
+    if (!args) return 1;
+    for (const auto &opt : args->options) {
+        switch (opt.key) {
+        case 'R': opt_reverse = true; break;
+        case 'f': opt_force = true; break;
+        case 'p': strip_arg = opt.value; break;
+        case 'q': opt_quiet = true; break;
+        case 'h': return command_help(argv[0]);
         }
     }
+    if (!args->operands.empty()) return usage_error(argv[0]);
 
     if (q.applied.empty()) {
         err_line("No patches applied");
@@ -827,7 +758,9 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
 
     // Apply patch using built-in patch engine
     PatchOptions patch_opts;
-    patch_opts.strip_level = strip_level;
+    // Like upstream, an empty -p means the default, 1, and patch checks the
+    // rest, refusing a strip level that is not a number
+    if (!strip_arg.empty()) set_strip_option(patch_opts, strip_arg);
     patch_opts.reverse = opt_reverse;
     patch_opts.quiet = opt_quiet;
     auto extra_patch_opts = shell_split(get_env("QUILT_PATCH_OPTS"));
@@ -922,20 +855,16 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
 }
 
 int cmd_fork(QuiltState &q, int argc, char **argv) {
+    auto args = parse_options(argc, argv, "h");
+    if (!args) return 1;
+    if (!args->options.empty()) return command_help(argv[0]);
+    if (std::ssize(args->operands) > 1) return usage_error(argv[0]);
+    std::optional<std::string> given_name;
+    if (!args->operands.empty()) given_name = strip_patches_prefix(q, args->operands[0]);
+
     auto top = find_top_patch(q);
     if (!top) return 1;
     std::string old_name = *top;
-    std::optional<std::string> given_name;
-
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
-        if (arg.starts_with('-')) {
-            err("Unrecognized option: "); err_line(arg);
-            return 1;
-        }
-        given_name = strip_patches_prefix(q, arg);
-        break;
-    }
 
     // An empty name, given as "" or as "patches/", is refused below since
     // .pc/ itself exists, as upstream does
@@ -1021,20 +950,10 @@ int cmd_fork(QuiltState &q, int argc, char **argv) {
 
 int cmd_upgrade(QuiltState &, int argc, char **argv)
 {
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
-        if (arg == "-h" || arg == "--help") {
-            out_line("Usage: quilt upgrade");
-            out_line("");
-            out_line("Upgrade the metadata in the .pc/ directory from version 1 to");
-            out_line("version 2. This command does nothing because quilt.cpp only");
-            out_line("supports the version 2 format.");
-            return 0;
-        }
-        if (arg[0] == '-') {
-            err("Unrecognized option: "); err_line(arg);
-            return 1;
-        }
-    }
+    // Like upstream, take one argument, which means nothing
+    auto args = parse_options(argc, argv, "h");
+    if (!args) return 1;
+    if (!args->options.empty()) return command_help(argv[0]);
+    if (std::ssize(args->operands) > 1) return usage_error(argv[0]);
     return 0;
 }

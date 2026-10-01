@@ -221,12 +221,6 @@ bool valid_color_value(std::string_view when) {
            when == "tty" || when == "never";
 }
 
-bool valid_color_option(std::string_view arg) {
-    if (arg == "--color") return true;
-    if (!arg.starts_with("--color=")) return false;
-    return valid_color_value(arg.substr(8));
-}
-
 std::string trim(std::string_view s) {
     while (!s.empty() && (s.front() == ' ' || s.front() == '\t' ||
                           s.front() == '\r' || s.front() == '\n'))

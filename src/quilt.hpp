@@ -143,6 +143,8 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
 // large for an int is clamped, since no hunk can use more fuzz than it has
 // context. A bad value, the first one only, goes in opts.option_error.
 void set_fuzz_option(PatchOptions &opts, std::string_view value);
+// Set the strip level from a -p option's value, read the same way.
+void set_strip_option(PatchOptions &opts, std::string_view value);
 
 // Files builtin_patch would modify, without duplicates, in patch order.
 // A deleted file (+++ /dev/null) is named by its --- line.
@@ -208,7 +210,6 @@ std::optional<std::string> find_applied_patch(const QuiltState &q, std::string_v
 // may be empty, always, auto, tty, or never. Quilt.cpp never colors its
 // output, so commands discard the option once it checks out.
 bool valid_color_value(std::string_view when);
-bool valid_color_option(std::string_view arg);  // --color[=when]
 
 // Command-line options, parsed like the util-linux getopt(1) that upstream
 // runs over each command's arguments, QUILT_<CMD>_ARGS first:
