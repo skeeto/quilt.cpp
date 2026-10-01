@@ -227,6 +227,11 @@ function(qt_quilt)
     if(CMAKE_HOST_WIN32)
         list(APPEND command "USERPROFILE=${test_base}")
     endif()
+    # Make undefined behavior fail the test in sanitized builds, which
+    # otherwise only log it. Other builds ignore the variable.
+    if(NOT DEFINED ENV{UBSAN_OPTIONS})
+        list(APPEND command "UBSAN_OPTIONS=halt_on_error=1")
+    endif()
     foreach(env_entry IN LISTS QT_ENV)
         list(APPEND command "${env_entry}")
     endforeach()
