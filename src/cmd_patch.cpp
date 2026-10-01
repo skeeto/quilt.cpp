@@ -553,6 +553,12 @@ static std::string generate_path_diff(const QuiltState &q,
         return "Binary files differ\n";
     }
 
+    // As in the original quilt, labels follow the files after the swap
+    if (reverse) {
+        std::swap(old_path, new_path);
+        std::swap(old_missing, new_missing);
+    }
+
     std::string old_arg = old_missing ? "/dev/null" : std::string(old_path);
     std::string new_arg = new_missing ? "/dev/null" : std::string(new_path);
 
@@ -574,6 +580,8 @@ static std::string generate_path_diff(const QuiltState &q,
         old_label = "/dev/null";
     }
     if (new_missing) {
+        // A -p0 deletion names the file itself, so it can be applied
+        if (p_format == "0") old_label = new_label;
         new_label = "/dev/null";
     }
 
@@ -583,10 +591,6 @@ static std::string generate_path_diff(const QuiltState &q,
             old_label += format_file_timestamp(old_path);
         if (!new_missing)
             new_label += format_file_timestamp(new_path);
-    }
-
-    if (reverse) {
-        std::swap(old_arg, new_arg);
     }
 
     // Use built-in diff when no external diff utility is specified

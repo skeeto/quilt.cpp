@@ -383,6 +383,8 @@ set(QUILT_TEST_SCENARIOS
     pop_refresh_needs_refresh
     pop_force_refresh_conflict
     pop_empty_patch
+    refresh_p0_deleted_file
+    diff_R_deleted_file_labels
     applied_patches_removed_when_empty
     refresh_invalid_p
     series_invalid_strip_level
@@ -7757,6 +7759,10 @@ function(qt_run_named_scenario scenario)
         qt_scenario_pop_force_refresh_conflict()
     elseif(scenario STREQUAL "pop_empty_patch")
         qt_scenario_pop_empty_patch()
+    elseif(scenario STREQUAL "refresh_p0_deleted_file")
+        qt_scenario_refresh_p0_deleted_file()
+    elseif(scenario STREQUAL "diff_R_deleted_file_labels")
+        qt_scenario_diff_R_deleted_file_labels()
     elseif(scenario STREQUAL "applied_patches_removed_when_empty")
         qt_scenario_applied_patches_removed_when_empty()
     elseif(scenario STREQUAL "refresh_invalid_p")
@@ -11048,6 +11054,55 @@ function(qt_scenario_pop_empty_patch)
     qt_quilt_ok(OUTPUT out3 ERROR err3 ARGS delete MESSAGE "delete of p.patch failed")
     qt_assert_equal("${out3}" "Removing patch p.patch\nNo patches applied\nRemoved patch p.patch\n"
                     "delete of the last applied patch")
+endfunction()
+
+
+
+
+# With -p0, a deleted file is named by itself rather than file.orig, so
+# the patch can be applied again and pop sees no pending changes
+function(qt_scenario_refresh_p0_deleted_file)
+    qt_begin_test("refresh_p0_deleted_file")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt g.txt MESSAGE "add failed")
+    file(REMOVE "${QT_WORK_DIR}/f.txt")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "y\n")
+    qt_quilt_ok(ARGS refresh -p0 ENV "QUILT_NO_DIFF_TIMESTAMPS=1" MESSAGE "refresh -p0 failed")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/p.patch" "--- f.txt\n+++ /dev/null\n"
+                            "deleted file should be named without .orig")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/p.patch" "--- g.txt.orig\n+++ g.txt\n"
+                            "modified file should keep the .orig name")
+    qt_quilt_ok(ARGS pop MESSAGE "pop after refresh -p0 failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "x" "pop should restore the deleted file")
+    qt_quilt_ok(ARGS push MESSAGE "push of the -p0 patch failed")
+    qt_assert_not_exists("${QT_WORK_DIR}/f.txt" "push should delete the file again")
+    qt_assert_file_text("${QT_WORK_DIR}/g.txt" "y" "push should modify g.txt again")
+endfunction()
+
+# diff -R labels follow the swapped files, so a deleted file shows up as
+# created
+function(qt_scenario_diff_R_deleted_file_labels)
+    qt_begin_test("diff_R_deleted_file_labels")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    file(REMOVE "${QT_WORK_DIR}/f.txt")
+    foreach(p 0 1 ab)
+        if(p STREQUAL "0")
+            set(label "f.txt")
+        elseif(p STREQUAL "1")
+            get_filename_component(dir "${QT_WORK_DIR}" NAME)
+            set(label "${dir}/f.txt")
+        else()
+            set(label "b/f.txt")
+        endif()
+        qt_quilt_ok(OUTPUT out ERROR err ARGS diff -R -p ${p} ENV "QUILT_NO_DIFF_TIMESTAMPS=1"
+                    MESSAGE "diff -R -p ${p} failed")
+        qt_assert_contains("${out}" "--- /dev/null\n+++ ${label}\n@@ -0,0 +1 @@\n+x\n"
+                           "diff -R -p ${p} should show the deleted file as created")
+    endforeach()
 endfunction()
 
 function(qt_scenario_applied_patches_removed_when_empty)
