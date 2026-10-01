@@ -92,6 +92,22 @@ shell. This applies to all `QUILT_*_ARGS` and `QUILT_*_OPTS` variables.
 forks to `p-9.patch` and `p-010.patch` to `p-11.patch`, where the original
 Quilt's shell arithmetic reads it as octal (and fails on `08` and `09`).
 
+### Deliberately omitted features
+
+Quilt.cpp omits `setup` because it's an old, RPM-specific workflow that
+won't benefit from this rewrite. It omits `grep` because it's merely a
+wrapper around an external `grep`, which exists mainly because it's easy
+to do from a shell script. The `shell` command is to help work around the
+Quilt's untracked-file limitations, but it's blunt, and like grep it's a
+natural outgrowth of the original's shell-script nature.
+
+There is no built-in pager support. `LESS` and `QUILT_PAGER` do nothing.
+
+The `--color` option is parsed, validated, and discarded. Like Quilt's,
+it may be given alone or as `--color=` with an empty value, `always`,
+`auto`, `tty`, or `never`. `QUILT_COLORS` is not examined. Quilt.cpp does
+not produce color output because it is not intended for children.
+
 ## Fuzz Testing
 
 There are [libFuzzer][] harnesses for the patch engine, the
@@ -147,22 +163,6 @@ installed:
           --iterations 1000 --seed 1
 
 [libFuzzer]: https://llvm.org/docs/LibFuzzer.html
-
-### Deliberately omitted features
-
-Quilt.cpp omits `setup` because it's an old, RPM-specific workflow that
-won't benefit from this rewrite. It omits `grep` because it's merely a
-wrapper around an external `grep`, which exists mainly because it's easy
-to do from a shell script. The `shell` command is to help work around the
-Quilt's untracked-file limitations, but it's blunt, and like grep it's a
-natural outgrowth of the original's shell-script nature.
-
-There is no built-in pager support. `LESS` and `QUILT_PAGER` do nothing.
-
-The `--color` option is parsed, validated, and discarded. Like Quilt's,
-it may be given alone or as `--color=` with an empty value, `always`,
-`auto`, `tty`, or `never`. `QUILT_COLORS` is not examined. Quilt.cpp does
-not produce color output because it is not intended for children.
 
 
 [Quilt]: https://savannah.nongnu.org/projects/quilt
