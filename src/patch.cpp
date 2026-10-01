@@ -695,12 +695,6 @@ struct HunkContext {
     ptrdiff_t suffix = 0;
 };
 
-// Per-hunk fuzz amounts used when matching (for trimming during application).
-struct HunkFuzz {
-    ptrdiff_t prefix = 0;
-    ptrdiff_t suffix = 0;
-};
-
 static HunkContext get_hunk_context(const PatchHunk &hunk)
 {
     HunkContext ctx;
@@ -761,20 +755,18 @@ static ptrdiff_t old_range_pos(const PatchHunk &hunk)
 // Returns the 0-based file position, or -1 if not found.
 //
 // Lines before last_frozen_line are frozen: the hunks before have copied
-// them to the output or deleted them.  With overlap, search like GNU patch
-// outside merge mode, which may find a hunk among the frozen lines, since
-// it takes context from the file: return the guess for an empty pattern,
-// and for a guess among the frozen lines, try first as far before the guess
-// as the frozen lines reach past it, then the first line not frozen, then
-// each line up from the first.  The caller fails a hunk found where it
-// would change a frozen line.
+// them to the output or deleted them.  Search like GNU patch, which may
+// find a hunk among the frozen lines: return the guess for an empty
+// pattern, and for a guess among the frozen lines, try first as far before
+// the guess as the frozen lines reach past it, then the first line not
+// frozen, then each line up from the first.  The caller fails a hunk found
+// where it would change a frozen line.
 static ptrdiff_t locate_hunk(std::span<const std::string> file_lines,
                               const PatchHunk &hunk,
                               const std::vector<PatternLine> &pattern,
                               ptrdiff_t last_frozen_line,
                               ptrdiff_t cumulative_offset,
-                              int max_fuzz,
-                              bool overlap)
+                              int max_fuzz)
 {
     ptrdiff_t file_len = std::ssize(file_lines);
     ptrdiff_t pat_old_count = std::ssize(pattern);
@@ -785,7 +777,7 @@ static ptrdiff_t locate_hunk(std::span<const std::string> file_lines,
     // First guess: the position the hunk header names, plus the offset
     ptrdiff_t first_guess = old_range_pos(hunk) + cumulative_offset;
 
-    if (overlap && pat_old_count == 0) {
+    if (pat_old_count == 0) {
         return first_guess < 0 ? -1 : first_guess;
     }
 
@@ -807,7 +799,7 @@ static ptrdiff_t locate_hunk(std::span<const std::string> file_lines,
         ptrdiff_t max_search = file_len - (pat_old_count - suffix_fuzz);
         if (effective_pat_len == 0) max_search = file_len;  // empty pattern matches anywhere
 
-        if (overlap && first_guess < last_frozen_line && first_guess <= max_search) {
+        if (first_guess < last_frozen_line && first_guess <= max_search) {
             // A first guess of 0 or less reaches no line before it
             ptrdiff_t lowest = first_guess > 0 ? 2 * first_guess - last_frozen_line : -1;
             if (lowest >= 0 &&
@@ -876,19 +868,6 @@ static ptrdiff_t locate_hunk(std::span<const std::string> file_lines,
 
 // ── Hunk application ───────────────────────────────────────────────────
 
-// Get the new-side (replacement) lines from a hunk.
-static std::vector<std::string_view> get_new_lines(const PatchHunk &hunk)
-{
-    std::vector<std::string_view> result;
-    for (const auto &line : hunk.lines) {
-        char prefix = line[0];
-        if (prefix == ' ' || prefix == '+') {
-            result.push_back(std::string_view(line).substr(1));
-        }
-    }
-    return result;
-}
-
 // Build the output file content after applying all successfully matched hunks.
 // hunks_positions[i] = 0-based file position where hunk i matched, or -1 if rejected.
 // Like GNU patch, copy the file up to each change and write only the added
@@ -948,147 +927,609 @@ static std::string build_output(std::span<const std::string> file_lines,
     return output;
 }
 
-// ── Merge conflict markers ─────────────────────────────────────────────
+// ── Merging ────────────────────────────────────────────────────────────
+//
+// Merge mode follows GNU patch's merge.c, with the bestmatch.h and the
+// gnulib diffseq.h it builds on.  A hunk that matches exactly, without
+// fuzz, applies there.  Any other goes where its old lines best match the
+// file, a diff lines the two up, and each change in the hunk merges when
+// the file has its old lines, is left alone when the file already has its
+// new lines, and otherwise becomes a conflict.  Like the rest of the
+// engine, lines compare without their line endings.
 
-// Build output with merge conflict markers for rejected hunks.
-// Applies successful hunks normally, inserts conflict markers for failed ones.
-static std::string build_merge_output(std::span<const std::string> file_lines,
-                                       bool has_trailing_newline,
-                                       const PatchFile &pf,
-                                       const std::vector<ptrdiff_t> &hunk_positions,
-                                       const std::vector<HunkFuzz> &hunk_fuzz,
-                                       std::string_view merge_style)
+// A line on one side of a hunk: its mark, ' ' or '-' on the old side and
+// ' ' or '+' on the new, and its text.  Each side ends with a sentinel
+// marked '=' on the old side and '^' on the new.
+struct MergeLine {
+    char mark;
+    std::string_view text;
+};
+
+// Whether file line k, from 0, exists and is text
+static bool file_line_is(std::span<const std::string> file, ptrdiff_t k,
+                         std::string_view text)
 {
-    // For merge mode, we first apply successful hunks, then for rejected hunks
-    // we insert conflict markers at the hunk's expected position.
-    std::string output;
-    ptrdiff_t file_len = std::ssize(file_lines);
-    ptrdiff_t last_copied = 0;
+    return k >= 0 && k < std::ssize(file) && file[checked_cast<size_t>(k)] == text;
+}
 
-    // Process all hunks in order
+// GNU patch's bestmatch(): the fewest changes, at most max, that turn old
+// lines [xoff, xlim) into file lines [yoff, *py) while matching at least
+// min lines, with *py as far as those changes reach, or max + 1 if none
+// do.  Lines count from 1, as in GNU patch: its check of min compares
+// against xoff - yoff where xoff + yoff belongs, so it depends on them.
+static ptrdiff_t bestmatch(std::span<const MergeLine> old,
+                           std::span<const std::string> file,
+                           ptrdiff_t xoff, ptrdiff_t xlim,
+                           ptrdiff_t yoff, ptrdiff_t ylim,
+                           ptrdiff_t min, ptrdiff_t max, ptrdiff_t *py)
+{
+    auto equal = [&](ptrdiff_t x, ptrdiff_t y) {
+        return file_line_is(file, y - 1, old[checked_cast<size_t>(x - 1)].text);
+    };
+    const ptrdiff_t dmin = xoff - ylim;  // minimum valid diagonal
+    const ptrdiff_t dmax = xlim - yoff;  // maximum valid diagonal
+    const ptrdiff_t fmid = xoff - yoff;  // center diagonal
+    ptrdiff_t fmin = fmid;
+    ptrdiff_t fmax = fmid;
+    ptrdiff_t ymax = -1;
+
+    // How far along each diagonal the search has reached, in x, for the
+    // diagonals that max changes can reach
+    std::vector<ptrdiff_t> fdiag(checked_cast<size_t>(2 * max + 3), -1);
+    auto fd = [&](ptrdiff_t d) -> ptrdiff_t & {
+        return fdiag[checked_cast<size_t>(d - fmid + max + 1)];
+    };
+
+    ptrdiff_t fmid_plus_2_min = 0;
+    if (min) {
+        fmid_plus_2_min = fmid + 2 * min;
+        min += yoff;
+        if (min > ylim) return max + 1;
+    }
+
+    // Handle the exact match
+    while (xoff < xlim && yoff < ylim && equal(xoff, yoff)) {
+        xoff++;
+        yoff++;
+    }
+    if (xoff == xlim && yoff >= min && xoff + yoff >= fmid_plus_2_min) {
+        *py = yoff;
+        return 0;
+    }
+
+    fd(fmid) = xoff;
+    for (ptrdiff_t c = 1; c <= max; c++) {
+        if (fmin > dmin) fd(--fmin - 1) = -1;
+        else ++fmin;
+        if (fmax < dmax) fd(++fmax + 1) = -1;
+        else --fmax;
+        for (ptrdiff_t d = fmax; d >= fmin; d -= 2) {
+            ptrdiff_t x = fd(d - 1) < fd(d + 1) ? fd(d + 1) : fd(d - 1) + 1;
+            ptrdiff_t y = x - d;
+            while (x < xlim && y < ylim && equal(x, y)) {
+                x++;
+                y++;
+            }
+            fd(d) = x;
+            if (x == xlim && y >= min && x + y - c >= fmid_plus_2_min) {
+                ymax = std::max(ymax, y);
+                if (y == ylim) break;
+            }
+        }
+        if (ymax != -1) {
+            *py = ymax;
+            return c;
+        }
+    }
+    return max + 1;
+}
+
+// GNU patch's locate_merge(): the line, from 0, where a hunk that does not
+// match exactly best matches the file, and in matched how many file lines
+// from there its old lines match, 0 when none match well enough.  Like
+// GNU patch, it prefers the longest match closest to where the hunk
+// should be, and holds a hunk with less context after its changes than
+// before to the end of the file.
+static ptrdiff_t locate_merge(std::span<const std::string> file,
+                              const PatchHunk &hunk,
+                              std::span<const MergeLine> old,
+                              ptrdiff_t last_frozen_line,
+                              ptrdiff_t cumulative_offset,
+                              ptrdiff_t &matched)
+{
+    ptrdiff_t input_lines = std::ssize(file);
+    ptrdiff_t pch_first = old_range_pos(hunk) + 1;
+    ptrdiff_t first_guess = pch_first + cumulative_offset;
+    ptrdiff_t pat_lines = std::ssize(old);
+    ptrdiff_t context_lines = std::ranges::count(old, ' ', &MergeLine::mark);
+    ptrdiff_t min_where = last_frozen_line + 1;
+    ptrdiff_t max_pos_offset = input_lines - pat_lines + context_lines + 1 - first_guess;
+    ptrdiff_t max_neg_offset = first_guess - min_where;
+    ptrdiff_t max_offset = std::max(max_pos_offset, max_neg_offset);
+    ptrdiff_t where = first_guess;
+    matched = 0;
+
+    if (context_lines > 0) {
+        // Allow at most context_lines lines to be replaced, and require
+        // the remaining lines to match
+        ptrdiff_t max = 2 * context_lines;
+        ptrdiff_t min = pat_lines - context_lines;
+
+        // Hunks from the start or end of the file have less context, so
+        // anchor them there
+        auto ctx = get_hunk_context(hunk);
+        if (ctx.suffix > ctx.prefix && pch_first <= 1) max_pos_offset = 0;
+        bool match_until_eof = ctx.suffix < ctx.prefix;
+
+        // Do not try lines before the first
+        if (first_guess <= max_neg_offset) max_neg_offset = first_guess - 1;
+
+        // Whether guess matches exactly, after keeping it if it matches
+        // more lines than any match so far
+        auto try_guess = [&](ptrdiff_t guess) {
+            ptrdiff_t last = 0;
+            ptrdiff_t changes = bestmatch(
+                old, file, 1, pat_lines + 1, guess, input_lines + 1,
+                match_until_eof ? input_lines - guess + 1 : min, max, &last);
+            if (changes > max || last - guess <= matched) return false;
+            matched = last - guess;
+            where = guess;
+            min = matched;
+            max = changes - 1;
+            return changes == 0;
+        };
+        // Start at the first offset whose guess could win, so that a hunk
+        // header with a huge line number does not step through every line
+        // in between.  A match from bestmatch() ends at most pat_lines past
+        // the end of the file, and one from a guess before line 1 - max
+        // matches no line of the file, which it allows only from line -1.
+        ptrdiff_t lowest = std::min(1 - max, ptrdiff_t{-1});
+        ptrdiff_t highest = input_lines + pat_lines;
+        ptrdiff_t start = PTRDIFF_MAX;
+        if (first_guess <= highest) start = std::max(ptrdiff_t{0}, lowest - first_guess);
+        if (first_guess >= lowest) {
+            start = std::min(start, std::max(ptrdiff_t{1}, first_guess - highest));
+        }
+
+        for (ptrdiff_t offset = start; offset <= max_offset; offset++) {
+            if (offset <= max_pos_offset && try_guess(first_guess + offset)) break;
+            if (offset > 0 && offset <= max_neg_offset && try_guess(first_guess - offset)) break;
+        }
+    }
+
+    return std::max(where, min_where) - 1;
+}
+
+// The diff of gnulib's diffseq, which GNU patch's merge uses to line up a
+// hunk's old lines with the file lines they matched: it marks with '-'
+// each old line the file lines lack, and with '+' each file line the old
+// lines lack.  GNU patch sets no limit on the cost of the search, so the
+// diff is minimal, except past a cost of 200, where diffseq turns to a
+// heuristic that this leaves out, as a hunk would need hundreds of
+// context lines to get there.
+struct MergeDiff {
+    std::span<const MergeLine> old;
+    std::span<const std::string> file;
+    ptrdiff_t base;               // file line where the in lines start
+    std::vector<char> old_marks;  // per old line, then '='
+    std::vector<char> in_marks;   // per matched file line, then '^'
+    std::vector<ptrdiff_t> fdiag; // furthest x per diagonal, top down
+    std::vector<ptrdiff_t> bdiag; // furthest x per diagonal, bottom up
+    ptrdiff_t doff;               // index of diagonal 0
+
+    MergeDiff(std::span<const MergeLine> old_lines,
+              std::span<const std::string> file_lines,
+              ptrdiff_t where, ptrdiff_t matched)
+        : old(old_lines), file(file_lines), base(where),
+          old_marks(checked_cast<size_t>(std::ssize(old_lines) + 1), ' '),
+          in_marks(checked_cast<size_t>(matched + 1), ' '),
+          fdiag(checked_cast<size_t>(std::ssize(old_lines) + matched + 3)),
+          bdiag(fdiag.size()),
+          doff(matched + 1)
+    {
+        old_marks.back() = '=';
+        in_marks.back() = '^';
+    }
+
+    bool equal(ptrdiff_t x, ptrdiff_t y) const
+    {
+        return file_line_is(file, base + y, old[checked_cast<size_t>(x)].text);
+    }
+    ptrdiff_t &fd(ptrdiff_t d) { return fdiag[checked_cast<size_t>(d + doff)]; }
+    ptrdiff_t &bd(ptrdiff_t d) { return bdiag[checked_cast<size_t>(d + doff)]; }
+
+    // diffseq's diag(): the midpoint of the shortest edit script for old
+    // lines [xoff, xlim) and in lines [yoff, ylim), searching from both
+    // ends at once until the searches meet
+    void diag(ptrdiff_t xoff, ptrdiff_t xlim, ptrdiff_t yoff, ptrdiff_t ylim,
+              ptrdiff_t &xmid, ptrdiff_t &ymid)
+    {
+        const ptrdiff_t dmin = xoff - ylim;  // minimum valid diagonal
+        const ptrdiff_t dmax = xlim - yoff;  // maximum valid diagonal
+        const ptrdiff_t fmid = xoff - yoff;  // center diagonal, top down
+        const ptrdiff_t bmid = xlim - ylim;  // center diagonal, bottom up
+        ptrdiff_t fmin = fmid;
+        ptrdiff_t fmax = fmid;
+        ptrdiff_t bmin = bmid;
+        ptrdiff_t bmax = bmid;
+        bool odd = ((fmid - bmid) & 1) != 0;
+
+        fd(fmid) = xoff;
+        bd(bmid) = xlim;
+        for (;;) {
+            // Extend the top-down search by an edit step in each diagonal
+            if (fmin > dmin) fd(--fmin - 1) = -1;
+            else ++fmin;
+            if (fmax < dmax) fd(++fmax + 1) = -1;
+            else --fmax;
+            for (ptrdiff_t d = fmax; d >= fmin; d -= 2) {
+                ptrdiff_t tlo = fd(d - 1);
+                ptrdiff_t thi = fd(d + 1);
+                ptrdiff_t x = tlo < thi ? thi : tlo + 1;
+                ptrdiff_t y = x - d;
+                while (x < xlim && y < ylim && equal(x, y)) {
+                    x++;
+                    y++;
+                }
+                fd(d) = x;
+                if (odd && bmin <= d && d <= bmax && bd(d) <= x) {
+                    xmid = x;
+                    ymid = y;
+                    return;
+                }
+            }
+
+            // Likewise extend the bottom-up search
+            if (bmin > dmin) bd(--bmin - 1) = PTRDIFF_MAX;
+            else ++bmin;
+            if (bmax < dmax) bd(++bmax + 1) = PTRDIFF_MAX;
+            else --bmax;
+            for (ptrdiff_t d = bmax; d >= bmin; d -= 2) {
+                ptrdiff_t tlo = bd(d - 1);
+                ptrdiff_t thi = bd(d + 1);
+                ptrdiff_t x = tlo < thi ? tlo : thi - 1;
+                ptrdiff_t y = x - d;
+                while (xoff < x && yoff < y && equal(x - 1, y - 1)) {
+                    x--;
+                    y--;
+                }
+                bd(d) = x;
+                if (!odd && fmin <= d && d <= fmax && x <= fd(d)) {
+                    xmid = x;
+                    ymid = y;
+                    return;
+                }
+            }
+        }
+    }
+
+    // diffseq's compareseq(): mark the differences between old lines
+    // [xoff, xlim) and in lines [yoff, ylim)
+    void compareseq(ptrdiff_t xoff, ptrdiff_t xlim, ptrdiff_t yoff, ptrdiff_t ylim)
+    {
+        for (;;) {
+            // Slide down the bottom initial diagonal, and up the top one
+            while (xoff < xlim && yoff < ylim && equal(xoff, yoff)) {
+                xoff++;
+                yoff++;
+            }
+            while (xoff < xlim && yoff < ylim && equal(xlim - 1, ylim - 1)) {
+                xlim--;
+                ylim--;
+            }
+
+            if (xoff == xlim) {
+                for (; yoff < ylim; yoff++) in_marks[checked_cast<size_t>(yoff)] = '+';
+                return;
+            }
+            if (yoff == ylim) {
+                for (; xoff < xlim; xoff++) old_marks[checked_cast<size_t>(xoff)] = '-';
+                return;
+            }
+
+            // Split at the midpoint, recursing into the smaller half
+            ptrdiff_t xmid, ymid;
+            diag(xoff, xlim, yoff, ylim, xmid, ymid);
+            if ((xlim + ylim) - (xmid + ymid) < (xmid + ymid) - (xoff + yoff)) {
+                compareseq(xmid, xlim, ymid, ylim);
+                xlim = xmid;
+                ylim = ymid;
+            } else {
+                compareseq(xoff, xmid, yoff, ymid);
+                xoff = xmid;
+                yoff = ymid;
+            }
+        }
+    }
+};
+
+// GNU patch's merge_result(): report how a change in a hunk merged, the
+// first time as "Hunk #N <what> at <lines>", and after that on the same
+// line.  Like GNU patch, list a result of the same kind as the first with
+// just a comma, even after results of other kinds.
+struct MergeReport {
+    std::string &out;
+    ptrdiff_t hunk;
+    std::string_view first_what = {};
+
+    void add(std::string_view what, ptrdiff_t from, ptrdiff_t to)
+    {
+        if (first_what.empty()) {
+            out += std::format("Hunk #{} {} at ", hunk, what);
+            first_what = what;
+        } else if (what == first_what) {
+            out += ',';
+        } else {
+            out += std::format(", {} at ", what);
+        }
+        out += to <= from ? std::format("{}", from) : std::format("{}-{}", from, to);
+    }
+
+    void finish()
+    {
+        if (!first_what.empty()) out += ".\n";
+    }
+};
+
+// Merge each hunk of pf into the file's lines, like GNU patch --merge,
+// reporting what did not apply as it is.  Returns the merged text, with
+// conflicts set when some change did not merge.  Like GNU patch, reject
+// a hunk found where it would change a line already merged, and set
+// rejected[h] for it, with offsets[h] the lines to move it by.
+static std::string merge_hunks(const FileContent &fc, const PatchFile &pf,
+                               const PatchOptions &opts, std::string &out,
+                               bool &conflicts, std::vector<bool> &rejected,
+                               std::vector<ptrdiff_t> &offsets)
+{
+    std::span<const std::string> file = fc.lines;
+    ptrdiff_t file_len = std::ssize(file);
+    bool diff3 = opts.merge_style == "diff3";
+
+    std::string text;
+    bool after_newline = true;       // whether text ends with a newline
+    ptrdiff_t last_frozen_line = 0;  // file lines copied to text so far
+    ptrdiff_t cumulative_offset = 0;
+    // Like GNU patch, move the lines reported by the lines that hunks and
+    // conflicts added, but not by those that hunks deleted
+    ptrdiff_t out_offset = 0;
+
+    // Copy the file's lines before line n, from 0, to the text, first
+    // ending a last line written without a newline
+    auto copy_till = [&](ptrdiff_t n) {
+        for (; last_frozen_line < std::min(n, file_len); ++last_frozen_line) {
+            if (!after_newline) text += '\n';
+            text += file[checked_cast<size_t>(last_frozen_line)];
+            after_newline = last_frozen_line < file_len - 1 || fc.has_trailing_newline;
+            if (after_newline) text += '\n';
+        }
+        last_frozen_line = std::max(last_frozen_line, n);
+    };
+    auto write_line = [&](std::string_view line, bool newline) {
+        text += line;
+        if (newline) text += '\n';
+        after_newline = newline;
+    };
+    auto write_marker = [&](std::string_view marker) {
+        if (!after_newline) text += '\n';
+        text += marker;
+        text += '\n';
+        after_newline = true;
+    };
+
     for (ptrdiff_t h = 0; h < std::ssize(pf.hunks); ++h) {
         const auto &hunk = pf.hunks[checked_cast<size_t>(h)];
-        ptrdiff_t pos = hunk_positions[checked_cast<size_t>(h)];
 
-        if (pos >= 0) {
-            // Successfully matched — apply normally
-            if (pos > file_len) pos = file_len;
-            auto pattern = get_old_pattern(hunk);
-            ptrdiff_t pat_len = std::ssize(pattern);
-            auto new_lines = get_new_lines(hunk);
+        // Split the hunk into its sides
+        std::vector<MergeLine> old_lines, new_lines;
+        for (const auto &line : hunk.lines) {
+            std::string_view body = std::string_view(line).substr(1);
+            if (line[0] != '+') old_lines.push_back({line[0], body});
+            if (line[0] != '-') new_lines.push_back({line[0], body});
+        }
+        ptrdiff_t old_len = std::ssize(old_lines);
+        ptrdiff_t new_len = std::ssize(new_lines);
+        old_lines.push_back({'=', {}});
+        new_lines.push_back({'^', {}});
+        auto old_side = std::span<const MergeLine>(old_lines).first(checked_cast<size_t>(old_len));
+        auto old_char = [&](ptrdiff_t k) { return old_lines[checked_cast<size_t>(k)].mark; };
+        auto new_char = [&](ptrdiff_t k) { return new_lines[checked_cast<size_t>(k)].mark; };
+        auto write_old = [&](ptrdiff_t k) {
+            write_line(old_lines[checked_cast<size_t>(k)].text,
+                       !(hunk.old_no_newline && k == old_len - 1));
+        };
+        auto write_new = [&](ptrdiff_t k) {
+            write_line(new_lines[checked_cast<size_t>(k)].text,
+                       !(hunk.new_no_newline && k == new_len - 1));
+        };
 
-            // Trim fuzzed context lines
-            auto fz = hunk_fuzz[checked_cast<size_t>(h)];
-            pos += fz.prefix;
-            pat_len -= fz.prefix + fz.suffix;
-            if (pat_len < 0) pat_len = 0;
-            ptrdiff_t new_start = fz.prefix;
-            ptrdiff_t new_end = std::ssize(new_lines) - fz.suffix;
-            if (new_end < new_start) new_end = new_start;
+        // Apply the hunk where it matches exactly, or else merge it where
+        // it matches best
+        ptrdiff_t matched = old_len;
+        ptrdiff_t where = locate_hunk(file, hunk, get_old_pattern(hunk),
+                                      last_frozen_line, cumulative_offset, 0);
+        bool applies_cleanly = where >= 0;
+        if (applies_cleanly) {
+            cumulative_offset = where - old_range_pos(hunk);
 
-            if (pos > file_len) pos = file_len;
-
-            for (ptrdiff_t j = last_copied; j < pos; ++j) {
-                output += file_lines[checked_cast<size_t>(j)];
-                output += '\n';
-            }
-            for (ptrdiff_t j = new_start; j < new_end; ++j) {
-                output += new_lines[checked_cast<size_t>(j)];
-                bool is_last = (j == new_end - 1);
-                if (is_last && fz.suffix == 0 && hunk.new_no_newline) {
-                    // no trailing newline
-                } else {
-                    output += '\n';
+            // Like GNU patch, which finds a hunk among the lines merged
+            // already as it does outside merge mode, fail one whose changes
+            // start among them.  GNU patch notices only once it has copied
+            // the hunk's leading context, and with none, fails an assertion.
+            auto ctx = get_hunk_context(hunk);
+            if (ctx.prefix < std::ssize(hunk.lines) && where + ctx.prefix < last_frozen_line) {
+                out += "misordered hunks! output would be garbled\n";
+                if (!opts.quiet) {
+                    out += std::format("Hunk #{} FAILED at {}.\n", h + 1, where + 1 + out_offset);
                 }
+                rejected[checked_cast<size_t>(h)] = true;
+                offsets[checked_cast<size_t>(h)] = out_offset;
+                continue;
             }
-            last_copied = pos + pat_len;
-            if (last_copied > file_len) last_copied = file_len;
         } else {
-            // Rejected — insert per-change conflict markers at expected position
-            ptrdiff_t expected = old_range_pos(hunk);
-            if (expected < last_copied) expected = last_copied;
-            if (expected > file_len) expected = file_len;
+            where = locate_merge(file, hunk, old_side, last_frozen_line,
+                                 cumulative_offset, matched);
+        }
 
-            // Copy up to expected position
-            for (ptrdiff_t j = last_copied; j < expected; ++j) {
-                output += file_lines[checked_cast<size_t>(j)];
-                output += '\n';
+        // Line up the old lines with the file lines from where
+        MergeDiff md(old_side, file, where, matched);
+        md.compareseq(0, old_len, 0, matched);
+        auto old_diff = [&](ptrdiff_t k) { return md.old_marks[checked_cast<size_t>(k)]; };
+        auto in_diff = [&](ptrdiff_t k) { return md.in_marks[checked_cast<size_t>(k)]; };
+
+        // Walk the old lines, the new lines, and the file lines ("in") in
+        // step, a run of lines at a time
+        MergeReport report{out, h + 1};
+        copy_till(where);
+        ptrdiff_t old = 0, neu = 0, in = 0;
+        for (;;) {
+            ptrdiff_t first_old = old, first_new = neu, first_in = in;
+            bool conflict = false;
+
+            if (old_char(old) == '-' || new_char(neu) == '+') {
+                // A change merges when the file has its old lines, and no
+                // lines among them
+                while (!conflict && old_char(old) == '-') {
+                    if (old_diff(old) == '-' || in_diff(in) == '+') {
+                        conflict = true;
+                    } else {
+                        ++in;
+                        ++old;
+                    }
+                }
+                conflict = conflict || old_diff(old) == '-' || in_diff(in) == '+';
+                if (!conflict) {
+                    while (new_char(neu) == '+') ++neu;
+                    ptrdiff_t lines = neu - first_new;
+                    if (!opts.quiet && !applies_cleanly) {
+                        report.add("merged", where + 1 + out_offset, where + lines + out_offset);
+                    }
+                    last_frozen_line += old - first_old;
+                    where += old - first_old;
+                    out_offset += lines;
+                    for (ptrdiff_t k = first_new; k < neu; ++k) write_new(k);
+                    continue;
+                }
+            } else if (old_char(old) == ' ') {
+                if (old_diff(old) == '-') {
+                    // Context the file lacks drops out, unless a change
+                    // comes next
+                    while (old_char(old) == ' ' && old_diff(old) == '-') {
+                        if (new_char(neu) == '+') {
+                            conflict = true;
+                            break;
+                        }
+                        ++old;
+                        ++neu;
+                    }
+                    conflict = conflict || old_char(old) == '-' || new_char(neu) == '+';
+                    if (!conflict) continue;
+                } else if (in_diff(in) == '+') {
+                    // File lines the hunk lacks stay
+                    while (in_diff(in) == '+') ++in;
+                    where += in - first_in;
+                    copy_till(where);
+                    continue;
+                } else {
+                    // Context the file has stays
+                    while (old_char(old) == ' ' && old_diff(old) == ' ' &&
+                           new_char(neu) == ' ' && in_diff(in) == ' ') {
+                        ++old;
+                        ++neu;
+                        ++in;
+                    }
+                    where += in - first_in;
+                    copy_till(where);
+                    continue;
+                }
+            } else {
+                break;  // both sides are done
             }
 
-            // Walk through hunk lines, emitting context outside markers
-            // and changed regions inside markers.
-            ptrdiff_t file_pos = expected;
-            ptrdiff_t hi = 0;
-            ptrdiff_t hunk_len = std::ssize(hunk.lines);
-
-            while (hi < hunk_len) {
-                char prefix = hunk.lines[checked_cast<size_t>(hi)][0];
-
-                if (prefix == ' ') {
-                    // Context line — emit the file's actual line
-                    if (file_pos < file_len) {
-                        output += file_lines[checked_cast<size_t>(file_pos)];
-                        output += '\n';
-                        ++file_pos;
-                    }
-                    ++hi;
+            // Find the end of the conflict
+            for (;;) {
+                if (old_char(old) == '-') {
+                    while (in_diff(in) == '+') ++in;
+                    if (old_diff(old) == ' ') ++in;
+                    ++old;
+                } else if (old_diff(old) == '-') {
+                    while (new_char(neu) == '+') ++neu;
+                    ++neu;  // the context line
+                    ++old;
+                } else if (new_char(neu) == '+') {
+                    while (new_char(neu) == '+') ++neu;
+                } else if (in_diff(in) == '+') {
+                    while (in_diff(in) == '+') ++in;
                 } else {
-                    // Changed region — collect contiguous -/+ lines
-                    std::vector<std::string_view> old_lines, new_change;
-                    while (hi < hunk_len && hunk.lines[checked_cast<size_t>(hi)][0] == '-') {
-                        old_lines.push_back(std::string_view(hunk.lines[checked_cast<size_t>(hi)]).substr(1));
-                        ++hi;
-                    }
-                    while (hi < hunk_len && hunk.lines[checked_cast<size_t>(hi)][0] == '+') {
-                        new_change.push_back(std::string_view(hunk.lines[checked_cast<size_t>(hi)]).substr(1));
-                        ++hi;
-                    }
-
-                    output += "<<<<<<<\n";
-
-                    // Current file content for the old-side span
-                    ptrdiff_t span = std::ssize(old_lines);
-                    ptrdiff_t end = file_pos + span;
-                    if (end > file_len) end = file_len;
-                    for (ptrdiff_t j = file_pos; j < end; ++j) {
-                        output += file_lines[checked_cast<size_t>(j)];
-                        output += '\n';
-                    }
-
-                    if (merge_style == "diff3") {
-                        output += "|||||||\n";
-                        for (const auto &ol : old_lines) {
-                            output += ol;
-                            output += '\n';
-                        }
-                    }
-
-                    output += "=======\n";
-                    for (const auto &nl : new_change) {
-                        output += nl;
-                        output += '\n';
-                    }
-                    output += ">>>>>>>\n";
-
-                    file_pos = end;
+                    break;
                 }
             }
 
-            last_copied = file_pos;
+            // Keep the new lines that the file has at the start of the
+            // conflict.  When it has all of them, the change is already
+            // applied.
+            ptrdiff_t last = where;
+            while (first_in < in && first_new < neu &&
+                   file_line_is(file, last, new_lines[checked_cast<size_t>(first_new)].text)) {
+                ++first_in;
+                ++first_new;
+                ++last;
+            }
+            bool applied = first_in == in && first_new == neu;
+            if (applied) {
+                report.add("already applied", where + 1 + out_offset, last + out_offset);
+            } else if (diff3) {
+                // diff3 conflicts keep those lines on both sides.  GNU
+                // patch does this for a change already applied too, but
+                // then loses its place in the file, and merges the hunk's
+                // later changes into the wrong lines.
+                ptrdiff_t common_prefix = last - where;
+                first_in -= common_prefix;
+                first_new -= common_prefix;
+                last = where;
+            }
+            where = last;
+            copy_till(where);
+            if (applied) continue;
+
+            // Other conflicts set aside the new lines that the file has
+            // at the end
+            ptrdiff_t common_suffix = 0;
+            if (!diff3) {
+                for (last = where + (in - first_in);
+                     first_in < in && first_new < neu &&
+                     file_line_is(file, last - 1, new_lines[checked_cast<size_t>(neu - 1)].text);
+                     --in, --neu, --last) {
+                    ++common_suffix;
+                }
+            }
+
+            ptrdiff_t lines = 3 + (in - first_in) + (neu - first_new);
+            if (diff3) lines += 1 + (old - first_old);
+            report.add("NOT MERGED", where + 1 + out_offset, where + lines + out_offset);
+            out_offset += lines - (in - first_in);
+
+            write_marker("<<<<<<<");
+            where += in - first_in;
+            copy_till(where);
+            if (diff3) {
+                write_marker("|||||||");
+                for (ptrdiff_t k = first_old; k < old; ++k) write_old(k);
+            }
+            write_marker("=======");
+            for (ptrdiff_t k = first_new; k < neu; ++k) write_new(k);
+            write_marker(">>>>>>>");
+
+            where += common_suffix;
+            copy_till(where);
+            in += common_suffix;
+            neu += common_suffix;
+            conflicts = true;
         }
+        report.finish();
     }
 
-    // Copy remaining
-    for (ptrdiff_t j = last_copied; j < file_len; ++j) {
-        output += file_lines[checked_cast<size_t>(j)];
-        if (j < file_len - 1) {
-            output += '\n';
-        } else if (has_trailing_newline) {
-            output += '\n';
-        }
-    }
-
-    return output;
+    copy_till(file_len);
+    return text;
 }
 
 // ── Reject file generation ─────────────────────────────────────────────
@@ -1432,9 +1873,7 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
         }
         FileContent fc = load_file_lines(original);
 
-        // Try to match each hunk
         std::vector<ptrdiff_t> hunk_positions(checked_cast<size_t>(std::ssize(pf.hunks)), -1);
-        std::vector<HunkFuzz> hunk_fuzz(checked_cast<size_t>(std::ssize(pf.hunks)));
         std::vector<bool> rejected(checked_cast<size_t>(std::ssize(pf.hunks)), false);
         ptrdiff_t cumulative_offset = 0;
         // Lines that the hunks applied so far added, which GNU patch adds to
@@ -1442,98 +1881,88 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
         ptrdiff_t out_offset = 0;
         std::vector<ptrdiff_t> offset_before(checked_cast<size_t>(std::ssize(pf.hunks)));
         ptrdiff_t last_frozen_line = 0;  // 0-based, exclusive: lines before this are frozen
-        bool file_has_rejects = false;
+        bool conflicts = false;
+        std::string merged;
 
-        for (ptrdiff_t h = 0; h < std::ssize(pf.hunks); ++h) {
-            const auto &hunk = pf.hunks[checked_cast<size_t>(h)];
-            auto pattern = get_old_pattern(hunk);
-            offset_before[checked_cast<size_t>(h)] = out_offset;
+        if (opts.merge) {
+            // Like GNU patch, merge every hunk, conflicts and all
+            merged = merge_hunks(fc, pf, opts, result.out, conflicts,
+                                 rejected, offset_before);
+        } else {
+            // Try to match each hunk
+            for (ptrdiff_t h = 0; h < std::ssize(pf.hunks); ++h) {
+                const auto &hunk = pf.hunks[checked_cast<size_t>(h)];
+                auto pattern = get_old_pattern(hunk);
+                offset_before[checked_cast<size_t>(h)] = out_offset;
 
-            ptrdiff_t pos = locate_hunk(fc.lines, hunk, pattern,
-                                         last_frozen_line, cumulative_offset,
-                                         opts.fuzz, !opts.merge);
-            auto ctx = get_hunk_context(hunk);
-            bool changes = ctx.prefix < std::ssize(hunk.lines);
+                ptrdiff_t pos = locate_hunk(fc.lines, hunk, pattern,
+                                             last_frozen_line, cumulative_offset,
+                                             opts.fuzz);
+                auto ctx = get_hunk_context(hunk);
+                bool changes = ctx.prefix < std::ssize(hunk.lines);
 
-            // Like GNU patch, outside merge mode refuse a hunk at the top
-            // of a file with contents when the patch surely creates it
-            bool refused = !opts.merge && pos == 0 && pf.old_absent == 2 && !is_empty;
+                // Like GNU patch outside merge mode, refuse a hunk at the top
+                // of a file with contents when the patch surely creates it
+                bool refused = pos == 0 && pf.old_absent == 2 && !is_empty;
 
-            // Like GNU patch, fail a hunk found among the frozen lines that
-            // would change one, saying so even with -s, though the hunks
-            // after it still start from where it was found
-            bool misordered = !refused && pos >= 0 && changes &&
-                              pos + ctx.prefix < last_frozen_line;
-            if (misordered) {
-                result.out += "misordered hunks! output would be garbled\n";
-                cumulative_offset = pos - old_range_pos(hunk);
-            }
+                // Like GNU patch, fail a hunk found among the frozen lines that
+                // would change one, saying so even with -s, though the hunks
+                // after it still start from where it was found
+                bool misordered = !refused && pos >= 0 && changes &&
+                                  pos + ctx.prefix < last_frozen_line;
+                if (misordered) {
+                    result.out += "misordered hunks! output would be garbled\n";
+                    cumulative_offset = pos - old_range_pos(hunk);
+                }
 
-            if (pos >= 0 && !refused && !misordered) {
-                hunk_positions[checked_cast<size_t>(h)] = pos;
-                ptrdiff_t pat_len = std::ssize(pattern);
-                ptrdiff_t actual_offset = pos - old_range_pos(hunk);
+                if (pos >= 0 && !refused && !misordered) {
+                    hunk_positions[checked_cast<size_t>(h)] = pos;
+                    ptrdiff_t pat_len = std::ssize(pattern);
+                    ptrdiff_t actual_offset = pos - old_range_pos(hunk);
 
-                // Determine fuzz level used for this hunk
-                int fuzz_used = 0;
-                if (opts.fuzz > 0) {
-                    int fuzz_limit = checked_cast<int>(
-                        std::min(ptrdiff_t{opts.fuzz}, std::max(ctx.prefix, ctx.suffix)));
-                    for (int f = 0; f <= fuzz_limit; ++f) {
-                        if (try_match(fc.lines, pos, pattern, f, ctx.prefix, ctx.suffix)) {
-                            fuzz_used = f;
-                            break;
+                    // Determine fuzz level used for this hunk
+                    int fuzz_used = 0;
+                    if (opts.fuzz > 0) {
+                        int fuzz_limit = checked_cast<int>(
+                            std::min(ptrdiff_t{opts.fuzz}, std::max(ctx.prefix, ctx.suffix)));
+                        for (int f = 0; f <= fuzz_limit; ++f) {
+                            if (try_match(fc.lines, pos, pattern, f, ctx.prefix, ctx.suffix)) {
+                                fuzz_used = f;
+                                break;
+                            }
                         }
                     }
-                }
 
-                // Record fuzz amounts for build_merge_output trimming
-                hunk_fuzz[checked_cast<size_t>(h)] = {
-                    std::min(static_cast<ptrdiff_t>(fuzz_used), ctx.prefix),
-                    std::min(static_cast<ptrdiff_t>(fuzz_used), ctx.suffix)
-                };
-                auto &fz = hunk_fuzz[checked_cast<size_t>(h)];
-
-                // Like GNU patch, report the hunk's line in the patched file
-                // and its whole offset from the line it names, even when the
-                // hunk before had the same offset
-                if ((actual_offset != 0 || fuzz_used > 0) && !opts.quiet) {
-                    result.out += std::format("Hunk #{} succeeded at {}",
-                                              h + 1, pos + 1 + out_offset);
-                    if (fuzz_used > 0) {
-                        result.out += std::format(" with fuzz {}", fuzz_used);
+                    // Like GNU patch, report the hunk's line in the patched
+                    // file and its whole offset from the line it names, even
+                    // when the hunk before had the same offset
+                    if ((actual_offset != 0 || fuzz_used > 0) && !opts.quiet) {
+                        result.out += std::format("Hunk #{} succeeded at {}",
+                                                  h + 1, pos + 1 + out_offset);
+                        if (fuzz_used > 0) {
+                            result.out += std::format(" with fuzz {}", fuzz_used);
+                        }
+                        if (actual_offset != 0) {
+                            // Like GNU patch, only +1 is singular; -1 stays
+                            // "lines"
+                            result.out += std::format(" (offset {} line{})", actual_offset,
+                                                      actual_offset == 1 ? "" : "s");
+                        }
+                        result.out += ".\n";
                     }
-                    if (actual_offset != 0) {
-                        // Like GNU patch, only +1 is singular; -1 stays "lines"
-                        result.out += std::format(" (offset {} line{})", actual_offset,
-                                                  actual_offset == 1 ? "" : "s");
-                    }
-                    result.out += ".\n";
-                }
 
-                // Update offset and frozen line.  Like GNU patch, merge mode
-                // freezes the trailing context (but for fuzzed lines), but
-                // otherwise only the lines through the hunk's last change are
-                // frozen, as the output takes context from the file.
-                cumulative_offset = actual_offset;
-                if (opts.merge) {
-                    last_frozen_line = pos + pat_len - fz.suffix;
-                } else if (changes) {
-                    last_frozen_line = pos + pat_len - ctx.suffix;
-                }
-                out_offset += hunk.new_count - hunk.old_count;
-            } else {
-                // Hunk failed
-                rejected[checked_cast<size_t>(h)] = true;
-                file_has_rejects = true;
-                if (!opts.quiet) {
-                    if (opts.merge) {
-                        result.out += std::format("Hunk #{} NOT MERGED at {}.\n",
-                                                  h + 1, hunk.old_start);
-                    } else {
-                        // Like GNU patch, the line a hunk was found at, or
-                        // else the line it names, the one after for an
-                        // empty range
+                    // Update offset and frozen line.  Like GNU patch outside
+                    // merge mode, freeze only the lines through the hunk's last
+                    // change, as the output takes context from the file.
+                    cumulative_offset = actual_offset;
+                    if (changes) last_frozen_line = pos + pat_len - ctx.suffix;
+                    out_offset += hunk.new_count - hunk.old_count;
+                } else {
+                    // Hunk failed
+                    rejected[checked_cast<size_t>(h)] = true;
+                    if (!opts.quiet) {
+                        // Like GNU patch, the line a hunk was found at, or else
+                        // the line it names, the one after for an empty range
                         ptrdiff_t line = refused || misordered ? pos + 1
                                        : hunk.old_count == 0 ? hunk.old_start + 1
                                        : hunk.old_start;
@@ -1544,26 +1973,26 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
             }
         }
 
-        if (file_has_rejects) {
+        bool file_has_rejects = std::ranges::find(rejected, true) != rejected.end();
+        if (file_has_rejects || conflicts) {
             had_rejects = true;
             result.exit_code = 1;
         }
 
         // Apply changes
         if (!opts.dry_run) {
-            bool any_applied = false;
+            // Like GNU patch, merge mode always writes the file
+            bool any_applied = opts.merge;
             for (ptrdiff_t h = 0; h < std::ssize(pf.hunks); ++h) {
                 if (hunk_positions[checked_cast<size_t>(h)] >= 0) { any_applied = true; break; }
             }
 
             bool creating = !file_existed && pf.old_absent;
-            bool changed = any_applied || creating || (opts.merge && file_has_rejects);
+            bool changed = any_applied || creating;
             std::string new_content;
             if (changed) {
-                if (opts.merge && file_has_rejects) {
-                    new_content = build_merge_output(fc.lines, fc.has_trailing_newline,
-                                                      pf, hunk_positions, hunk_fuzz,
-                                                      opts.merge_style);
+                if (opts.merge) {
+                    new_content = std::move(merged);
                 } else {
                     new_content = build_output(fc.lines, fc.has_trailing_newline,
                                                pf, hunk_positions);
@@ -1616,8 +2045,9 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                 if (changed) fs_write(pf.target_path, new_content);
             }
 
-            // Write reject file if needed (and not in merge mode)
-            if (file_has_rejects && !opts.merge) {
+            // Write the reject file, which merge mode needs only for a hunk
+            // found among lines it merged already
+            if (file_has_rejects) {
                 fs_write(pf.target_path + ".rej", format_rejects(pf, rejected, offset_before));
                 // Like GNU patch, even with -s
                 ptrdiff_t rej_count = 0;

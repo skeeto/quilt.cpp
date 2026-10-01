@@ -549,6 +549,12 @@ set(QUILT_TEST_SCENARIOS
     push_hunk_among_frozen_lines
     push_misordered_hunks
     push_insertion_hunk_guess
+    push_merge_already_applied
+    push_merge_mixed_hunks
+    push_merge_diff3_mixed
+    push_merge_hunk_regions
+    push_merge_no_fuzz
+    push_merge_overlapping_hunks
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -730,6 +736,7 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     getopt_long_prefixes
     getopt_mail
     getopt_help_value
+    push_merge_diff3_applied_region
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -8610,6 +8617,20 @@ function(qt_run_named_scenario scenario)
         qt_scenario_push_overlapping_hunk_offsets()
     elseif(scenario STREQUAL "push_hunk_among_frozen_lines")
         qt_scenario_push_hunk_among_frozen_lines()
+    elseif(scenario STREQUAL "push_merge_already_applied")
+        qt_scenario_push_merge_already_applied()
+    elseif(scenario STREQUAL "push_merge_mixed_hunks")
+        qt_scenario_push_merge_mixed_hunks()
+    elseif(scenario STREQUAL "push_merge_diff3_mixed")
+        qt_scenario_push_merge_diff3_mixed()
+    elseif(scenario STREQUAL "push_merge_hunk_regions")
+        qt_scenario_push_merge_hunk_regions()
+    elseif(scenario STREQUAL "push_merge_no_fuzz")
+        qt_scenario_push_merge_no_fuzz()
+    elseif(scenario STREQUAL "push_merge_overlapping_hunks")
+        qt_scenario_push_merge_overlapping_hunks()
+    elseif(scenario STREQUAL "push_merge_diff3_applied_region")
+        qt_scenario_push_merge_diff3_applied_region()
     elseif(scenario STREQUAL "push_misordered_hunks")
         qt_scenario_push_misordered_hunks()
     elseif(scenario STREQUAL "push_insertion_hunk_guess")
@@ -16632,4 +16653,439 @@ function(qt_scenario_push_insertion_hunk_guess)
     qt_assert_contains("${combined}"
         "Hunk #1 succeeded at 2 (offset -4 lines).\nHunk #2 FAILED at 4.\n"
         "push should fail an insertion that the offset puts before the first line")
+endfunction()
+
+# Twenty lines, "l1" to "l20", for the push -m scenarios
+function(qt_merge_base out_var)
+    set(text "")
+    foreach(i RANGE 1 20)
+        string(APPEND text "l${i}\n")
+    endforeach()
+    set(${out_var} "${text}" PARENT_SCOPE)
+endfunction()
+
+# push_merge_already_applied: like GNU patch --merge, push -m leaves alone
+# a change that the file already has and says where it found it, rather
+# than writing a conflict, whether the change replaces, inserts, or deletes
+# lines.  With nothing left to conflict, the push succeeds.
+function(qt_scenario_push_merge_already_applied)
+    qt_begin_test("push_merge_already_applied")
+    qt_merge_base(base)
+    qt_write_file("${QT_WORK_DIR}/f.txt" "A\nb\n")
+    string(REPLACE "l5\n" "l5\nn1\nn2\n" g "${base}")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "${g}")
+    string(REPLACE "l6\nl7\n" "" h "${base}")
+    qt_write_file("${QT_WORK_DIR}/h.txt" "${h}")
+    qt_write_file("${QT_WORK_DIR}/i.txt" "A\nb\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\nq.diff\nr.diff\ns.diff\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -1,2 +1,2 @@\n-a\n+A\n b\n")
+    qt_write_file("${QT_WORK_DIR}/patches/q.diff" [=[--- a/g.txt
++++ b/g.txt
+@@ -4,4 +4,6 @@
+ l4
+ l5
++n1
++n2
+ l6
+ l7
+]=])
+    qt_write_file("${QT_WORK_DIR}/patches/r.diff" [=[--- a/h.txt
++++ b/h.txt
+@@ -4,6 +4,4 @@
+ l4
+ l5
+-l6
+-l7
+ l8
+ l9
+]=])
+    qt_write_file("${QT_WORK_DIR}/patches/s.diff"
+        "--- a/i.txt\n+++ b/i.txt\n@@ -1,2 +1,2 @@\n-a\n+A\n b\n")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -m)
+    qt_assert_success("${rc}" "push -m of an applied replacement should succeed")
+    qt_assert_equal("${out}"
+        "Applying patch p.diff\npatching file f.txt\nHunk #1 already applied at 1.\n\nNow at patch p.diff\n"
+        "push -m should say the replacement is already applied")
+    qt_assert_equal("${err}" "" "push -m should write everything to stdout")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "A\nb" "push -m should leave f.txt alone")
+    qt_assert_not_exists("${QT_WORK_DIR}/f.txt.rej" "push -m should leave no rejects")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -m)
+    qt_assert_success("${rc}" "push -m of an applied insertion should succeed")
+    qt_assert_equal("${out}"
+        "Applying patch q.diff\npatching file g.txt\nHunk #1 already applied at 6-7.\n\nNow at patch q.diff\n"
+        "push -m should say the insertion is already applied")
+    qt_read_file_raw(actual "${QT_WORK_DIR}/g.txt")
+    qt_assert_equal("${actual}" "${g}" "push -m should leave g.txt alone")
+
+    # Like patch -s, push -q still reports the hunk
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -q -m)
+    qt_assert_success("${rc}" "push -q -m of an applied deletion should succeed")
+    qt_assert_equal("${out}"
+        "Applying patch r.diff\nHunk #1 already applied at 6.\nNow at patch r.diff\n"
+        "push -q -m should say the deletion is already applied")
+    qt_read_file_raw(actual "${QT_WORK_DIR}/h.txt")
+    qt_assert_equal("${actual}" "${h}" "push -q -m should leave h.txt alone")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --merge=diff3)
+    qt_assert_success("${rc}" "push --merge=diff3 of an applied replacement should succeed")
+    qt_assert_equal("${out}"
+        "Applying patch s.diff\npatching file i.txt\nHunk #1 already applied at 1.\n\nNow at patch s.diff\n"
+        "push --merge=diff3 should say the replacement is already applied")
+    qt_assert_file_text("${QT_WORK_DIR}/i.txt" "A\nb" "push --merge=diff3 should leave i.txt alone")
+endfunction()
+
+# push_merge_mixed_hunks: like GNU patch --merge, push -m says nothing of a
+# hunk that applies as it is, even at an offset, and reports the others:
+# here one already applied, and one that conflicts.  Like GNU patch, it
+# moves the lines it reports by the lines earlier hunks add, but not by
+# those they delete.  A conflict fails the push unless forced.
+function(qt_scenario_push_merge_mixed_hunks)
+    qt_begin_test("push_merge_mixed_hunks")
+    qt_merge_base(base)
+    string(REPLACE "l10\n" "L10\n" g "x1\nx2\n${base}")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "${g}")
+    string(REPLACE "l10\n" "L10\n" f "${base}")
+    string(REPLACE "l17\n" "X17\n" f "${f}")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "${f}")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "q.diff\np.diff\n")
+    qt_write_file("${QT_WORK_DIR}/patches/q.diff" [=[--- a/g.txt
++++ b/g.txt
+@@ -2,3 +2,3 @@
+ l2
+-l3
++L3
+ l4
+@@ -9,3 +9,3 @@
+ l9
+-l10
++L10
+ l11
+]=])
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff" [=[--- a/f.txt
++++ b/f.txt
+@@ -2,3 +2,3 @@
+ l2
+-l3
++L3
+ l4
+@@ -9,3 +9,3 @@
+ l9
+-l10
++L10
+ l11
+@@ -16,3 +16,3 @@
+ l16
+-l17
++L17
+ l18
+]=])
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -m)
+    qt_assert_success("${rc}" "push -m of an offset and applied patch should succeed")
+    qt_assert_equal("${out}"
+        "Applying patch q.diff\npatching file g.txt\nHunk #2 already applied at 13.\n\nNow at patch q.diff\n"
+        "push -m should report only the applied hunk")
+    string(REPLACE "l3\n" "L3\n" g "${g}")
+    qt_read_file_raw(actual "${QT_WORK_DIR}/g.txt")
+    qt_assert_equal("${actual}" "${g}" "push -m should apply the offset hunk")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -m)
+    qt_assert_failure("${rc}" "push -m with a conflict should fail")
+    qt_assert_equal("${out}"
+        "Applying patch p.diff\npatching file f.txt\nHunk #2 already applied at 11.\nHunk #3 NOT MERGED at 18-22.\nPatch p.diff does not apply (enforce with -f)\n"
+        "push -m should report the applied and the conflicting hunks")
+    qt_read_file_raw(actual "${QT_WORK_DIR}/f.txt")
+    qt_assert_equal("${actual}" "${f}" "push -m should roll back f.txt")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -q -m -f)
+    qt_assert_failure("${rc}" "push -q -m -f with a conflict should fail")
+    qt_assert_equal("${out}"
+        "Applying patch p.diff\nHunk #2 already applied at 11.\nHunk #3 NOT MERGED at 18-22.\nApplied patch p.diff (forced; needs refresh)\n"
+        "push -q -m -f should report the applied and the conflicting hunks")
+    string(REPLACE "l3\n" "L3\n" f "${f}")
+    string(REPLACE "X17\n" "<<<<<<<\nX17\n=======\nL17\n>>>>>>>\n" f "${f}")
+    qt_read_file_raw(actual "${QT_WORK_DIR}/f.txt")
+    qt_assert_equal("${actual}" "${f}" "push -q -m -f should merge f.txt")
+endfunction()
+
+# push_merge_diff3_mixed: push --merge=diff3 reports a hunk already applied
+# as push -m does, and counts the old lines of a conflict in its lines
+function(qt_scenario_push_merge_diff3_mixed)
+    qt_begin_test("push_merge_diff3_mixed")
+    qt_merge_base(base)
+    string(REPLACE "l10\n" "L10\n" f "${base}")
+    string(REPLACE "l17\n" "X17\n" f "${f}")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "${f}")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff" [=[--- a/f.txt
++++ b/f.txt
+@@ -2,3 +2,3 @@
+ l2
+-l3
++L3
+ l4
+@@ -9,3 +9,3 @@
+ l9
+-l10
++L10
+ l11
+@@ -16,3 +16,3 @@
+ l16
+-l17
++L17
+ l18
+]=])
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --merge=diff3 -f)
+    qt_assert_failure("${rc}" "push --merge=diff3 -f with a conflict should fail")
+    qt_assert_equal("${out}"
+        "Applying patch p.diff\npatching file f.txt\nHunk #2 already applied at 11.\nHunk #3 NOT MERGED at 18-24.\nApplied patch p.diff (forced; needs refresh)\n"
+        "push --merge=diff3 -f should report the applied and the conflicting hunks")
+    string(REPLACE "l3\n" "L3\n" f "${f}")
+    string(REPLACE "X17\n" "<<<<<<<\nX17\n|||||||\nl17\n=======\nL17\n>>>>>>>\n" f "${f}")
+    qt_read_file_raw(actual "${QT_WORK_DIR}/f.txt")
+    qt_assert_equal("${actual}" "${f}" "push --merge=diff3 -f should merge f.txt")
+endfunction()
+
+# push_merge_hunk_regions: like GNU patch --merge, push -m merges each
+# change in a hunk on its own, so in one hunk a change can be already
+# applied while another merges or conflicts.  A hunk reports all its
+# results on one line, and the same result twice in a row as a list.
+function(qt_scenario_push_merge_hunk_regions)
+    qt_begin_test("push_merge_hunk_regions")
+    qt_merge_base(base)
+    string(REPLACE "l5\n" "L5\n" f "${base}")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "${f}")
+    string(REPLACE "l7\n" "L7\n" g "${f}")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "${g}")
+    string(REPLACE "l7\n" "X7\n" h "${f}")
+    qt_write_file("${QT_WORK_DIR}/h.txt" "${h}")
+    string(REPLACE "l5\n" "X5\n" i "${base}")
+    qt_write_file("${QT_WORK_DIR}/i.txt" "${i}")
+    set(hunk [=[@@ -3,7 +3,7 @@
+ l3
+ l4
+-l5
++L5
+ l6
+-l7
++L7
+ l8
+ l9
+]=])
+    foreach(name f g h i)
+        qt_write_file("${QT_WORK_DIR}/patches/${name}.diff"
+            "--- a/${name}.txt\n+++ b/${name}.txt\n${hunk}")
+    endforeach()
+    qt_write_file("${QT_WORK_DIR}/patches/series" "f.diff\ng.diff\nh.diff\n")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -m)
+    qt_assert_success("${rc}" "push -m of an applied and a clean change should succeed")
+    qt_assert_equal("${out}"
+        "Applying patch f.diff\npatching file f.txt\nHunk #1 already applied at 5, merged at 7.\n\nNow at patch f.diff\n"
+        "push -m should report the applied and the merged change")
+    string(REPLACE "l7\n" "L7\n" f "${f}")
+    qt_read_file_raw(actual "${QT_WORK_DIR}/f.txt")
+    qt_assert_equal("${actual}" "${f}" "push -m should merge f.txt")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -m)
+    qt_assert_success("${rc}" "push -m of two applied changes should succeed")
+    qt_assert_equal("${out}"
+        "Applying patch g.diff\npatching file g.txt\nHunk #1 already applied at 5,7.\n\nNow at patch g.diff\n"
+        "push -m should list the applied changes")
+    qt_read_file_raw(actual "${QT_WORK_DIR}/g.txt")
+    qt_assert_equal("${actual}" "${g}" "push -m should leave g.txt alone")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -m)
+    qt_assert_failure("${rc}" "push -m of an applied and a conflicting change should fail")
+    qt_assert_equal("${out}"
+        "Applying patch h.diff\npatching file h.txt\nHunk #1 already applied at 5, NOT MERGED at 7-11.\nPatch h.diff does not apply (enforce with -f)\n"
+        "push -m should report the applied and the conflicting change")
+    qt_read_file_raw(actual "${QT_WORK_DIR}/h.txt")
+    qt_assert_equal("${actual}" "${h}" "push -m should roll back h.txt")
+
+    qt_write_file("${QT_WORK_DIR}/patches/series" "f.diff\ng.diff\ni.diff\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -m -f)
+    qt_assert_failure("${rc}" "push -m -f of a conflicting and a clean change should fail")
+    qt_assert_equal("${out}"
+        "Applying patch i.diff\npatching file i.txt\nHunk #1 NOT MERGED at 5-9, merged at 11.\nApplied patch i.diff (forced; needs refresh)\n"
+        "push -m -f should report the conflicting and the merged change")
+    string(REPLACE "X5\n" "<<<<<<<\nX5\n=======\nL5\n>>>>>>>\n" i "${i}")
+    string(REPLACE "l7\n" "L7\n" i "${i}")
+    qt_read_file_raw(actual "${QT_WORK_DIR}/i.txt")
+    qt_assert_equal("${actual}" "${i}" "push -m -f should merge i.txt")
+endfunction()
+
+# push_merge_no_fuzz: like GNU patch --merge, push -m applies a hunk only
+# where it matches exactly, and merges it otherwise, rather than applying
+# it with fuzz
+function(qt_scenario_push_merge_no_fuzz)
+    qt_begin_test("push_merge_no_fuzz")
+    qt_merge_base(base)
+    string(REPLACE "l2\n" "X2\n" f "${base}")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "${f}")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff" [=[--- a/f.txt
++++ b/f.txt
+@@ -1,5 +1,5 @@
+ l1
+ l2
+-l3
++L3
+ l4
+ l5
+]=])
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -m -f)
+    qt_assert_failure("${rc}" "push -m -f of a hunk that needs fuzz should fail")
+    qt_assert_equal("${out}"
+        "Applying patch p.diff\npatching file f.txt\nHunk #1 NOT MERGED at 2-8.\nApplied patch p.diff (forced; needs refresh)\n"
+        "push -m -f should merge rather than fuzz")
+    string(REPLACE "X2\nl3\n" "<<<<<<<\nX2\nl3\n=======\nl2\nL3\n>>>>>>>\n" f "${f}")
+    qt_read_file_raw(actual "${QT_WORK_DIR}/f.txt")
+    qt_assert_equal("${actual}" "${f}" "push -m -f should merge f.txt")
+endfunction()
+
+# push_merge_diff3_applied_region: push --merge=diff3 merges the changes
+# that follow one already applied in the same hunk as push -m does.  GNU
+# patch --merge=diff3 loses its place in the file after such a change, so
+# it applies the later ones to the wrong lines.
+function(qt_scenario_push_merge_diff3_applied_region)
+    qt_begin_test("push_merge_diff3_applied_region")
+    qt_merge_base(base)
+    string(REPLACE "l5\n" "L5\n" f "${base}")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "${f}")
+    string(REPLACE "l7\n" "L7\n" g "${f}")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "${g}")
+    set(hunk [=[@@ -3,7 +3,7 @@
+ l3
+ l4
+-l5
++L5
+ l6
+-l7
++L7
+ l8
+ l9
+]=])
+    foreach(name f g)
+        qt_write_file("${QT_WORK_DIR}/patches/${name}.diff"
+            "--- a/${name}.txt\n+++ b/${name}.txt\n${hunk}")
+    endforeach()
+    qt_write_file("${QT_WORK_DIR}/patches/series" "f.diff\ng.diff\n")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --merge=diff3)
+    qt_assert_success("${rc}" "push --merge=diff3 of an applied and a clean change should succeed")
+    qt_assert_equal("${out}"
+        "Applying patch f.diff\npatching file f.txt\nHunk #1 already applied at 5, merged at 7.\n\nNow at patch f.diff\n"
+        "push --merge=diff3 should report the applied and the merged change")
+    string(REPLACE "l7\n" "L7\n" f "${f}")
+    qt_read_file_raw(actual "${QT_WORK_DIR}/f.txt")
+    qt_assert_equal("${actual}" "${f}" "push --merge=diff3 should merge f.txt")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --merge=diff3)
+    qt_assert_success("${rc}" "push --merge=diff3 of two applied changes should succeed")
+    qt_assert_equal("${out}"
+        "Applying patch g.diff\npatching file g.txt\nHunk #1 already applied at 5,7.\n\nNow at patch g.diff\n"
+        "push --merge=diff3 should list the applied changes")
+    qt_read_file_raw(actual "${QT_WORK_DIR}/g.txt")
+    qt_assert_equal("${actual}" "${g}" "push --merge=diff3 should leave g.txt alone")
+endfunction()
+
+# push_merge_overlapping_hunks: like GNU patch --merge, push -m finds a hunk
+# among the lines that it merged for the hunk before, and so merges hunks
+# that share context, as long as a hunk's changes come after those lines.
+# Merging freezes the hunk before through its trailing context, unlike
+# applying, so a hunk that changes a line in that context fails, as GNU
+# patch fails it, with a reject.
+function(qt_scenario_push_merge_overlapping_hunks)
+    qt_merge_base(base)
+    qt_begin_test("push_merge_overlapping_hunks")
+    foreach(name a b c)
+        qt_write_file("${QT_WORK_DIR}/${name}.txt" "${base}")
+    endforeach()
+    qt_write_file("${QT_WORK_DIR}/patches/series" "a.diff\nb.diff\nc.diff\n")
+    qt_write_file("${QT_WORK_DIR}/patches/a.diff" [=[--- a/a.txt
++++ b/a.txt
+@@ -2,3 +2,3 @@
+ l2
+-l3
++L3
+ l4
+@@ -4,3 +4,3 @@
+ l4
+-l5
++L5
+ l6
+]=])
+    qt_write_file("${QT_WORK_DIR}/patches/b.diff" [=[--- a/b.txt
++++ b/b.txt
+@@ -4,4 +4,4 @@
+ l4
+-l5
+-l6
++L5
++L6
+ l7
+@@ -3,7 +3,7 @@
+ l5
+ l6
+ l7
+-l8
++L8
+ l9
+ l10
+ l11
+]=])
+    qt_write_file("${QT_WORK_DIR}/patches/c.diff" [=[--- a/c.txt
++++ b/c.txt
+@@ -2,3 +2,3 @@
+ l2
+-l3
++L3
+ l4
+@@ -3,3 +3,3 @@
+ l3
+-l4
++L4
+ l5
+]=])
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -m)
+    qt_assert_success("${rc}" "push -m of hunks sharing a line should succeed")
+    qt_assert_equal("${out}" "Applying patch a.diff\npatching file a.txt\n\nNow at patch a.diff\n"
+        "push -m should merge hunks sharing a line as they are")
+    string(REPLACE "l3\n" "L3\n" a "${base}")
+    string(REPLACE "l5\n" "L5\n" a "${a}")
+    qt_read_file_raw(actual "${QT_WORK_DIR}/a.txt")
+    qt_assert_equal("${actual}" "${a}" "push -m should merge both hunks into a.txt")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -m)
+    qt_assert_success("${rc}" "push -m of a hunk found among merged lines should succeed")
+    qt_assert_equal("${out}" "Applying patch b.diff\npatching file b.txt\n\nNow at patch b.diff\n"
+        "push -m should merge the hunk found among merged lines as it is")
+    string(REPLACE "l5\nl6\nl7\nl8\n" "L5\nL6\nl7\nL8\n" b "${base}")
+    qt_read_file_raw(actual "${QT_WORK_DIR}/b.txt")
+    qt_assert_equal("${actual}" "${b}" "push -m should merge both hunks into b.txt")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -m)
+    qt_assert_failure("${rc}" "push -m of a hunk changing a merged line should fail")
+    qt_assert_equal("${out}"
+        "Applying patch c.diff\npatching file c.txt\nmisordered hunks! output would be garbled\nHunk #2 FAILED at 4.\n1 out of 2 hunks FAILED -- rejects in file c.txt\nPatch c.diff does not apply (enforce with -f)\n"
+        "push -m should fail the hunk changing a merged line")
+    qt_read_file_raw(actual "${QT_WORK_DIR}/c.txt")
+    qt_assert_equal("${actual}" "${base}" "push -m should roll back c.txt")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -m -f)
+    qt_assert_failure("${rc}" "push -m -f of a hunk changing a merged line should fail")
+    qt_assert_equal("${out}"
+        "Applying patch c.diff\npatching file c.txt\nmisordered hunks! output would be garbled\nHunk #2 FAILED at 4.\n1 out of 2 hunks FAILED -- saving rejects to file c.txt.rej\nApplied patch c.diff (forced; needs refresh)\n"
+        "push -m -f should reject the hunk changing a merged line")
+    string(REPLACE "l3\n" "L3\n" c "${base}")
+    qt_read_file_raw(actual "${QT_WORK_DIR}/c.txt")
+    qt_assert_equal("${actual}" "${c}" "push -m -f should merge only the first hunk")
+    qt_read_file_raw(rej "${QT_WORK_DIR}/c.txt.rej")
+    qt_assert_contains("${rej}" "\n@@ -4,3 +4,3 @@\n l3\n-l4\n+L4\n l5\n"
+        "the reject should be numbered like GNU patch in merge mode")
 endfunction()
