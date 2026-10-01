@@ -12,36 +12,6 @@ static void write_applied_patches(QuiltState &q) {
     if (q.applied.empty()) delete_file(path);
 }
 
-// Parse affected files from a unified diff, stripping path components
-// to match what `patch -pN` would do.
-static std::vector<std::string> parse_patch_files(std::string_view content, int strip = 1) {
-    std::vector<std::string> files;
-    auto lines = split_lines(content);
-    for (const auto &line : lines) {
-        if (!line.starts_with("+++ ")) continue;
-        std::string_view rest = std::string_view(line).substr(4);
-        // Skip /dev/null
-        if (rest.starts_with("/dev/null")) continue;
-        // Strip trailing tab and timestamp (e.g., "\t2024-01-01 ...")
-        ptrdiff_t tab = str_find(rest, '\t');
-        if (tab >= 0) {
-            rest = rest.substr(0, checked_cast<size_t>(tab));
-        }
-        std::string f = trim(rest);
-        // Strip N leading path components (like patch -pN)
-        for (int i = 0; i < strip && !f.empty(); ++i) {
-            ptrdiff_t slash = str_find(std::string_view(f), '/');
-            if (slash >= 0) {
-                f = f.substr(checked_cast<size_t>(slash) + 1);
-            }
-        }
-        if (!f.empty()) {
-            files.push_back(std::move(f));
-        }
-    }
-    return files;
-}
-
 int cmd_series(QuiltState &q, int argc, char **argv) {
     bool verbose = false;
     // color: 0=never, 1=auto, 2=always
@@ -451,21 +421,9 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
             return 1;
         }
 
-        // Parse affected files and back them up
-        int strip_level = q.get_strip_level(name);
-        auto affected = parse_patch_files(patch_content, strip_level);
-        std::string pc_dir = pc_patch_dir(q, name);
-        if (!is_directory(pc_dir)) {
-            make_dirs(pc_dir);
-        }
-
-        for (const auto &file : affected) {
-            backup_file(q, name, file);
-        }
-
         // Apply the patch using built-in patch engine
         PatchOptions patch_opts;
-        patch_opts.strip_level = strip_level;
+        patch_opts.strip_level = q.get_strip_level(name);
         patch_opts.remove_empty = true;
         patch_opts.force = force;
         if (q.patch_reversed.contains(name)) patch_opts.reverse = true;
@@ -484,6 +442,18 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
             else if (o.starts_with("--fuzz=")) {
                 patch_opts.fuzz = checked_cast<int>(parse_int(o.substr(7)));
             }
+        }
+
+        // Back up every file the patch will modify, including deletions
+        auto affected = patch_target_files(patch_content, patch_opts.strip_level,
+                                           patch_opts.reverse);
+        std::string pc_dir = pc_patch_dir(q, name);
+        if (!is_directory(pc_dir)) {
+            make_dirs(pc_dir);
+        }
+
+        for (const auto &file : affected) {
+            backup_file(q, name, file);
         }
 
         // Print verbose file list ourselves instead of relying on

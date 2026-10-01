@@ -251,6 +251,12 @@ bool delete_file(std::string_view path)
     return ::unlink(p.c_str()) == 0;
 }
 
+bool delete_dir(std::string_view path)
+{
+    std::string p = null_terminated(path);
+    return ::rmdir(p.c_str()) == 0;
+}
+
 bool delete_dir_recursive(std::string_view path)
 {
     std::string p = null_terminated(path);

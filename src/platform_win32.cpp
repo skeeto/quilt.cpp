@@ -360,6 +360,12 @@ bool delete_file(std::string_view path)
     return DeleteFileW(wpath.c_str()) != 0;
 }
 
+bool delete_dir(std::string_view path)
+{
+    std::wstring wpath = utf8_to_wide(path);
+    return RemoveDirectoryW(wpath.c_str()) != 0;
+}
+
 bool delete_dir_recursive(std::string_view path)
 {
     std::wstring wpath = utf8_to_wide(path);

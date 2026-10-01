@@ -114,6 +114,11 @@ struct PatchResult {
 
 PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts);
 
+// Files builtin_patch would modify, without duplicates, in patch order.
+// A deleted file (+++ /dev/null) is named by its --- line.
+std::vector<std::string> patch_target_files(std::string_view patch_text,
+                                            int strip_level, bool reverse = false);
+
 // Built-in diff engine
 enum class DiffFormat { unified, context };
 enum class DiffAlgorithm { myers, minimal, patience, histogram };

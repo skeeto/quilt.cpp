@@ -409,6 +409,10 @@ set(QUILT_TEST_SCENARIOS
     rename_pc_migration
     fork_pc_migration
     prefixed_args_delete
+    push_pop_deletion
+    fold_deletion
+    files_unapplied_strip_deletion
+    patches_unapplied_strip_deletion
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -7692,6 +7696,14 @@ function(qt_run_named_scenario scenario)
         qt_scenario_fork_pc_migration()
     elseif(scenario STREQUAL "prefixed_args_delete")
         qt_scenario_prefixed_args_delete()
+    elseif(scenario STREQUAL "push_pop_deletion")
+        qt_scenario_push_pop_deletion()
+    elseif(scenario STREQUAL "fold_deletion")
+        qt_scenario_fold_deletion()
+    elseif(scenario STREQUAL "files_unapplied_strip_deletion")
+        qt_scenario_files_unapplied_strip_deletion()
+    elseif(scenario STREQUAL "patches_unapplied_strip_deletion")
+        qt_scenario_patches_unapplied_strip_deletion()
     elseif(scenario STREQUAL "refresh_z_strip_migration")
         qt_scenario_refresh_z_strip_migration()
     elseif(scenario STREQUAL "annotate_P_missing_arg")
@@ -11458,6 +11470,124 @@ function(qt_scenario_prefixed_args_delete)
                     "applied top patch should be popped and removed")
     qt_assert_file_not_contains("${QT_WORK_DIR}/patches/series" "p.patch" "patch should be removed from series")
     qt_assert_file_text("${QT_WORK_DIR}/f.txt" "x" "patch should be popped")
+endfunction()
+
+# A file deleted by a patch (+++ /dev/null) is named only by its --- line.
+function(qt_scenario_push_pop_deletion)
+    qt_begin_test("push_pop_deletion")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "precious\n")
+    qt_write_file("${QT_WORK_DIR}/sub/g.txt" "also precious\n")
+    qt_write_file("${QT_WORK_DIR}/patches/d.patch" [=[--- a/f.txt
++++ /dev/null
+@@ -1 +0,0 @@
+-precious
+--- a/sub/g.txt
++++ /dev/null
+@@ -1 +0,0 @@
+-also precious
+]=])
+    qt_write_file("${QT_WORK_DIR}/patches/series" "d.patch\n")
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_assert_file_text("${QT_WORK_DIR}/.pc/d.patch/f.txt" "precious" "push should back up f.txt")
+    qt_assert_file_text("${QT_WORK_DIR}/.pc/d.patch/sub/g.txt" "also precious" "push should back up sub/g.txt")
+    qt_assert_not_exists("${QT_WORK_DIR}/f.txt" "push should delete f.txt")
+    qt_assert_not_exists("${QT_WORK_DIR}/sub" "push should remove the emptied directory")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS pop MESSAGE "pop failed")
+    qt_assert_contains("${out}" "Restoring f.txt" "pop should restore f.txt")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "precious" "pop should restore f.txt contents")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/g.txt" "also precious" "pop should restore sub/g.txt contents")
+endfunction()
+
+function(qt_scenario_fold_deletion)
+    qt_begin_test("fold_deletion")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "a\n")
+    qt_write_file("${QT_WORK_DIR}/del.txt" "gone\n")
+    qt_write_file("${QT_WORK_DIR}/sub/sdel.txt" "gone too\n")
+    qt_quilt_ok(ARGS new top.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add a.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(
+        ARGS fold
+        INPUT [=[--- a/del.txt
++++ /dev/null
+@@ -1 +0,0 @@
+-gone
+--- a/sub/sdel.txt
++++ /dev/null
+@@ -1 +0,0 @@
+-gone too
+]=]
+        MESSAGE "fold failed"
+    )
+    qt_assert_not_exists("${QT_WORK_DIR}/del.txt" "fold should delete del.txt")
+    qt_assert_not_exists("${QT_WORK_DIR}/sub" "fold should remove the emptied directory")
+    qt_quilt_ok(OUTPUT files_out ERROR files_err ARGS files MESSAGE "files failed")
+    qt_assert_equal("${files_out}" "a.txt\ndel.txt\nsub/sdel.txt\n" "fold should track deleted files")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh after fold failed")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/top.patch" "-gone too" "refresh should record the deletion")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_assert_file_text("${QT_WORK_DIR}/del.txt" "gone" "pop should restore del.txt")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/sdel.txt" "gone too" "pop should restore sub/sdel.txt")
+endfunction()
+
+# files and patches read unapplied patches with their series strip level.
+function(qt_scenario_files_unapplied_strip_deletion)
+    qt_begin_test("files_unapplied_strip_deletion")
+    qt_write_file("${QT_WORK_DIR}/patches/p0.patch" [=[--- sub/f.txt
++++ sub/f.txt
+@@ -1 +1 @@
+-x
++y
+]=])
+    qt_write_file("${QT_WORK_DIR}/patches/p2.patch" [=[--- x/b/sub/g.txt
++++ y/b/sub/g.txt
+@@ -1 +1 @@
+-x
++y
+]=])
+    qt_write_file("${QT_WORK_DIR}/patches/del.patch" [=[--- a/gone.txt
++++ /dev/null
+@@ -1 +0,0 @@
+-x
+]=])
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p0.patch -p0\np2.patch -p2\ndel.patch\n")
+    qt_quilt_ok(OUTPUT p0_out ERROR p0_err ARGS files p0.patch MESSAGE "files p0.patch failed")
+    qt_assert_equal("${p0_out}" "sub/f.txt\n" "files should apply -p0")
+    qt_quilt_ok(OUTPUT p2_out ERROR p2_err ARGS files p2.patch MESSAGE "files p2.patch failed")
+    qt_assert_equal("${p2_out}" "sub/g.txt\n" "files should apply -p2")
+    qt_quilt_ok(OUTPUT del_out ERROR del_err ARGS files del.patch MESSAGE "files del.patch failed")
+    qt_assert_equal("${del_out}" "gone.txt\n" "files should list a deleted file")
+endfunction()
+
+function(qt_scenario_patches_unapplied_strip_deletion)
+    qt_begin_test("patches_unapplied_strip_deletion")
+    qt_write_file("${QT_WORK_DIR}/patches/p0.patch" [=[--- sub/f.txt
++++ sub/f.txt
+@@ -1 +1 @@
+-x
++y
+]=])
+    qt_write_file("${QT_WORK_DIR}/patches/p2.patch" [=[--- x/b/sub/g.txt
++++ y/b/sub/g.txt
+@@ -1 +1 @@
+-x
++y
+]=])
+    qt_write_file("${QT_WORK_DIR}/patches/del.patch" [=[--- a/gone.txt
++++ /dev/null
+@@ -1 +0,0 @@
+-x
+]=])
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p0.patch -p0\np2.patch -p2\ndel.patch\n")
+    qt_quilt_ok(OUTPUT f_out ERROR f_err ARGS patches sub/f.txt MESSAGE "patches sub/f.txt failed")
+    qt_assert_equal("${f_out}" "p0.patch\n" "patches should apply -p0")
+    qt_quilt_ok(OUTPUT g_out ERROR g_err ARGS patches sub/g.txt MESSAGE "patches sub/g.txt failed")
+    qt_assert_equal("${g_out}" "p2.patch\n" "patches should apply -p2")
+    qt_quilt_ok(OUTPUT gone_out ERROR gone_err ARGS patches gone.txt MESSAGE "patches gone.txt failed")
+    qt_assert_equal("${gone_out}" "del.patch\n" "patches should find a deleted file")
+    qt_quilt_ok(OUTPUT short_out ERROR short_err ARGS patches f.txt MESSAGE "patches f.txt failed")
+    qt_assert_equal("${short_out}" "" "-p0 patch should not match an over-stripped name")
 endfunction()
 
 # quilt.cpp copies the strip level (and -R) to the fork created by

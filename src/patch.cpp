@@ -255,6 +255,27 @@ static std::vector<PatchFile> parse_patch(std::string_view text, int strip_level
     return files;
 }
 
+std::vector<std::string> patch_target_files(std::string_view patch_text,
+                                            int strip_level, bool reverse)
+{
+    std::vector<std::string> result;
+    for (auto &pf : parse_patch(patch_text, strip_level, reverse)) {
+        if (pf.target_path.empty()) continue;
+        if (std::ranges::find(result, pf.target_path) != result.end()) continue;
+        result.push_back(std::move(pf.target_path));
+    }
+    return result;
+}
+
+// Remove directories left empty by deleting path, like GNU patch.
+static void remove_empty_parents(std::string_view path)
+{
+    for (std::string dir = dirname(path); dir != "." && dir != "/";
+         dir = dirname(dir)) {
+        if (!delete_dir(dir)) break;
+    }
+}
+
 // ── Line-based file representation ─────────────────────────────────────
 
 // Split file content into lines.  Each line does NOT include its trailing '\n'.
@@ -923,10 +944,12 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                     }
                 }
 
-                // Check if we should remove the file (-E flag)
-                if (opts.remove_empty && new_content.empty() && !pf.is_creation) {
-                    if (file_existed) {
-                        fs_delete(pf.target_path);
+                // Remove a file left empty when -E is given or the patch
+                // deletes it, like GNU patch outside POSIX mode
+                if ((opts.remove_empty || pf.is_deletion) &&
+                    new_content.empty() && !pf.is_creation) {
+                    if (file_existed && fs_delete(pf.target_path) && !opts.fs) {
+                        remove_empty_parents(pf.target_path);
                     }
                 } else {
                     fs_write(pf.target_path, new_content);

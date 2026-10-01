@@ -25,39 +25,12 @@ static bool write_applied_checked(const QuiltState &q,
     return true;
 }
 
-static std::vector<std::string> parse_patch_files(std::string_view content, int strip = 1) {
-    std::vector<std::string> files;
-    auto lines = split_lines(content);
-    for (const auto &line : lines) {
-        if (!line.starts_with("+++ ")) continue;
-        std::string path = std::string(std::string_view(line).substr(4));
-        // Strip trailing tab and anything after (timestamps)
-        auto tab = str_find(path, '\t');
-        if (tab >= 0) {
-            path = std::string(path.substr(0, checked_cast<size_t>(tab)));
-        }
-        // Skip /dev/null
-        if (path == "/dev/null") continue;
-        path = trim(std::string_view(path));
-        if (path.empty()) continue;
-        // Strip N leading path components (like patch -pN)
-        for (int i = 0; i < strip && !path.empty(); ++i) {
-            auto slash = str_find(path, '/');
-            if (slash >= 0) {
-                path = path.substr(checked_cast<size_t>(slash) + 1);
-            }
-        }
-        if (path.empty()) continue;
-        // Deduplicate
-        bool found = false;
-        for (const auto &f : files) {
-            if (f == path) { found = true; break; }
-        }
-        if (!found) {
-            files.push_back(std::move(path));
-        }
-    }
-    return files;
+// Files an unapplied patch would modify, per its series options
+static std::vector<std::string> unapplied_patch_files(const QuiltState &q,
+                                                      std::string_view patch) {
+    std::string content = read_file(path_join(q.work_dir, q.patches_dir, patch));
+    return patch_target_files(content, q.get_strip_level(patch),
+                              q.patch_reversed.contains(std::string(patch)));
 }
 
 static std::string extract_header(std::string_view content) {
@@ -860,9 +833,7 @@ int cmd_files(QuiltState &q, int argc, char **argv) {
             if (q.is_applied(patch)) {
                 file_list = files_in_patch(q, patch);
             } else {
-                std::string patch_file = path_join(q.work_dir, q.patches_dir, patch);
-                std::string content = read_file(patch_file);
-                file_list = parse_patch_files(content);
+                file_list = unapplied_patch_files(q, patch);
             }
             std::ranges::sort(file_list);
             for (const auto &f : file_list) {
@@ -877,9 +848,7 @@ int cmd_files(QuiltState &q, int argc, char **argv) {
             if (q.is_applied(patch)) {
                 file_list = files_in_patch(q, patch);
             } else {
-                std::string patch_file = path_join(q.work_dir, q.patches_dir, patch);
-                std::string content = read_file(patch_file);
-                file_list = parse_patch_files(content);
+                file_list = unapplied_patch_files(q, patch);
             }
             for (auto &f : file_list) {
                 all_files.push_back(std::move(f));
@@ -942,9 +911,7 @@ int cmd_patches(QuiltState &q, int argc, char **argv) {
             }
         } else {
             // Parse patch file for references
-            std::string patch_file = path_join(q.work_dir, q.patches_dir, patch);
-            std::string content = read_file(patch_file);
-            auto patched_files = parse_patch_files(content);
+            auto patched_files = unapplied_patch_files(q, patch);
             for (const auto &tf : target_files) {
                 for (const auto &pf : patched_files) {
                     if (pf == tf) {
@@ -1013,21 +980,6 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
         return 0;
     }
 
-    // Parse the incoming patch to find affected files
-    auto affected_files = parse_patch_files(stdin_data, strip_level);
-
-    // Track new files in the current patch
-    auto currently_tracked = files_in_patch(q, top);
-    for (const auto &f : affected_files) {
-        bool already_tracked = false;
-        for (const auto &t : currently_tracked) {
-            if (t == f) { already_tracked = true; break; }
-        }
-        if (!already_tracked) {
-            backup_file(q, top, f);
-        }
-    }
-
     // Apply patch using built-in patch engine
     PatchOptions patch_opts;
     patch_opts.strip_level = strip_level;
@@ -1043,6 +995,20 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
         else if (o == "-E") patch_opts.remove_empty = true;
         else if (o.starts_with("--fuzz=")) {
             patch_opts.fuzz = checked_cast<int>(parse_int(o.substr(7)));
+        }
+    }
+
+    // Track new files in the current patch, including deletions
+    auto affected_files = patch_target_files(stdin_data, patch_opts.strip_level,
+                                             patch_opts.reverse);
+    auto currently_tracked = files_in_patch(q, top);
+    for (const auto &f : affected_files) {
+        bool already_tracked = false;
+        for (const auto &t : currently_tracked) {
+            if (t == f) { already_tracked = true; break; }
+        }
+        if (!already_tracked) {
+            backup_file(q, top, f);
         }
     }
 
