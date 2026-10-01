@@ -1060,21 +1060,21 @@ int cmd_fork(QuiltState &q, int argc, char **argv) {
     }
 
     std::string old_name = q.applied.back();
-    std::string new_name;
+    std::optional<std::string> given_name;
 
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
-        if (arg[0] == '-') {
+        if (arg.starts_with('-')) {
             err("Unrecognized option: "); err_line(arg);
             return 1;
         }
-        new_name = strip_patches_prefix(q, arg);
+        given_name = strip_patches_prefix(q, arg);
         break;
     }
 
-    if (new_name.empty()) {
-        new_name = next_filename(old_name);
-    }
+    // An empty name, given as "" or as "patches/", is refused below since
+    // .pc/ itself exists, as upstream does
+    std::string new_name = given_name ? *given_name : next_filename(old_name);
 
     // Like upstream, refuse a name in any use, so nothing is overwritten
     if (q.find_in_series(new_name) || is_directory(pc_patch_dir(q, new_name)) ||

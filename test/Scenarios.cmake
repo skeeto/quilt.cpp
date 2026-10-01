@@ -502,6 +502,7 @@ set(QUILT_TEST_SCENARIOS
     fork_next_filename_shapes
     fork_target_exists
     fork_patches_prefix
+    fork_empty_name
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -8279,6 +8280,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_fork_target_exists()
     elseif(scenario STREQUAL "fork_patches_prefix")
         qt_scenario_fork_patches_prefix()
+    elseif(scenario STREQUAL "fork_empty_name")
+        qt_scenario_fork_empty_name()
     elseif(scenario STREQUAL "fork_leading_zero_suffix")
         qt_scenario_fork_leading_zero_suffix()
     elseif(scenario STREQUAL "refresh_z_strip_migration")
@@ -14554,6 +14557,30 @@ function(qt_scenario_fork_patches_prefix)
     qt_assert_failure("${rc}" "fork onto a name in the series should fail")
     qt_assert_equal("${err}" "Patch patches/p-3.patch exists already, please choose a new name\n"
                     "the refusal should show a prefixed name")
+endfunction()
+
+# fork refuses an explicit name that is empty once the patches/ prefix is
+# stripped, since .pc/ itself exists, instead of taking the default name
+function(qt_scenario_fork_empty_name)
+    qt_begin_test("fork_empty_name")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS fork patches/)
+    qt_assert_failure("${rc}" "fork to patches/ should fail")
+    qt_assert_equal("${out}" "" "fork to patches/ should print nothing on stdout")
+    qt_assert_equal("${err}" "Patch  exists already, please choose a new name\n"
+                    "fork to patches/ should say the empty name exists")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ENV "QUILT_PATCHES_PREFIX=1" ARGS fork patches/)
+    qt_assert_failure("${rc}" "fork to patches/ with QUILT_PATCHES_PREFIX should fail")
+    qt_assert_equal("${err}" "Patch patches/ exists already, please choose a new name\n"
+                    "the refusal should show the prefix")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "p.patch" "series should be untouched")
+    qt_assert_file_text("${QT_WORK_DIR}/.pc/applied-patches" "p.patch" "applied-patches should be untouched")
+    qt_assert_exists("${QT_WORK_DIR}/.pc/p.patch/f.txt" "the backup should stay in place")
+    qt_assert_not_exists("${QT_WORK_DIR}/patches/p-2.patch" "no default fork should be made")
 endfunction()
 
 # quilt.cpp reads a -N suffix with leading zeros as decimal, where upstream's
