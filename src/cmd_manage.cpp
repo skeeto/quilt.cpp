@@ -580,77 +580,56 @@ int cmd_files(QuiltState &q, int argc, char **argv) {
     if (!found) return 1;
     std::string target_patch = *found;
 
-    // Build list of patches to show files for
+    // Like upstream, --combine implies -a, and -a lists every patch in the
+    // series from the first applied (or the --combine patch) through the
+    // target, each on its own
+    if (combine_arg) opt_all = true;
     std::vector<std::string> patches_to_show;
     if (opt_all) {
-        patches_to_show = q.applied;
-    } else if (combine_arg) {
-        // Range from the --combine patch through target_patch
-        std::string start = combine_start;
-        if (start.empty()) {
-            if (q.applied.empty()) {
-                err_line("No patches applied");
-                return 1;
-            }
-            start = q.applied.front();
+        std::string first = combine_start;
+        if (first.empty() && !q.applied.empty()) first = q.applied.front();
+        auto last = q.find_in_series(target_patch);
+        ptrdiff_t start = -1;
+        for (ptrdiff_t i = 0; last && i <= *last; ++i) {
+            if (q.series[checked_cast<size_t>(i)] == first) { start = i; break; }
         }
-        bool in_range = false;
-        for (const auto &a : q.applied) {
-            if (a == start) in_range = true;
-            if (in_range) patches_to_show.push_back(a);
-            if (a == target_patch) break;
-        }
-        if (!in_range || patches_to_show.empty()) {
-            err("Patch ");
-            err(start);
-            err_line(" not applied");
+        if (start < 0) {
+            err_line("Patch " + format_patch(q, first) + " not applied before patch " +
+                     format_patch(q, target_patch));
             return 1;
+        }
+        for (ptrdiff_t i = start; i <= *last; ++i) {
+            patches_to_show.push_back(q.series[checked_cast<size_t>(i)]);
         }
     } else {
         patches_to_show.push_back(target_patch);
     }
 
-    // files -a <patch> with nothing applied
-    if (patches_to_show.empty()) {
-        err_line("No patches applied");
-        return 1;
-    }
-
-    // With labels (-l): iterate patches, output per-patch file listings
-    if (opt_labels) {
-        for (const auto &patch : patches_to_show) {
-            std::vector<std::string> file_list;
-            if (q.is_applied(patch)) {
-                file_list = files_in_patch(q, patch);
-            } else {
-                file_list = unapplied_patch_files(q, patch);
+    auto nonempty = [](const std::string &path) {
+        return file_exists(path) && !read_file(path).empty();
+    };
+    bool use_status = opt_verbose && !opt_labels;
+    for (const auto &patch : patches_to_show) {
+        if (opt_all && use_status) out_line(patch);
+        std::vector<std::string> file_list = q.is_applied(patch)
+            ? files_in_patch(q, patch)
+            : unapplied_patch_files(q, patch);
+        std::ranges::sort(file_list);
+        for (const auto &f : file_list) {
+            std::string line;
+            if (opt_labels) line = opt_verbose ? "[" + patch + "] " : patch + " ";
+            if (use_status) {
+                // Like upstream: - for a file the patch removes, + for one
+                // it adds, judged by which side is empty or missing
+                char status = ' ';
+                bool backup = nonempty(path_join(pc_patch_dir(q, patch), f));
+                bool current = nonempty(path_join(q.work_dir, f));
+                if (backup && !current) status = '-';
+                else if (!backup && current) status = '+';
+                line += status;
+                line += ' ';
             }
-            std::ranges::sort(file_list);
-            for (const auto &f : file_list) {
-                out_line(patch + " " + f);
-            }
-        }
-    } else {
-        // Collect all files across patches
-        std::vector<std::string> all_files;
-        for (const auto &patch : patches_to_show) {
-            std::vector<std::string> file_list;
-            if (q.is_applied(patch)) {
-                file_list = files_in_patch(q, patch);
-            } else {
-                file_list = unapplied_patch_files(q, patch);
-            }
-            for (auto &f : file_list) {
-                all_files.push_back(std::move(f));
-            }
-        }
-        std::ranges::sort(all_files);
-        for (const auto &f : all_files) {
-            if (opt_verbose) {
-                out_line("  " + f);
-            } else {
-                out_line(f);
-            }
+            out_line(line + f);
         }
     }
 

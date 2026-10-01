@@ -527,6 +527,8 @@ set(QUILT_TEST_SCENARIOS
     refresh_diff_patch_order
     refresh_shadowed_per_file
     refresh_backup_keeps_mtime
+    files_combine_dash_patch_no_applied
+    files_per_patch_listing
     fork_next_filename_shapes
     fork_target_exists
     fork_patches_prefix
@@ -702,7 +704,6 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     quilt_unknown_command
     quilt_ambiguous_command
     push_reject_no_newline
-    files_combine_dash_patch_no_applied
     files_verbose
     revert_subdir
     series_in_pc_dir
@@ -8063,6 +8064,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_header_edit_backup()
     elseif(scenario STREQUAL "header_strip_diffstat_false_positive")
         qt_scenario_header_strip_diffstat_false_positive()
+    elseif(scenario STREQUAL "files_per_patch_listing")
+        qt_scenario_files_per_patch_listing()
     elseif(scenario STREQUAL "files_combine_dash_patch_no_applied")
         qt_scenario_files_combine_dash_patch_no_applied()
     elseif(scenario STREQUAL "files_unapplied_duplicate")
@@ -9143,12 +9146,50 @@ function(qt_scenario_files_combine_dash_patch_no_applied)
     qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
     qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
     qt_quilt_ok(ARGS pop MESSAGE "pop failed")
-    # files --combine - p.patch: target patch specified + combine="-" + no applied patches
-    # → hits the q.applied.empty() check at lines 730-731
+    # With nothing applied, the range starts at no patch, as upstream says
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS files --combine - p.patch)
     qt_assert_failure("${rc}" "files --combine - with patch arg and nothing applied should fail")
-    qt_combine_output(combined "${out}" "${err}")
-    qt_assert_contains("${combined}" "No patches applied" "should report no patches applied")
+    qt_assert_equal("${err}" "Patch  not applied before patch p.patch\n" "error message")
+endfunction()
+
+# Like upstream, files lists each patch on its own, with -v a status for
+# added (+) and removed (-) files, and with -a -v a line naming each patch;
+# --combine implies -a, and -l -v brackets the labels
+function(qt_scenario_files_per_patch_listing)
+    qt_begin_test("files_per_patch_listing")
+    qt_write_file("${QT_WORK_DIR}/a" "a\n")
+    qt_write_file("${QT_WORK_DIR}/b" "b\n")
+    qt_write_file("${QT_WORK_DIR}/gone" "gone\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new p failed")
+    qt_quilt_ok(ARGS add a b gone MESSAGE "add p failed")
+    qt_write_file("${QT_WORK_DIR}/a" "a1\n")
+    file(REMOVE "${QT_WORK_DIR}/gone")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p failed")
+    qt_quilt_ok(ARGS new q.patch MESSAGE "new q failed")
+    qt_quilt_ok(ARGS add b z MESSAGE "add q failed")
+    qt_write_file("${QT_WORK_DIR}/b" "b1\n")
+    qt_write_file("${QT_WORK_DIR}/z" "z\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh q failed")
+
+    qt_quilt_ok(OUTPUT out ERROR err ARGS files -v MESSAGE "files -v failed")
+    qt_assert_equal("${out}" "  b\n+ z\n" "files -v")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS files -a MESSAGE "files -a failed")
+    qt_assert_equal("${out}" "a\nb\ngone\nb\nz\n" "files -a")
+    set(all_v "p.patch\n  a\n  b\n- gone\nq.patch\n  b\n+ z\n")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS files -a -v MESSAGE "files -a -v failed")
+    qt_assert_equal("${out}" "${all_v}" "files -a -v")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS files --combine - -v MESSAGE "files --combine failed")
+    qt_assert_equal("${out}" "${all_v}" "files --combine - -v")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS files -l -v MESSAGE "files -l -v failed")
+    qt_assert_equal("${out}" "[q.patch] b\n[q.patch] z\n" "files -l -v")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS files --combine q.patch p.patch)
+    qt_assert_failure("${rc}" "a --combine patch after the target should fail")
+    qt_assert_equal("${err}" "Patch q.patch not applied before patch p.patch\n" "--combine order error")
+
+    # -a reaches unapplied patches up to the target, in series order
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS files -a -l q.patch MESSAGE "files -a -l q.patch failed")
+    qt_assert_equal("${out}" "p.patch a\np.patch b\np.patch gone\nq.patch b\nq.patch z\n" "files -a -l q.patch")
 endfunction()
 
 # files_unapplied_duplicate: quilt files on an unapplied patch with the same file twice
