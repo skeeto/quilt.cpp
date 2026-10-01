@@ -529,6 +529,8 @@ set(QUILT_TEST_SCENARIOS
     revert_patch_resolution
     revert_no_series
     revert_reversed_patch
+    getopt_push_pop
+    getopt_stack_queries
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -5360,19 +5362,19 @@ function(qt_scenario_unknown_option_rejected)
 
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --bogus)
     qt_assert_not_equal("${rc}" "0" "push --bogus should fail")
-    qt_assert_contains("${err}" "Unrecognized option" "push --bogus error message")
+    qt_assert_contains("${err}" "unrecognized option '--bogus'" "push --bogus error message")
 
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS series --bogus)
     qt_assert_not_equal("${rc}" "0" "series --bogus should fail")
-    qt_assert_contains("${err}" "Unrecognized option" "series --bogus error message")
+    qt_assert_contains("${err}" "unrecognized option '--bogus'" "series --bogus error message")
 
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS top --bogus)
     qt_assert_not_equal("${rc}" "0" "top --bogus should fail")
-    qt_assert_contains("${err}" "Unrecognized option" "top --bogus error message")
+    qt_assert_contains("${err}" "unrecognized option '--bogus'" "top --bogus error message")
 
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS applied --bogus)
     qt_assert_not_equal("${rc}" "0" "applied --bogus should fail")
-    qt_assert_contains("${err}" "Unrecognized option" "applied --bogus error message")
+    qt_assert_contains("${err}" "unrecognized option '--bogus'" "applied --bogus error message")
 
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS header --bogus)
     qt_assert_not_equal("${rc}" "0" "header --bogus should fail")
@@ -5388,7 +5390,7 @@ function(qt_scenario_unknown_option_rejected)
 
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS pop --bogus)
     qt_assert_not_equal("${rc}" "0" "pop --bogus should fail")
-    qt_assert_contains("${err}" "Unrecognized option" "pop --bogus error message")
+    qt_assert_contains("${err}" "unrecognized option '--bogus'" "pop --bogus error message")
 
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS fork --bogus)
     qt_assert_not_equal("${rc}" "0" "fork --bogus should fail")
@@ -8545,6 +8547,10 @@ function(qt_run_named_scenario scenario)
         qt_scenario_push_delete_mismatch()
     elseif(scenario STREQUAL "push_quoted_file_names")
         qt_scenario_push_quoted_file_names()
+    elseif(scenario STREQUAL "getopt_push_pop")
+        qt_scenario_getopt_push_pop()
+    elseif(scenario STREQUAL "getopt_stack_queries")
+        qt_scenario_getopt_stack_queries()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -15570,4 +15576,104 @@ function(qt_scenario_import_force_mode_per_patch)
     qt_assert_equal("${text}" "C new\n${diff_z}" "c should take its new header")
     qt_read_file_raw(text "${QT_WORK_DIR}/patches/d.patch")
     qt_assert_equal("${text}" "D old\n${diff_z}" "d should keep its old header")
+endfunction()
+
+# Three patches for the option parsing tests: p1 changes a.txt and p2
+# changes b.txt, both applied, and p3, unapplied, changes a.txt again
+function(qt_setup_getopt_stack)
+    qt_write_file("${QT_WORK_DIR}/a.txt" "a1\na2\na3\n")
+    qt_write_file("${QT_WORK_DIR}/b.txt" "b1\nb2\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add a.txt MESSAGE "add to p1 failed")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "a1\nA2\na3\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add b.txt MESSAGE "add to p2 failed")
+    qt_write_file("${QT_WORK_DIR}/b.txt" "b1\nB2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2 failed")
+    qt_quilt_ok(ARGS new p3.patch MESSAGE "new p3 failed")
+    qt_quilt_ok(ARGS add a.txt MESSAGE "add to p3 failed")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "a1\nA2\nA3\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p3 failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop p3 failed")
+endfunction()
+
+# Run quilt with the arguments after the command name, which upstream
+# refuses, and check that it prints the command's usage with status 1
+function(qt_assert_usage_error command)
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS ${ARGN})
+    string(REPLACE ";" " " shown "${ARGN}")
+    qt_assert_equal("${rc}" "1" "${shown} should fail with status 1")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Usage: quilt ${command}" "${shown} should print usage")
+endfunction()
+
+# push and pop parse options like upstream's getopt: grouped flags, values
+# attached or in the next word, "--", options after the patch argument, and
+# QUILT_PUSH_ARGS along with the command line. -a, or more than one
+# argument, leaves no room for a patch argument.
+function(qt_scenario_getopt_push_pop)
+    qt_begin_test("getopt_push_pop")
+    qt_setup_getopt_stack()
+    set(applied "${QT_WORK_DIR}/.pc/applied-patches")
+
+    qt_assert_usage_error(push push -a p3.patch)
+    qt_assert_usage_error(push push 1 extra)
+    qt_assert_usage_error(push push --merge=bogus)
+    qt_assert_usage_error(pop pop -a p1.patch)
+    qt_assert_usage_error(pop pop 1 2)
+    qt_quilt(RESULT rc OUTPUT out ERROR err ENV "QUILT_PUSH_ARGS=-a" ARGS push p3.patch)
+    qt_assert_equal("${rc}" "1" "push p3.patch with QUILT_PUSH_ARGS=-a should fail")
+    qt_assert_file_text("${applied}" "p1.patch\np2.patch" "usage errors should change nothing")
+
+    qt_quilt_ok(OUTPUT out ARGS push -qa MESSAGE "push -qa failed")
+    qt_assert_not_contains("${out}" "patching file" "push -qa should be quiet")
+    qt_assert_file_text("${applied}" "p1.patch\np2.patch\np3.patch" "push -qa should push all")
+    qt_quilt_ok(OUTPUT out ARGS pop -qa MESSAGE "pop -qa failed")
+    qt_assert_not_contains("${out}" "Restoring" "pop -qa should be quiet")
+    qt_assert_not_exists("${applied}" "pop -qa should pop all")
+
+    qt_quilt_ok(OUTPUT out ARGS push p2.patch -q MESSAGE "push p2.patch -q failed")
+    qt_assert_not_contains("${out}" "patching file" "push p2.patch -q should be quiet")
+    qt_assert_file_text("${applied}" "p1.patch\np2.patch" "push p2.patch -q should push to p2")
+    qt_quilt_ok(ARGS push --fuzz 2 MESSAGE "push --fuzz 2 failed")
+    qt_assert_file_text("${applied}" "p1.patch\np2.patch\np3.patch" "push --fuzz 2 should push p3")
+    qt_quilt_ok(ARGS pop -fR -- p1.patch MESSAGE "pop -fR -- p1.patch failed")
+    qt_assert_file_text("${applied}" "p1.patch" "pop -- p1.patch should pop to p1")
+    qt_quilt_ok(ARGS push -mdiff3 MESSAGE "push -mdiff3 failed")
+    qt_assert_file_text("${applied}" "p1.patch\np2.patch" "push -mdiff3 should push p2")
+    qt_quilt_ok(OUTPUT out ENV "QUILT_PUSH_ARGS=-q" ARGS push -- p3.patch MESSAGE "push -- p3.patch failed")
+    qt_assert_not_contains("${out}" "patching file" "QUILT_PUSH_ARGS=-q should make push quiet")
+    qt_assert_file_text("${applied}" "p1.patch\np2.patch\np3.patch" "push -- p3.patch should push p3")
+
+    # -h prints the help, even grouped with other options
+    qt_quilt_ok(OUTPUT out ERROR err ARGS pop -ah MESSAGE "pop -ah failed")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Usage: quilt pop" "pop -ah should print help")
+    qt_assert_file_text("${applied}" "p1.patch\np2.patch\np3.patch" "pop -ah should pop nothing")
+endfunction()
+
+# The commands that show the stack take options like upstream's getopt,
+# and refuse extra arguments with their usage
+function(qt_scenario_getopt_stack_queries)
+    qt_begin_test("getopt_stack_queries")
+    qt_setup_getopt_stack()
+
+    qt_assert_usage_error(applied applied p1.patch p2.patch)
+    qt_assert_usage_error(unapplied unapplied p1.patch p2.patch)
+    qt_assert_usage_error(top top extra)
+    qt_assert_usage_error(next next p1.patch p2.patch)
+    qt_assert_usage_error(previous previous p1.patch p2.patch)
+    qt_assert_usage_error(series series -vx)
+
+    qt_quilt_ok(OUTPUT out ARGS applied -- p1.patch MESSAGE "applied -- p1.patch failed")
+    qt_assert_equal("${out}" "p1.patch\n" "applied -- p1.patch")
+    qt_quilt_ok(OUTPUT out ARGS unapplied -- p1.patch MESSAGE "unapplied -- p1.patch failed")
+    qt_assert_equal("${out}" "p2.patch\np3.patch\n" "unapplied -- p1.patch")
+    qt_quilt_ok(OUTPUT out ARGS top -- MESSAGE "top -- failed")
+    qt_assert_equal("${out}" "p2.patch\n" "top --")
+    qt_quilt_ok(OUTPUT out ARGS next -- MESSAGE "next -- failed")
+    qt_assert_equal("${out}" "p3.patch\n" "next --")
+    qt_quilt_ok(OUTPUT out ARGS previous -- p2.patch MESSAGE "previous -- p2.patch failed")
+    qt_assert_equal("${out}" "p1.patch\n" "previous -- p2.patch")
 endfunction()

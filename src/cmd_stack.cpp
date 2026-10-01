@@ -144,32 +144,23 @@ static void show_rollback(const QuiltState &q, std::span<const std::string> file
 }
 
 int cmd_series(QuiltState &q, int argc, char **argv) {
+    enum { COLOR = 256 };
+    static constexpr LongOpt longopts[] = {
+        {"color", OptArg::optional, COLOR},
+    };
+    auto args = parse_options(argc, argv, "vh", longopts);
+    if (!args) return 1;
     bool verbose = false;
-    constexpr std::string_view usage =
-        "Usage: quilt series [--color[=always|auto|never]] [-v]";
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
-        if (arg == "--") {
-            // Ends the options, and series takes no arguments
-            if (i + 1 < argc) {
-                err_line(usage);
-                return 1;
-            }
-        } else if (arg == "-v") {
-            verbose = true;
-        } else if (arg == "--color" || arg.starts_with("--color=")) {
-            if (!valid_color_option(arg)) {
-                err_line(usage);
-                return 1;
-            }
-        } else if (std::ssize(arg) > 1 && arg[0] == '-') {
-            err("Unrecognized option: "); err_line(arg);
-            return 1;
-        } else {
-            err_line(usage);
-            return 1;
+    for (const auto &opt : args->options) {
+        switch (opt.key) {
+        case 'v': verbose = true; break;
+        case COLOR:
+            if (!valid_color_value(opt.value)) return usage_error(argv[0]);
+            break;
+        case 'h': return command_help(argv[0]);
         }
     }
+    if (!args->operands.empty()) return usage_error(argv[0]);
 
     if (q.series.empty()) {
         if (q.series_file_exists) {
@@ -197,15 +188,16 @@ int cmd_series(QuiltState &q, int argc, char **argv) {
 }
 
 int cmd_applied(QuiltState &q, int argc, char **argv) {
-    std::string_view target;
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
-        if (arg.starts_with('-')) {
-            err("Unrecognized option: "); err_line(arg);
-            return 1;
-        }
-        target = arg;
+    // Upstream declares -n but never handles it, and loops forever on it,
+    // so -n does nothing here
+    auto args = parse_options(argc, argv, "nh");
+    if (!args) return 1;
+    for (const auto &opt : args->options) {
+        if (opt.key == 'h') return command_help(argv[0]);
     }
+    if (std::ssize(args->operands) > 1) return usage_error(argv[0]);
+    std::string_view target;
+    if (!args->operands.empty()) target = args->operands[0];
 
     if (!target.empty()) {
         // Print all applied patches up to and including target
@@ -238,15 +230,12 @@ int cmd_applied(QuiltState &q, int argc, char **argv) {
 }
 
 int cmd_unapplied(QuiltState &q, int argc, char **argv) {
+    auto args = parse_options(argc, argv, "h");
+    if (!args) return 1;
+    if (!args->options.empty()) return command_help(argv[0]);
+    if (std::ssize(args->operands) > 1) return usage_error(argv[0]);
     std::optional<std::string_view> target;
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
-        if (arg.starts_with('-')) {
-            err("Unrecognized option: "); err_line(arg);
-            return 1;
-        }
-        target = arg;
-    }
+    if (!args->operands.empty()) target = args->operands[0];
 
     if (q.series.empty()) {
         if (q.series_file_exists) {
@@ -287,13 +276,10 @@ int cmd_unapplied(QuiltState &q, int argc, char **argv) {
 }
 
 int cmd_top(QuiltState &q, int argc, char **argv) {
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
-        if (arg[0] == '-') {
-            err("Unrecognized option: "); err_line(arg);
-            return 1;
-        }
-    }
+    auto args = parse_options(argc, argv, "h");
+    if (!args) return 1;
+    if (!args->options.empty()) return command_help(argv[0]);
+    if (!args->operands.empty()) return usage_error(argv[0]);
     if (q.series.empty()) {
         if (q.series_file_exists) {
             err_line("No patches in series");
@@ -312,15 +298,12 @@ int cmd_top(QuiltState &q, int argc, char **argv) {
 }
 
 int cmd_next(QuiltState &q, int argc, char **argv) {
+    auto args = parse_options(argc, argv, "h");
+    if (!args) return 1;
+    if (!args->options.empty()) return command_help(argv[0]);
+    if (std::ssize(args->operands) > 1) return usage_error(argv[0]);
     std::string_view target;
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
-        if (arg.starts_with('-')) {
-            err("Unrecognized option: "); err_line(arg);
-            return 1;
-        }
-        target = arg;
-    }
+    if (!args->operands.empty()) target = args->operands[0];
 
     if (!target.empty()) {
         auto found = find_patch(q, target);
@@ -358,15 +341,12 @@ int cmd_next(QuiltState &q, int argc, char **argv) {
 }
 
 int cmd_previous(QuiltState &q, int argc, char **argv) {
+    auto args = parse_options(argc, argv, "h");
+    if (!args) return 1;
+    if (!args->options.empty()) return command_help(argv[0]);
+    if (std::ssize(args->operands) > 1) return usage_error(argv[0]);
     std::string_view target;
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
-        if (arg.starts_with('-')) {
-            err("Unrecognized option: "); err_line(arg);
-            return 1;
-        }
-        target = arg;
-    }
+    if (!args->operands.empty()) target = args->operands[0];
 
     if (!target.empty()) {
         auto found = find_patch(q, target);
@@ -415,38 +395,53 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
     int push_count = -1;
     std::string_view target;
 
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
-        if (arg == "-a") { push_all = true; }
-        else if (arg == "-f") { force = true; }
-        else if (arg == "-q" || arg == "--quiet") { quiet = true; }
-        else if (arg == "-v" || arg == "--verbose") { verbose = true; }
-        else if (arg.starts_with("--fuzz=")) { fuzz = checked_cast<int>(parse_int(arg.substr(7))); }
-        else if (arg == "-m" || arg == "--merge") { merge = true; }
-        else if (arg.starts_with("--merge=")) { merge = true; merge_style = std::string(arg.substr(8)); }
-        else if (arg == "--leave-rejects") { leave_rejects = true; }
-        else if (arg == "--refresh") { do_refresh = true; }
-        else if (arg == "--color" || arg.starts_with("--color=")) {
-            if (!valid_color_option(arg)) {
-                err_line("Usage: quilt push [-afqvm] [--fuzz=N] [--merge[=merge|diff3]] "
-                         "[--leave-rejects] [--color[=always|auto|never]] [--refresh] "
-                         "[num|patch]");
-                return 1;
+    enum { FUZZ = 256, LEAVE_REJECTS, COLOR, REFRESH };
+    static constexpr LongOpt longopts[] = {
+        {"fuzz", OptArg::required, FUZZ},
+        {"merge", OptArg::optional, 'm'},
+        {"leave-rejects", OptArg::none, LEAVE_REJECTS},
+        {"color", OptArg::optional, COLOR},
+        {"refresh", OptArg::none, REFRESH},
+        {"quiet", OptArg::none, 'q', true},
+        {"verbose", OptArg::none, 'v', true},
+    };
+    auto args = parse_options(argc, argv, "fqvam::h", longopts);
+    if (!args) return 1;
+    for (const auto &opt : args->options) {
+        switch (opt.key) {
+        case 'f': force = true; break;
+        case 'q': quiet = true; break;
+        case 'v': verbose = true; break;
+        case 'a': push_all = true; break;
+        case 'h': return command_help(argv[0]);
+        case FUZZ: fuzz = checked_cast<int>(parse_int(opt.value)); break;
+        case 'm':
+            if (!opt.value.empty() && opt.value != "merge" && opt.value != "diff3") {
+                return usage_error(argv[0]);
             }
+            merge = true;
+            merge_style = opt.value == "diff3" ? "diff3" : "";
+            break;
+        case LEAVE_REJECTS: leave_rejects = true; break;
+        case COLOR:
+            if (!valid_color_value(opt.value)) return usage_error(argv[0]);
+            break;
+        case REFRESH: do_refresh = true; break;
         }
-        else if (arg.starts_with('-')) {
-            err("Unrecognized option: "); err_line(arg);
-            return 1;
-        }
-        else {
-            // Try as number first
-            int val = 0;
-            auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), val);
-            if (ec == std::errc{} && ptr == arg.data() + arg.size() && val > 0) {
-                push_count = val;
-            } else {
-                target = arg;
-            }
+    }
+    auto &operands = args->operands;
+    if (std::ssize(operands) > 1 || (push_all && !operands.empty())) {
+        return usage_error(argv[0]);
+    }
+    if (!operands.empty()) {
+        // Try as number first
+        std::string_view arg = operands[0];
+        int val = 0;
+        auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), val);
+        if (ec == std::errc{} && ptr == arg.data() + arg.size() && val > 0) {
+            push_count = val;
+        } else {
+            target = arg;
         }
     }
 
@@ -637,27 +632,39 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
     int pop_count = -1;
     std::optional<std::string_view> target;
 
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
-        if (arg == "-a") { pop_all = true; }
-        else if (arg == "-f") { force = true; }
-        else if (arg == "-q" || arg == "--quiet") { quiet = true; }
-        else if (arg == "-v" || arg == "--verbose") { verbose = true; }
+    enum { REFRESH = 256 };
+    static constexpr LongOpt longopts[] = {
+        {"refresh", OptArg::none, REFRESH},
+        {"quiet", OptArg::none, 'q', true},
+        {"verbose", OptArg::none, 'v', true},
+    };
+    auto args = parse_options(argc, argv, "fRqvah", longopts);
+    if (!args) return 1;
+    for (const auto &opt : args->options) {
+        switch (opt.key) {
+        case 'f': force = true; break;
         // -R (verify removal) is always done unless forced, so it only
         // cancels an earlier -f, as in the original quilt.
-        else if (arg == "-R") { force = false; }
-        else if (arg == "--refresh") { auto_refresh = true; }
-        else if (arg.starts_with('-')) {
-            err("Unrecognized option: "); err_line(arg);
-            return 1;
+        case 'R': force = false; break;
+        case 'q': quiet = true; break;
+        case 'v': verbose = true; break;
+        case 'a': pop_all = true; break;
+        case 'h': return command_help(argv[0]);
+        case REFRESH: auto_refresh = true; break;
         }
-        else if (!arg.empty() &&
-                 std::ranges::all_of(arg, [](char c) { return c >= '0' && c <= '9'; })) {
+    }
+    auto &operands = args->operands;
+    if (std::ssize(operands) > 1 || (pop_all && !operands.empty())) {
+        return usage_error(argv[0]);
+    }
+    if (!operands.empty()) {
+        std::string_view arg = operands[0];
+        if (!arg.empty() &&
+            std::ranges::all_of(arg, [](char c) { return c >= '0' && c <= '9'; })) {
             // Any run of digits is a count, as in the original quilt
             auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), pop_count);
             if (ec == std::errc::result_out_of_range) pop_all = true;
-        }
-        else {
+        } else {
             target = arg;
         }
     }

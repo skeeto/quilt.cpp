@@ -207,12 +207,15 @@ std::optional<std::string> find_applied_patch(const QuiltState &q, std::string_v
     return patch;
 }
 
+bool valid_color_value(std::string_view when) {
+    return when.empty() || when == "always" || when == "auto" ||
+           when == "tty" || when == "never";
+}
+
 bool valid_color_option(std::string_view arg) {
     if (arg == "--color") return true;
     if (!arg.starts_with("--color=")) return false;
-    std::string_view when = arg.substr(8);
-    return when.empty() || when == "always" || when == "auto" ||
-           when == "tty" || when == "never";
+    return valid_color_value(arg.substr(8));
 }
 
 std::string trim(std::string_view s) {
@@ -1079,6 +1082,7 @@ std::string to_cstr(std::string_view s) {
 
 static Command commands[] = {
     {"new", cmd_new,
+     "Usage: quilt new [-p n] {patchname}",
      "Usage: quilt new [-p n] patchname\n"
      "\n"
      "Create a new empty patch and insert it after the topmost applied\n"
@@ -1090,6 +1094,7 @@ static Command commands[] = {
      "Create a new empty patch"},
 
     {"add", cmd_add,
+     "Usage: quilt add [-P patch] {file} ...",
      "Usage: quilt add [-P patch] file ...\n"
      "\n"
      "Register files with the topmost patch by backing up their current\n"
@@ -1102,6 +1107,8 @@ static Command commands[] = {
      "Add files to the topmost patch"},
 
     {"push", cmd_push,
+     "Usage: quilt push [-afqvm] [--fuzz=N] [--merge[=merge|diff3]] "
+     "[--leave-rejects] [--color[=always|auto|never]] [--refresh] [num|patch]",
      "Usage: quilt push [-afqv] [--fuzz=N] [-m] [--merge[=merge|diff3]]\n"
      "       [--leave-rejects] [--refresh] [num|patch]\n"
      "\n"
@@ -1122,6 +1129,7 @@ static Command commands[] = {
      "Apply patches to the source tree"},
 
     {"pop", cmd_pop,
+     "Usage: quilt pop [-afRqv] [--refresh] [num|patch]",
      "Usage: quilt pop [-afRqv] [--refresh] [num|patch]\n"
      "\n"
      "Remove the topmost applied patch by restoring files from backup.\n"
@@ -1139,6 +1147,9 @@ static Command commands[] = {
      "Remove applied patches from the stack"},
 
     {"refresh", cmd_refresh,
+     "Usage: quilt refresh [-p n|-p ab] [-u|-U num|-c|-C num] [-z[new_name]] "
+     "[-f] [--no-timestamps] [--no-index] [--diffstat] [--sort] [--backup] "
+     "[--strip-trailing-whitespace] [patch]",
      "Usage: quilt refresh [-p n] [-u | -U num | -c | -C num] [-z [new_name]]\n"
      "       [-f] [--no-timestamps] [--no-index] [--diffstat] [--sort]\n"
      "       [--strip-trailing-whitespace] [--backup]\n"
@@ -1174,6 +1185,10 @@ static Command commands[] = {
      "Regenerate a patch from working tree changes"},
 
     {"diff", cmd_diff,
+     "Usage: quilt diff [-p n|-p ab] [-u|-U num|-c|-C num] "
+     "[--combine patch|-z] [-R] [-P patch] [--snapshot] [--diff=utility] "
+     "[--no-timestamps] [--no-index] [--sort] [--color[=always|auto|never]] "
+     "[file ...]",
      "Usage: quilt diff [-p n] [-u | -U num | -c | -C num]\n"
      "       [--combine patch] [-P patch] [-z] [-R] [--snapshot]\n"
      "       [--diff=utility] [--no-timestamps] [--no-index] [--sort]\n"
@@ -1211,6 +1226,7 @@ static Command commands[] = {
      "Show the diff of the topmost or a specified patch"},
 
     {"series", cmd_series,
+     "Usage: quilt series [--color[=always|auto|never]] [-v]",
      "Usage: quilt series [-v]\n"
      "\n"
      "List all patches in the series file, both applied and unapplied.\n"
@@ -1220,6 +1236,7 @@ static Command commands[] = {
      "List all patches in the series"},
 
     {"applied", cmd_applied,
+     "Usage: quilt applied [patch]",
      "Usage: quilt applied [patch]\n"
      "\n"
      "List the currently applied patches in stack order. With a patch\n"
@@ -1227,6 +1244,7 @@ static Command commands[] = {
      "List applied patches"},
 
     {"unapplied", cmd_unapplied,
+     "Usage: quilt unapplied [patch]",
      "Usage: quilt unapplied [patch]\n"
      "\n"
      "List the patches that have not been applied yet. With a patch\n"
@@ -1234,12 +1252,14 @@ static Command commands[] = {
      "List patches not yet applied"},
 
     {"top", cmd_top,
+     "Usage: quilt top",
      "Usage: quilt top\n"
      "\n"
      "Print the name of the topmost applied patch.\n",
      "Show the topmost applied patch"},
 
     {"next", cmd_next,
+     "Usage: quilt next [patch]",
      "Usage: quilt next [patch]\n"
      "\n"
      "Print the patch after the topmost applied patch, or after the\n"
@@ -1247,6 +1267,7 @@ static Command commands[] = {
      "Show the next patch after the top or a given patch"},
 
     {"previous", cmd_previous,
+     "Usage: quilt previous [patch]",
      "Usage: quilt previous [patch]\n"
      "\n"
      "Print the patch before the topmost applied patch, or before the\n"
@@ -1254,6 +1275,7 @@ static Command commands[] = {
      "Show the patch before the top or a given patch"},
 
     {"delete", cmd_delete,
+     "Usage: quilt delete [-r] [--backup] [patch|-n]",
      "Usage: quilt delete [-r] [--backup] [patch|-n]\n"
      "\n"
      "Remove the topmost applied patch or a named unapplied patch from\n"
@@ -1266,6 +1288,7 @@ static Command commands[] = {
      "Remove a patch from the series"},
 
     {"rename", cmd_rename,
+     "Usage: quilt rename [-P patch] new_name",
      "Usage: quilt rename [-P patch] new_name\n"
      "\n"
      "Rename the topmost or named patch. Updates the series file and\n"
@@ -1276,6 +1299,8 @@ static Command commands[] = {
      "Rename a patch"},
 
     {"import", cmd_import,
+     "Usage: quilt import [-p num] [-R] [-P patch] [-f] [-d "
+     "{o|a|n}] patchfile ...",
      "Usage: quilt import [-p n] [-R] [-P name] [-f] [-d {o|a|n}] file ...\n"
      "\n"
      "Copy an external patch file into the patches directory and add it\n"
@@ -1292,6 +1317,8 @@ static Command commands[] = {
      "Import an external patch into the series"},
 
     {"header", cmd_header,
+     "Usage: quilt header [-a|-r|-e] [--backup] [--strip-diffstat] "
+     "[--strip-trailing-whitespace] [patch]",
      "Usage: quilt header [-a|-r|-e] [--backup] [--dep3]\n"
      "       [--strip-diffstat] [--strip-trailing-whitespace] [patch]\n"
      "\n"
@@ -1310,6 +1337,7 @@ static Command commands[] = {
      "Print or modify a patch header"},
 
     {"files", cmd_files,
+     "Usage: quilt files [-v] [-a] [-l] [--combine patch] [patch]",
      "Usage: quilt files [-v] [-a] [-l] [--combine patch] [patch]\n"
      "\n"
      "List the files that the topmost or named patch modifies.\n"
@@ -1322,6 +1350,8 @@ static Command commands[] = {
      "List files modified by a patch"},
 
     {"patches", cmd_patches,
+     "Usage: quilt patches [-v] [--color[=always|auto|never]] {file} "
+     "[files...]",
      "Usage: quilt patches [-v] file ...\n"
      "\n"
      "List the patches that modify the given file or files. Searches\n"
@@ -1333,6 +1363,7 @@ static Command commands[] = {
      "List patches that modify a given file"},
 
     {"edit", cmd_edit,
+     "Usage: quilt edit file ...",
      "Usage: quilt edit file ...\n"
      "\n"
      "Add files to the topmost patch and open them in $EDITOR. This is\n"
@@ -1341,6 +1372,7 @@ static Command commands[] = {
      "Add files to the topmost patch and open an editor"},
 
     {"revert", cmd_revert,
+     "Usage: quilt revert [-P patch] {file} ...",
      "Usage: quilt revert [-P patch] file ...\n"
      "\n"
      "Discard uncommitted changes to files by restoring them from the\n"
@@ -1352,6 +1384,7 @@ static Command commands[] = {
      "Discard working tree changes to files in a patch"},
 
     {"remove", cmd_remove,
+     "Usage: quilt remove [-P patch] {file} ...",
      "Usage: quilt remove [-P patch] file ...\n"
      "\n"
      "Remove files from the topmost or named patch and restore them\n"
@@ -1362,6 +1395,7 @@ static Command commands[] = {
      "Remove files from the topmost patch"},
 
     {"fold", cmd_fold,
+     "Usage: quilt fold [-R] [-q] [-f] [-p strip-level]",
      "Usage: quilt fold [-R] [-q] [-f] [-p n]\n"
      "\n"
      "Fold a diff read from standard input into the topmost patch.\n"
@@ -1376,6 +1410,7 @@ static Command commands[] = {
      "Fold a diff from stdin into the topmost patch"},
 
     {"fork", cmd_fork,
+     "Usage: quilt fork [new_name]",
      "Usage: quilt fork [new_name]\n"
      "\n"
      "Copy the topmost patch to a new name. The series is updated to\n"
@@ -1387,6 +1422,7 @@ static Command commands[] = {
 
     // Implemented analysis commands
     {"annotate", cmd_annotate,
+     "Usage: quilt annotate [-P patch] {file}",
      "Usage: quilt annotate [-P patch] file\n"
      "\n"
      "Show which applied patch last modified each line of a file,\n"
@@ -1398,6 +1434,8 @@ static Command commands[] = {
      "Show which patch modified each line of a file"},
 
     {"graph", cmd_graph,
+     "Usage: quilt graph [--all] [--reduce] [--lines[=num]] "
+     "[--edge-labels=files] [-T ps] [patch]",
      "Usage: quilt graph [--all] [--reduce] [--lines[=num]]\n"
      "                   [--edge-labels=files] [patch]\n"
      "\n"
@@ -1415,6 +1453,9 @@ static Command commands[] = {
      "Print a dot dependency graph of applied patches"},
 
     {"mail", cmd_mail,
+     "Usage: quilt mail {--mbox file} [--prefix prefix] [--sender ...] "
+     "[--from ...] [--to ...] [--cc ...] [--bcc ...] "
+     "[first_patch [last_patch]]",
      "Usage: quilt mail {--mbox file} [--prefix prefix] [--sender addr]\n"
      "                  [--from addr] [--to addr] [--cc addr] [--bcc addr]\n"
      "                  [first_patch [last_patch]]\n"
@@ -1435,6 +1476,7 @@ static Command commands[] = {
 
     // Stubs
     {"grep", cmd_grep,
+     "Usage: quilt grep [-h|options] {pattern}",
      "Usage: quilt grep [-h|options] pattern\n"
      "\n"
      "Search source files, skipping patches/ and .pc/ directories.\n"
@@ -1442,6 +1484,8 @@ static Command commands[] = {
      "Search source files (not implemented)"},
 
     {"setup", cmd_setup,
+     "Usage: quilt setup [-d path-prefix] [-v] [--sourcedir dir] [--fuzz=N] "
+     "[--spec-filter FILTER] [--slow|--fast] {specfile|seriesfile}",
      "Usage: quilt setup [-d path] series\n"
      "\n"
      "Initialize a source tree from a series file or RPM spec.\n"
@@ -1449,6 +1493,7 @@ static Command commands[] = {
      "Set up a source tree from a series file (not implemented)"},
 
     {"shell", cmd_shell,
+     "Usage: quilt shell [command]",
      "Usage: quilt shell [command]\n"
      "\n"
      "Open a shell or run a command in the quilt environment.\n"
@@ -1456,6 +1501,7 @@ static Command commands[] = {
      "Open a subshell (not implemented)"},
 
     {"snapshot", cmd_snapshot,
+     "Usage: quilt snapshot [-d]",
      "Usage: quilt snapshot [-d]\n"
      "\n"
      "Save a copy of the current working tree state for later\n"
@@ -1466,6 +1512,7 @@ static Command commands[] = {
      "Save a snapshot of the working tree for later diff"},
 
     {"upgrade", cmd_upgrade,
+     "Usage: quilt upgrade",
      "Usage: quilt upgrade\n"
      "\n"
      "Upgrade quilt metadata in .pc/ to the current format. This is\n"
@@ -1473,6 +1520,7 @@ static Command commands[] = {
      "Upgrade quilt metadata to the current format"},
 
     {"init", cmd_init,
+     "Usage: quilt init",
      "Usage: quilt init\n"
      "\n"
      "Initialize quilt metadata in the current directory. This is\n"
@@ -1483,6 +1531,145 @@ static Command commands[] = {
 };
 
 static constexpr int num_commands = sizeof(commands) / sizeof(commands[0]);
+
+static const Command *find_command(std::string_view name) {
+    for (const auto &c : commands) {
+        if (name == c.name) return &c;
+    }
+    return nullptr;
+}
+
+int usage_error(std::string_view command) {
+    if (const Command *c = find_command(command)) err_line(c->synopsis);
+    return 1;
+}
+
+int command_help(std::string_view command) {
+    if (const Command *c = find_command(command)) out_line(c->usage);
+    return 0;
+}
+
+// The option that --name names: an exact match, or else the only option
+// that name abbreviates, where upstream's options beat quilt.cpp's
+// extensions. Without one, return the candidates, which may be none.
+static const LongOpt *match_long_option(std::span<const LongOpt> longopts,
+                                        std::string_view name,
+                                        std::vector<const LongOpt *> &candidates)
+{
+    for (const auto &opt : longopts) {
+        if (opt.name == name) return &opt;
+        if (!name.empty() && opt.name.starts_with(name)) candidates.push_back(&opt);
+    }
+    if (std::ranges::any_of(candidates, [](auto *c) { return !c->extension; })) {
+        std::erase_if(candidates, [](auto *c) { return c->extension; });
+    }
+    if (candidates.empty()) return nullptr;
+    // Like getopt_long, names for the same option are no ambiguity
+    const LongOpt *first = candidates.front();
+    bool same = std::ranges::all_of(candidates, [&](auto *c) {
+        return c->key == first->key && c->arg == first->arg;
+    });
+    return same ? first : nullptr;
+}
+
+std::optional<ParsedArgs> parse_options(int argc, char **argv,
+                                        std::string_view shortopts,
+                                        std::span<const LongOpt> longopts)
+{
+    std::string_view command = argv[0];
+    std::vector<LongOpt> all_longopts(longopts.begin(), longopts.end());
+    all_longopts.push_back({"help", OptArg::none, 'h', true});
+
+    // Like getopt(1), report every bad option before giving up
+    bool ok = true;
+    auto complain = [&](std::string_view what) {
+        err("quilt "); err(command); err(": "); err_line(what);
+        ok = false;
+    };
+
+    ParsedArgs parsed;
+    for (int i = 1; i < argc; ++i) {
+        std::string_view arg = argv[i];
+        if (arg == "--") {
+            while (++i < argc) parsed.operands.emplace_back(argv[i]);
+            break;
+        }
+        if (std::ssize(arg) < 2 || arg[0] != '-') {
+            parsed.operands.push_back(arg);
+            continue;
+        }
+
+        if (arg[1] == '-') {
+            std::string_view body = arg.substr(2);
+            ptrdiff_t eq = str_find(body, '=');
+            std::string_view name = body.substr(0, eq < 0 ? body.size() : checked_cast<size_t>(eq));
+            std::vector<const LongOpt *> candidates;
+            const LongOpt *opt = match_long_option(all_longopts, name, candidates);
+            if (!opt) {
+                std::string what;
+                if (candidates.empty()) {
+                    what = "unrecognized option '" + std::string(arg) + "'";
+                } else {
+                    what = "option '" + std::string(arg) + "' is ambiguous; possibilities:";
+                    for (auto *c : candidates) what += " '--" + std::string(c->name) + "'";
+                }
+                complain(what);
+                continue;
+            }
+            std::string_view value;
+            if (eq >= 0) {
+                if (opt->arg == OptArg::none) {
+                    complain("option '--" + std::string(opt->name) + "' doesn't allow an argument");
+                    continue;
+                }
+                value = body.substr(checked_cast<size_t>(eq + 1));
+            } else if (opt->arg == OptArg::required) {
+                if (i + 1 >= argc) {
+                    complain("option '--" + std::string(opt->name) + "' requires an argument");
+                    continue;
+                }
+                value = argv[++i];
+            }
+            parsed.options.push_back({opt->key, value});
+            continue;
+        }
+
+        for (ptrdiff_t j = 1; j < std::ssize(arg); ++j) {
+            char letter = arg[checked_cast<size_t>(j)];
+            ptrdiff_t at = letter == ':' ? -1 : str_find(shortopts, letter);
+            if (at < 0) {
+                complain(std::string("invalid option -- '") + letter + "'");
+                continue;
+            }
+            int key = static_cast<unsigned char>(letter);
+            auto colon_at = [&](ptrdiff_t k) {
+                return k < std::ssize(shortopts) && shortopts[checked_cast<size_t>(k)] == ':';
+            };
+            if (!colon_at(at + 1)) {
+                parsed.options.push_back({key, {}});
+                continue;
+            }
+            // The rest of the word is the value, or, for a required one,
+            // the next word, whatever it is
+            std::string_view value = arg.substr(checked_cast<size_t>(j + 1));
+            if (value.empty() && !colon_at(at + 2)) {
+                if (i + 1 >= argc) {
+                    complain(std::string("option requires an argument -- '") + letter + "'");
+                    break;
+                }
+                value = argv[++i];
+            }
+            parsed.options.push_back({key, value});
+            break;
+        }
+    }
+
+    if (!ok) {
+        usage_error(command);
+        return std::nullopt;
+    }
+    return parsed;
+}
 
 static std::string to_upper(std::string_view s) {
     std::string result(s);

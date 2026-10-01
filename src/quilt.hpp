@@ -194,10 +194,56 @@ std::optional<std::string> find_top_patch(const QuiltState &q);
 std::optional<std::string> find_patch_in_series(const QuiltState &q, std::string_view name);
 std::optional<std::string> find_applied_patch(const QuiltState &q, std::string_view name);
 
-// Whether a --color or --color=when argument is valid. Like upstream, when
+// Whether when, the value of a --color option, is valid. Like upstream, it
 // may be empty, always, auto, tty, or never. Quilt.cpp never colors its
 // output, so commands discard the option once it checks out.
-bool valid_color_option(std::string_view arg);
+bool valid_color_value(std::string_view when);
+bool valid_color_option(std::string_view arg);  // --color[=when]
+
+// Command-line options, parsed like the util-linux getopt(1) that upstream
+// runs over each command's arguments, QUILT_<CMD>_ARGS first:
+//
+// - Short options may be grouped (-qa). A value goes attached (-p0) or in
+//   the next word (-p 0), whatever that word is. An optional value, as in
+//   "z::", only goes attached, and is empty when absent.
+// - Long options take a value after "=" (--fuzz=2), or, when required, in
+//   the next word (--fuzz 2). A unique prefix names an option (--leave).
+//   When an upstream option and a quilt.cpp extension share the prefix,
+//   the upstream option wins.
+// - Options and operands mix in any order. "--" ends the options, and ""
+//   and "-" are operands.
+// - Every command takes --help as -h, a quilt.cpp extension.
+enum class OptArg : unsigned char { none, required, optional };
+
+struct LongOpt {
+    std::string_view name;
+    OptArg arg;
+    int key;                 // a short option letter for an alias, else >= 256
+    bool extension = false;  // quilt.cpp only, so upstream options win ties
+};
+
+struct ParsedOption {
+    int key;                 // the short option letter or LongOpt::key
+    std::string_view value;  // empty when absent
+};
+
+struct ParsedArgs {
+    std::vector<ParsedOption> options;   // in command-line order
+    std::vector<std::string_view> operands;
+};
+
+// Parse argv[1..argc), where argv[0] is the command's name. On a bad
+// option, print what is wrong and the command's usage, as upstream does,
+// and return nullopt, upon which the command exits with status 1.
+std::optional<ParsedArgs> parse_options(int argc, char **argv,
+                                        std::string_view shortopts,
+                                        std::span<const LongOpt> longopts = {});
+
+// Print the command's usage line on stderr, for wrong arguments, and
+// return 1, upstream's exit status for them.
+int usage_error(std::string_view command);
+// Print the command's help on stdout, for -h, and return 0.
+int command_help(std::string_view command);
 
 // Resolve a user-provided file path relative to the current subdirectory.
 inline std::string subdir_path(const QuiltState &q, std::string_view file) {
@@ -240,7 +286,8 @@ using CmdFn = int (*)(QuiltState &q, int argc, char **argv);
 struct Command {
     const char *name;
     CmdFn       fn;
-    const char *usage;
+    const char *synopsis;     // usage line for wrong arguments, as upstream's
+    const char *usage;        // full help, for -h
     const char *description;
 };
 
