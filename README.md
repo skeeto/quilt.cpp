@@ -92,6 +92,19 @@ shell. This applies to all `QUILT_*_ARGS` and `QUILT_*_OPTS` variables.
 forks to `p-9.patch` and `p-010.patch` to `p-11.patch`, where the original
 Quilt's shell arithmetic reads it as octal (and fails on `08` and `09`).
 
+### Header merging in `quilt import -f`
+
+When `import -f` replaces a patch without `-d`, the original Quilt keeps
+the old header if the new version has none, takes the new version if the
+old one has none, and refuses when both have headers that differ. Two of
+its quirks are not reproduced. When the headers match, it writes the old
+header followed by the whole new version, so the header appears twice;
+Quilt.cpp writes the new version as it is. And once it keeps the old
+header or takes the new version for one patch, that choice carries over
+to the later patches named in the same command, which can drop a header
+or skip the check for differing ones; Quilt.cpp chooses for each patch
+separately.
+
 ### Deliberately omitted features
 
 Quilt.cpp omits `setup` because it's an old, RPM-specific workflow that

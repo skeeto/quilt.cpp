@@ -23,54 +23,51 @@ static std::vector<std::string> unapplied_patch_files(const QuiltState &q,
                               q.patch_reversed.contains(std::string(patch)));
 }
 
-// An older header split, which only import -f still uses. Everything else
-// splits like upstream, with patch_header and patch_body.
-static std::string extract_header(std::string_view content) {
-    std::string header;
-    auto lines = split_lines(content);
-    for (const auto &line : lines) {
-        if (line.starts_with("Index:") ||
-            line.starts_with("--- ") ||
-            line.starts_with("diff ") ||
-            line.starts_with("===")) {
-            break;
-        }
-        header += line;
-        header += '\n';
-    }
-    return header;
-}
+// Like upstream's merge_patches, build the new contents of a patch that
+// import -f replaces, keeping the old (o), all (a) or new (n) header. The
+// headers are compared, and the old one kept, without their diffstats.
+// Without a mode, keep whichever header is not empty, or show how they
+// differ and fail. Unlike upstream, matching headers take the new version
+// as it is (upstream writes the header twice), and the mode chosen here is
+// not kept for the next patch.
+static std::optional<std::string> merge_patches(std::string_view old_patch,
+                                                std::string_view new_patch,
+                                                char mode) {
+    std::string old_desc = strip_diffstat(patch_header(old_patch));
+    std::string new_desc = strip_diffstat(patch_header(new_patch));
 
-static std::string replace_header(std::string_view content, std::string_view new_header) {
-    std::string result;
-    auto lines = split_lines(content);
-    bool in_diff = false;
-    // Find where diffs start
-    ptrdiff_t diff_start = 0;
-    for (ptrdiff_t i = 0; i < std::ssize(lines); ++i) {
-        if (lines[checked_cast<size_t>(i)].starts_with("Index:") ||
-            lines[checked_cast<size_t>(i)].starts_with("--- ") ||
-            lines[checked_cast<size_t>(i)].starts_with("diff ") ||
-            lines[checked_cast<size_t>(i)].starts_with("===")) {
-            diff_start = i;
-            in_diff = true;
-            break;
-        }
-    }
-
-    result += std::string(new_header);
-    // Ensure header ends with newline if non-empty
-    if (!result.empty() && result.back() != '\n') {
-        result += '\n';
-    }
-
-    if (in_diff) {
-        for (ptrdiff_t i = diff_start; i < std::ssize(lines); ++i) {
-            result += lines[checked_cast<size_t>(i)];
-            result += '\n';
+    if (!mode) {
+        if (old_desc.empty() || old_desc == new_desc) {
+            mode = 'n';
+        } else if (new_desc.empty()) {
+            mode = 'o';
+        } else {
+            std::map<std::string, std::string> fs = {{"a", old_desc},
+                                                     {"b", new_desc}};
+            std::string diff = builtin_diff("a", "b", 3, {}, {},
+                                            DiffFormat::unified,
+                                            DiffAlgorithm::myers, &fs).output;
+            // Like sed -e '1,2d', drop the --- and +++ lines
+            for (int i = 0; i < 2; ++i) {
+                diff.erase(0, checked_cast<size_t>(str_find(diff, '\n') + 1));
+            }
+            err_line("Patch headers differ:");
+            err(diff);
+            err_line("Please use -d {o|a|n} to specify which patch "
+                     "header(s) to keep.");
+            return std::nullopt;
         }
     }
-    return result;
+
+    std::string merged;
+    if (mode != 'n') merged = old_desc;
+    if (mode == 'a') merged += "---\n";
+    if (mode == 'o') {
+        merged += patch_body(new_patch);
+    } else {
+        merged += new_patch;
+    }
+    return merged;
 }
 
 
@@ -298,7 +295,7 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
     std::string strip_arg;  // -p value, recorded verbatim in the series
     std::string target_name;
     bool force = false;
-    char dup_mode = 0;  // o=overwrite, a=append, n=next
+    char dup_mode = 0;  // -d: keep the o(ld), a(ll) or n(ew) header
     bool reversed = false;
     std::vector<std::string> patchfiles;
 
@@ -422,52 +419,21 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
             }
         }
 
-        // Copy patchfile to patches/<name>, handling -d header mode
-        if (existing && force && dup_mode && dup_mode != 'n') {
-            // Merge headers based on -d mode
-            std::string old_content = read_file(dest);
-            std::string new_content = read_file(patchfile);
-            std::string old_hdr = extract_header(old_content);
-            std::string new_hdr = extract_header(new_content);
-            std::string merged_header;
-            if (dup_mode == 'o') {
-                merged_header = old_hdr;
-            } else if (dup_mode == 'a') {
-                merged_header = old_hdr;
-                if (!merged_header.empty() && merged_header.back() != '\n')
-                    merged_header += '\n';
-                merged_header += "---\n";
-                merged_header += new_hdr;
-            }
-            std::string result = replace_header(new_content, merged_header);
-            if (!write_file(dest, result)) {
-                err_line("Failed to write " + dest);
-                return 1;
-            }
-        } else if (existing && force && !dup_mode) {
-            // Both patches exist and no -d flag: check if both have headers
-            std::string old_content = read_file(dest);
-            std::string new_content = read_file(patchfile);
-            std::string old_hdr = extract_header(old_content);
-            std::string new_hdr = extract_header(new_content);
-            if (!old_hdr.empty() && !new_hdr.empty() && old_hdr != new_hdr) {
-                err_line("Patch headers differ:");
-                err_line("@@ -1 +1 @@");
-                err_line("-" + old_hdr);
-                err_line("+" + new_hdr);
-                err_line("Please use -d {o|a|n} to specify which patch "
-                         "header(s) to keep.");
-                return 1;
-            }
-            if (!copy_file(patchfile, dest)) {
-                err_line("Failed to copy " + patchfile + " to " + dest);
-                return 1;
-            }
-        } else {
-            if (!copy_file(patchfile, dest)) {
-                err_line("Failed to copy " + patchfile + " to " + dest);
-                return 1;
-            }
+        // Copy patchfile to patches/<name>, merging the headers of a patch
+        // it replaces unless -d n
+        std::optional<std::string> merged;
+        if (existing && dup_mode != 'n') {
+            merged = merge_patches(read_file(dest), read_file(patchfile),
+                                   dup_mode);
+            if (!merged) return 1;
+        }
+        if (existing) {
+            err_line("Replacing patch " + patch_path_display(q, name) +
+                     " with new version");
+        }
+        if (merged ? !write_file(dest, *merged) : !copy_file(patchfile, dest)) {
+            err_line("Failed to import patch " + patch_path_display(q, name));
+            return 1;
         }
 
         // When replacing an existing patch the original quilt leaves the
@@ -478,10 +444,7 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
             return 1;
         }
 
-        if (existing && force) {
-            out_line("Replacing patch " + patch_path_display(q, name) +
-                     " with new version");
-        } else {
+        if (!existing) {
             out_line("Importing patch " + patchfile +
                      " (stored as " + patch_path_display(q, name) + ")");
         }

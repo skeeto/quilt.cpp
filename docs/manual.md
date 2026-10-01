@@ -261,7 +261,7 @@ quilt files -a -l
 
 Imports external patch files into the quilt series. Patches are **copied** into the `patches/` directory and inserted into the series file after the current topmost patch. Patches are **not applied** — you must `quilt push` afterward.
 
-**Key flags**: `-P patch` renames the imported patch (single file only). `-p num` sets strip level (recorded in series). `-R` marks as reversed. `-f` overwrites existing patches. `-d {o|a|n}` controls header merging when overwriting: keep **o**ld, keep **a**ll (concatenate), or keep **n**ew header.
+**Key flags**: `-P patch` renames the imported patch (single file only). `-p num` sets strip level (recorded in series). `-R` marks as reversed. `-f` overwrites existing patches. `-d {o|a|n}` controls header merging when overwriting: keep **o**ld, keep **a**ll (concatenate), or keep **n**ew header. Without `-d`, the old header is kept when the new patch has none, and the import fails, showing a diff of the two, when both have headers that differ. Diffstats are ignored when comparing, and dropped from a kept old header.
 
 ```bash
 quilt import /tmp/upstream-fix.patch

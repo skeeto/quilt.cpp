@@ -286,6 +286,12 @@ set(QUILT_TEST_SCENARIOS
     header_lookahead_edges
     refresh_keeps_lookalike_header
     refresh_diffstat_in_place
+    import_force_keeps_old_header
+    import_force_headers_differ_hunk
+    import_force_upstream_sequence
+    import_force_strips_old_diffstat
+    import_force_diffstat_not_a_conflict
+    import_force_header_boundaries
     color_option_accepted
     color_option_invalid
     trace_option_accepted
@@ -699,6 +705,8 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     push_context_diff_zero_context
     fold_fail_rollback_create_delete
     fork_leading_zero_suffix
+    import_force_identical_header_once
+    import_force_mode_per_patch
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -4015,7 +4023,7 @@ function(qt_scenario_mail_no_header)
     qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
     qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
     qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
-    # The refreshed patch starts with --- (no header text), so extract_header returns "".
+    # The refreshed patch starts with --- (no header text), so patch_header returns "".
     # This triggers the fallback: use patch filename as subject.
     qt_quilt_ok(
         OUTPUT out ERROR err
@@ -8061,6 +8069,22 @@ function(qt_run_named_scenario scenario)
         qt_scenario_refresh_diffstat_in_place()
     elseif(scenario STREQUAL "mail_subject_lookalike")
         qt_scenario_mail_subject_lookalike()
+    elseif(scenario STREQUAL "import_force_keeps_old_header")
+        qt_scenario_import_force_keeps_old_header()
+    elseif(scenario STREQUAL "import_force_headers_differ_hunk")
+        qt_scenario_import_force_headers_differ_hunk()
+    elseif(scenario STREQUAL "import_force_upstream_sequence")
+        qt_scenario_import_force_upstream_sequence()
+    elseif(scenario STREQUAL "import_force_strips_old_diffstat")
+        qt_scenario_import_force_strips_old_diffstat()
+    elseif(scenario STREQUAL "import_force_diffstat_not_a_conflict")
+        qt_scenario_import_force_diffstat_not_a_conflict()
+    elseif(scenario STREQUAL "import_force_header_boundaries")
+        qt_scenario_import_force_header_boundaries()
+    elseif(scenario STREQUAL "import_force_identical_header_once")
+        qt_scenario_import_force_identical_header_once()
+    elseif(scenario STREQUAL "import_force_mode_per_patch")
+        qt_scenario_import_force_mode_per_patch()
     elseif(scenario STREQUAL "annotate_no_series_file")
         qt_scenario_annotate_no_series_file()
     elseif(scenario STREQUAL "push_reject_no_newline")
@@ -15354,4 +15378,196 @@ function(qt_scenario_mail_subject_lookalike)
     qt_read_file_raw(mbox "${QT_TEST_BASE}/out.mbox")
     qt_assert_contains("${mbox}" "Subject: [PATCH] diff between v1 and v2 breaks it\n" "wrong subject")
     qt_assert_contains("${mbox}" "\n=====\nBody\n\nIndex: " "body should hold the rest of the description")
+endfunction()
+
+# import -f without -d keeps the old header when the new version has none,
+# and takes the new version whole when the old one has none. "Replacing"
+# goes to stderr.
+function(qt_scenario_import_force_keeps_old_header)
+    qt_begin_test("import_force_keeps_old_header")
+    set(diff_y "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+y\n")
+    set(diff_z "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+z\n")
+    set(ext "${QT_TEST_BASE}/ext.patch")
+    qt_write_file("${ext}" "Old header\n${diff_y}")
+    qt_quilt_ok(ARGS import "${ext}" MESSAGE "import failed")
+    qt_write_file("${ext}" "${diff_z}")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS import -f "${ext}")
+    qt_assert_success("${rc}" "import -f failed")
+    qt_assert_equal("${out}" "" "import -f should not write to stdout")
+    qt_assert_equal("${err}" "Replacing patch ext.patch with new version\n" "Replacing should go to stderr")
+    qt_read_file_raw(text "${QT_WORK_DIR}/patches/ext.patch")
+    qt_assert_equal("${text}" "Old header\n${diff_z}" "import -f should keep the old header")
+
+    set(two "${QT_TEST_BASE}/two.patch")
+    qt_write_file("${two}" "${diff_y}")
+    qt_quilt_ok(ARGS import "${two}" MESSAGE "import two failed")
+    qt_write_file("${two}" "New header\n${diff_z}")
+    qt_quilt_ok(ARGS import -f "${two}" MESSAGE "import -f two failed")
+    qt_read_file_raw(text "${QT_WORK_DIR}/patches/two.patch")
+    qt_assert_equal("${text}" "New header\n${diff_z}" "import -f should take the new header")
+endfunction()
+
+# When both headers differ, import -f shows a real diff of them and fails
+function(qt_scenario_import_force_headers_differ_hunk)
+    qt_begin_test("import_force_headers_differ_hunk")
+    set(ext "${QT_TEST_BASE}/ext.patch")
+    qt_write_file("${ext}" "Subject: one\n\nline two\nline three\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+y\n")
+    qt_quilt_ok(ARGS import "${ext}" MESSAGE "import failed")
+    qt_write_file("${ext}" "Subject: one\n\nline 2\nline three\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+z\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS import -f "${ext}")
+    qt_assert_failure("${rc}" "import -f should fail when the headers differ")
+    qt_assert_equal("${out}" "" "import -f should not write to stdout")
+    qt_assert_equal("${err}" "Patch headers differ:\n@@ -1,4 +1,4 @@\n Subject: one\n \n-line two\n+line 2\n line three\nPlease use -d {o|a|n} to specify which patch header(s) to keep.\n" "wrong header diff")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/ext.patch" "+y" "a failed import -f should leave the patch alone")
+endfunction()
+
+# Port of the header merge in upstream's test/import.test
+function(qt_scenario_import_force_upstream_sequence)
+    qt_begin_test("import_force_upstream_sequence")
+    qt_write_file("${QT_WORK_DIR}/t/patch1.diff" "--- a/f\n+++ b/f\n@@ -0,0 +1 @@\n+f\n")
+    qt_quilt_ok(ARGS import t/patch1.diff MESSAGE "import failed")
+    qt_quilt_ok(ARGS header -r patch1.diff INPUT "original description\n" MESSAGE "header -r failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS import -f t/patch1.diff)
+    qt_assert_success("${rc}" "import -f failed")
+    qt_assert_equal("${err}" "Replacing patch patch1.diff with new version\n" "wrong import -f message")
+    qt_quilt_ok(OUTPUT out ARGS header patch1.diff MESSAGE "header failed")
+    qt_assert_equal("${out}" "original description\n" "import -f should keep the old header")
+
+    qt_read_file_raw(text "${QT_WORK_DIR}/patches/patch1.diff")
+    string(REPLACE "original" "new" text "${text}")
+    qt_write_file("${QT_WORK_DIR}/t/patch1.diff" "${text}")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS import -f t/patch1.diff)
+    qt_assert_failure("${rc}" "import -f should fail when the headers differ")
+    qt_assert_equal("${err}" "Patch headers differ:\n@@ -1 +1 @@\n-original description\n+new description\nPlease use -d {o|a|n} to specify which patch header(s) to keep.\n" "wrong header diff")
+
+    qt_quilt_ok(ARGS import -d a -f t/patch1.diff MESSAGE "import -d a -f failed")
+    qt_read_file_raw(text "${QT_WORK_DIR}/patches/patch1.diff")
+    qt_assert_equal("${text}" "original description\n---\nnew description\n--- a/f\n+++ b/f\n@@ -0,0 +1 @@\n+f\n" "-d a should keep both headers")
+
+    qt_quilt_ok(ARGS import -d n -f t/patch1.diff MESSAGE "import -d n -f failed")
+    qt_quilt_ok(OUTPUT out ARGS header patch1.diff MESSAGE "header failed")
+    qt_assert_equal("${out}" "new description\n" "-d n should keep the new header")
+endfunction()
+
+# The old header loses its diffstat when import -f keeps it
+function(qt_scenario_import_force_strips_old_diffstat)
+    qt_begin_test("import_force_strips_old_diffstat")
+    set(diff_y "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+y\n")
+    set(diff_z "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+z\n")
+    set(old "Desc\n---\n f.txt |    2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n\n${diff_y}")
+    set(ext "${QT_TEST_BASE}/ext.patch")
+    set(dest "${QT_WORK_DIR}/patches/ext.patch")
+    qt_write_file("${ext}" "${old}")
+    qt_quilt_ok(ARGS import "${ext}" MESSAGE "import failed")
+    qt_write_file("${ext}" "${diff_z}")
+    qt_quilt_ok(ARGS import -f "${ext}" MESSAGE "import -f failed")
+    qt_read_file_raw(text "${dest}")
+    qt_assert_equal("${text}" "Desc\n---\n\n${diff_z}" "import -f should drop the old diffstat")
+
+    qt_write_file("${ext}" "${old}")
+    qt_quilt_ok(ARGS import -f -d n "${ext}" MESSAGE "import -f -d n failed")
+    qt_write_file("${ext}" "New\n${diff_z}")
+    qt_quilt_ok(ARGS import -f -d o "${ext}" MESSAGE "import -f -d o failed")
+    qt_read_file_raw(text "${dest}")
+    qt_assert_equal("${text}" "Desc\n---\n\n${diff_z}" "-d o should drop the old diffstat")
+
+    qt_write_file("${ext}" "${old}")
+    qt_quilt_ok(ARGS import -f -d n "${ext}" MESSAGE "import -f -d n failed")
+    qt_write_file("${ext}" "New\n${diff_z}")
+    qt_quilt_ok(ARGS import -f -d a "${ext}" MESSAGE "import -f -d a failed")
+    qt_read_file_raw(text "${dest}")
+    qt_assert_equal("${text}" "Desc\n---\n\n---\nNew\n${diff_z}" "-d a should drop the old diffstat")
+endfunction()
+
+# Headers that differ only in a diffstat do not conflict
+function(qt_scenario_import_force_diffstat_not_a_conflict)
+    qt_begin_test("import_force_diffstat_not_a_conflict")
+    set(ext "${QT_TEST_BASE}/ext.patch")
+    qt_write_file("${ext}" "Desc\n---\n f.txt |    2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+y\n")
+    qt_quilt_ok(ARGS import "${ext}" MESSAGE "import failed")
+    qt_write_file("${ext}" "Desc\n---\n\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+z\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS import -f "${ext}")
+    qt_assert_success("${rc}" "a diffstat should not make the headers differ")
+    qt_assert_not_contains("${err}" "Patch headers differ" "a diffstat should not make the headers differ")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/ext.patch" "+z" "import -f should take the new diff")
+
+    # Nor does a diffstat only in the new version's header
+    set(two "${QT_TEST_BASE}/two.patch")
+    qt_write_file("${two}" "Desc\n---\n\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+y\n")
+    qt_quilt_ok(ARGS import "${two}" MESSAGE "import two failed")
+    qt_write_file("${two}" "Desc\n---\n f.txt |    2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+z\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS import -f "${two}")
+    qt_assert_success("${rc}" "a new diffstat should not make the headers differ")
+    qt_assert_not_contains("${err}" "Patch headers differ" "a new diffstat should not make the headers differ")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/two.patch" "+z" "import -f should take the new diff")
+endfunction()
+
+# import -f splits headers like upstream's patch_header
+function(qt_scenario_import_force_header_boundaries)
+    qt_begin_test("import_force_header_boundaries")
+    set(diff_y "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+y\n")
+    set(diff_z "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+z\n")
+    set(ext "${QT_TEST_BASE}/ext.patch")
+    qt_write_file("${ext}" "Title\n--- not a diff\n=====\nmore text\n${diff_y}")
+    qt_quilt_ok(ARGS import "${ext}" MESSAGE "import failed")
+    qt_write_file("${ext}" "${diff_z}")
+    qt_quilt_ok(ARGS import -f "${ext}" MESSAGE "import -f failed")
+    qt_read_file_raw(text "${QT_WORK_DIR}/patches/ext.patch")
+    qt_assert_equal("${text}" "Title\n--- not a diff\n=====\nmore text\n${diff_z}" "import -f should keep the whole old header")
+
+    set(two "${QT_TEST_BASE}/two.patch")
+    qt_write_file("${two}" "Title\ndiff is fun\n${diff_y}")
+    qt_quilt_ok(ARGS import "${two}" MESSAGE "import two failed")
+    qt_write_file("${two}" "Title\ndiff is different\n${diff_z}")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS import -f "${two}")
+    qt_assert_failure("${rc}" "import -f should fail when the headers differ")
+    qt_assert_equal("${err}" "Patch headers differ:\n@@ -1,2 +1,2 @@\n Title\n-diff is fun\n+diff is different\nPlease use -d {o|a|n} to specify which patch header(s) to keep.\n" "wrong header diff")
+endfunction()
+
+# Unlike upstream, which writes the header twice, import -f takes the new
+# version as it is when the headers match.
+function(qt_scenario_import_force_identical_header_once)
+    qt_begin_test("import_force_identical_header_once")
+    set(ext "${QT_TEST_BASE}/ext.patch")
+    qt_write_file("${ext}" "Same\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+y\n")
+    qt_quilt_ok(ARGS import "${ext}" MESSAGE "import failed")
+    qt_write_file("${ext}" "Same\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+z\n")
+    qt_quilt_ok(ARGS import -f "${ext}" MESSAGE "import -f failed")
+    qt_read_file_raw(text "${QT_WORK_DIR}/patches/ext.patch")
+    qt_assert_equal("${text}" "Same\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+z\n" "import -f should write the header once")
+endfunction()
+
+# Unlike upstream, which carries its first choice over, import -f chooses
+# which header to keep separately for each patch.
+function(qt_scenario_import_force_mode_per_patch)
+    qt_begin_test("import_force_mode_per_patch")
+    set(diff_y "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+y\n")
+    set(diff_z "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+z\n")
+    set(a "${QT_TEST_BASE}/a.patch")
+    set(b "${QT_TEST_BASE}/b.patch")
+    qt_write_file("${a}" "A old\n${diff_y}")
+    qt_write_file("${b}" "B old\n${diff_y}")
+    qt_quilt_ok(ARGS import "${a}" "${b}" MESSAGE "import failed")
+    qt_write_file("${a}" "${diff_z}")
+    qt_write_file("${b}" "B new\n${diff_z}")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS import -f "${a}" "${b}")
+    qt_assert_failure("${rc}" "import -f should fail when the headers of b differ")
+    qt_assert_equal("${err}" "Replacing patch a.patch with new version\nPatch headers differ:\n@@ -1 +1 @@\n-B old\n+B new\nPlease use -d {o|a|n} to specify which patch header(s) to keep.\n" "wrong import -f messages")
+    qt_read_file_raw(text "${QT_WORK_DIR}/patches/a.patch")
+    qt_assert_equal("${text}" "A old\n${diff_z}" "a should keep its old header")
+    qt_read_file_raw(text "${QT_WORK_DIR}/patches/b.patch")
+    qt_assert_equal("${text}" "B old\n${diff_y}" "b should be left alone")
+
+    set(c "${QT_TEST_BASE}/c.patch")
+    set(d "${QT_TEST_BASE}/d.patch")
+    qt_write_file("${c}" "${diff_y}")
+    qt_write_file("${d}" "D old\n${diff_y}")
+    qt_quilt_ok(ARGS import "${c}" "${d}" MESSAGE "import failed")
+    qt_write_file("${c}" "C new\n${diff_z}")
+    qt_write_file("${d}" "${diff_z}")
+    qt_quilt_ok(ARGS import -f "${c}" "${d}" MESSAGE "import -f failed")
+    qt_read_file_raw(text "${QT_WORK_DIR}/patches/c.patch")
+    qt_assert_equal("${text}" "C new\n${diff_z}" "c should take its new header")
+    qt_read_file_raw(text "${QT_WORK_DIR}/patches/d.patch")
+    qt_assert_equal("${text}" "D old\n${diff_z}" "d should keep its old header")
 endfunction()
