@@ -489,6 +489,7 @@ set(QUILT_TEST_SCENARIOS
     push_reverse_applied
     push_verbose_rollback
     push_reject_format
+    push_hunk_line_numbers
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -8212,6 +8213,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_push_verbose_rollback()
     elseif(scenario STREQUAL "push_reject_format")
         qt_scenario_push_reject_format()
+    elseif(scenario STREQUAL "push_hunk_line_numbers")
+        qt_scenario_push_hunk_line_numbers()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -14055,4 +14058,74 @@ function(qt_scenario_push_reject_format)
     qt_assert_equal("${rej}"
         "*** rc.txt\n--- rc.txt\n***************\n*** 1,3 ****\n! b\n- d\n  c\n--- 1,2 ----\n! a\n  c\n"
         "the rejects of a reversed context diff should be reversed")
+endfunction()
+
+# push_hunk_line_numbers: like GNU patch, the hunk messages give lines in
+# the patched file, past the lines that the hunks applied before added, and
+# report the offset of every hunk away from the line it names, not just of
+# those that move further than the hunk before
+function(qt_scenario_push_hunk_line_numbers)
+    qt_begin_test("push_hunk_line_numbers")
+    set(lines "z1\nz2\nz3\n")
+    foreach(n RANGE 1 30)
+        string(APPEND lines "${n}\n")
+        if(n EQUAL 12)
+            string(APPEND lines "y1\ny2\n")
+        endif()
+    endforeach()
+    qt_write_file("${QT_WORK_DIR}/f.txt" "${lines}")
+    set(lines "")
+    foreach(n RANGE 1 30)
+        string(APPEND lines "${n}\n")
+    endforeach()
+    qt_write_file("${QT_WORK_DIR}/g.txt" "${lines}")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff" [=[
+--- a/f.txt
++++ b/f.txt
+@@ -4,3 +4,4 @@
+ 4
++a
+ 5
+ 6
+@@ -20,3 +21,3 @@
+ 20
+-21
++YY
+ 22
+@@ -25,3 +26,3 @@
+ 25
+-QQ
++RR
+ 27
+--- a/g.txt
++++ b/g.txt
+@@ -1,4 +1,6 @@
+ 1
+ 2
++a
++b
+ 3
+ 4
+@@ -10,7 +12,7 @@
+ 10
+ 11
+ 12
+-13
++XIII
+ 14
+ 15
+ bad
+]=])
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -f)
+    qt_assert_failure("${rc}" "push -f of a patch with a failed hunk should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Hunk #1 succeeded at 7 (offset 3 lines).\n"
+        "push should report the first hunk's offset")
+    qt_assert_contains("${combined}" "Hunk #2 succeeded at 26 (offset 5 lines).\n"
+        "push should report the line in the patched file and the whole offset")
+    qt_assert_contains("${combined}" "Hunk #3 FAILED at 26.\n"
+        "push should report the failed hunk's line in the patched file")
+    qt_assert_contains("${combined}" "Hunk #2 succeeded at 12 with fuzz 1.\n"
+        "push should report the fuzzy hunk's line in the patched file")
 endfunction()

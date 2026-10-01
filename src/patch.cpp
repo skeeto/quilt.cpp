@@ -1339,23 +1339,21 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                 };
                 auto &fz = hunk_fuzz[checked_cast<size_t>(h)];
 
-                if (actual_offset != cumulative_offset && !opts.quiet) {
-                    // Like GNU patch, only +1 is singular; -1 stays "lines"
-                    ptrdiff_t offset = actual_offset - cumulative_offset;
-                    const char *plural = offset == 1 ? "" : "s";
+                // Like GNU patch, report the hunk's line in the patched file
+                // and its whole offset from the line it names, even when the
+                // hunk before had the same offset
+                if ((actual_offset != 0 || fuzz_used > 0) && !opts.quiet) {
+                    result.out += std::format("Hunk #{} succeeded at {}",
+                                              h + 1, pos + 1 + out_offset);
                     if (fuzz_used > 0) {
-                        result.out += std::format(
-                            "Hunk #{} succeeded at {} with fuzz {} (offset {} line{}).\n",
-                            h + 1, pos + 1, fuzz_used, offset, plural);
-                    } else {
-                        result.out += std::format(
-                            "Hunk #{} succeeded at {} (offset {} line{}).\n",
-                            h + 1, pos + 1, offset, plural);
+                        result.out += std::format(" with fuzz {}", fuzz_used);
                     }
-                } else if (fuzz_used > 0 && !opts.quiet) {
-                    result.out += std::format(
-                        "Hunk #{} succeeded at {} with fuzz {}.\n",
-                        h + 1, pos + 1, fuzz_used);
+                    if (actual_offset != 0) {
+                        // Like GNU patch, only +1 is singular; -1 stays "lines"
+                        result.out += std::format(" (offset {} line{})", actual_offset,
+                                                  actual_offset == 1 ? "" : "s");
+                    }
+                    result.out += ".\n";
                 }
 
                 // Update offset and frozen line (adjusted for fuzz)
@@ -1371,8 +1369,9 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                         result.out += std::format("Hunk #{} NOT MERGED at {}.\n",
                                                   h + 1, hunk.old_start);
                     } else {
+                        ptrdiff_t line = refused ? pos + 1 : hunk.old_start;
                         result.out += std::format("Hunk #{} FAILED at {}.\n",
-                                                  h + 1, refused ? pos + 1 : hunk.old_start);
+                                                  h + 1, line + out_offset);
                     }
                 }
             }
