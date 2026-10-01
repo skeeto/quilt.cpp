@@ -240,6 +240,8 @@ set(QUILT_TEST_SCENARIOS
     refresh_strip_whitespace_crlf
     refresh_strip_whitespace_context
     refresh_strip_whitespace_diff_fail
+    refresh_trailing_ws_warning
+    refresh_trailing_ws_warning_lines
     refresh_fork_named
     refresh_fork_not_top
     refresh_diffstat
@@ -4727,6 +4729,52 @@ function(qt_scenario_refresh_strip_whitespace_diff_fail)
     qt_assert_file_hex("${QT_WORK_DIR}/f.bin" "0002" "f.bin must be untouched")
 endfunction()
 
+# Without --strip-trailing-whitespace, refresh warns about an added line with
+# trailing whitespace but keeps it in both the file and the patch
+function(qt_scenario_refresh_trailing_ws_warning)
+    qt_begin_test("refresh_trailing_ws_warning")
+    qt_write_bytes("${QT_WORK_DIR}/a.txt" "x\\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add a.txt MESSAGE "add failed")
+    qt_write_bytes("${QT_WORK_DIR}/a.txt" "x\\nw \\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh)
+    qt_assert_success("${rc}" "refresh should succeed")
+    qt_assert_equal("${err}" "Warning: trailing whitespace in line 2 of a.txt\n" "should warn about line 2")
+    qt_assert_contains("${out}" "Refreshed patch" "should refresh patch")
+    qt_assert_file_hex("${QT_WORK_DIR}/a.txt" "780a77200a" "a.txt must be untouched")
+    # " x\n+w \n"
+    qt_assert_file_contains_hex("${QT_WORK_DIR}/patches/p.patch" "0a20780a2b77200a"
+        "patch should keep the trailing whitespace")
+endfunction()
+
+# The warning lists several lines of a file in one message, reports files in
+# name order, ignores whitespace before a '\r', and repeats on an unchanged
+# refresh
+function(qt_scenario_refresh_trailing_ws_warning_lines)
+    qt_begin_test("refresh_trailing_ws_warning_lines")
+    qt_write_bytes("${QT_WORK_DIR}/a.txt" "x\\n")
+    qt_write_bytes("${QT_WORK_DIR}/b.txt" "1\\n2\\n3\\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add b.txt a.txt MESSAGE "add failed")
+    qt_write_bytes("${QT_WORK_DIR}/a.txt" "x\\nw \\n")
+    qt_write_bytes("${QT_WORK_DIR}/b.txt" "1 \\n2\\n3\\t\\n4 \\r\\n")
+    set(expected_err "Warning: trailing whitespace in line 2 of a.txt\nWarning: trailing whitespace in lines 1,3 of b.txt\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh)
+    qt_assert_success("${rc}" "refresh should succeed")
+    qt_assert_equal("${err}" "${expected_err}" "should warn about a.txt, then b.txt")
+    qt_assert_contains("${out}" "Refreshed patch" "should refresh patch")
+    qt_assert_file_hex("${QT_WORK_DIR}/a.txt" "780a77200a" "a.txt must be untouched")
+    qt_assert_file_hex("${QT_WORK_DIR}/b.txt" "31200a320a33090a34200d0a" "b.txt must be untouched")
+    # "+1 \n 2\n-3\n+3\t\n+4 \r\n"
+    qt_assert_file_contains_hex("${QT_WORK_DIR}/patches/p.patch" "2b31200a20320a2d330a2b33090a2b34200d0a"
+        "patch should keep the trailing whitespace")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh)
+    qt_assert_success("${rc}" "second refresh should succeed")
+    qt_assert_equal("${err}" "${expected_err}" "unchanged refresh should warn again")
+    qt_assert_contains("${out}" "Patch p.patch is unchanged" "patch should be unchanged")
+    qt_assert_file_hex("${QT_WORK_DIR}/b.txt" "31200a320a33090a34200d0a" "b.txt must still be untouched")
+endfunction()
+
 function(qt_scenario_refresh_fork)
     qt_begin_test("refresh_fork")
     qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
@@ -7184,6 +7232,10 @@ function(qt_run_named_scenario scenario)
         qt_scenario_refresh_strip_whitespace_context()
     elseif(scenario STREQUAL "refresh_strip_whitespace_diff_fail")
         qt_scenario_refresh_strip_whitespace_diff_fail()
+    elseif(scenario STREQUAL "refresh_trailing_ws_warning")
+        qt_scenario_refresh_trailing_ws_warning()
+    elseif(scenario STREQUAL "refresh_trailing_ws_warning_lines")
+        qt_scenario_refresh_trailing_ws_warning_lines()
     elseif(scenario STREQUAL "refresh_fork")
         qt_scenario_refresh_fork()
     elseif(scenario STREQUAL "refresh_fork_named")

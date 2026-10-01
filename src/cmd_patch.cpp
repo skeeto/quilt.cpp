@@ -1567,9 +1567,9 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     // Generate diffs
     std::string work_base = basename(q.work_dir);
     std::string patch_content = header;
-    // Lines (per file) whose trailing whitespace --strip-trailing-whitespace
-    // removed from the diff, to be removed from the files once every diff
-    // has succeeded
+    // Added lines (per file) with trailing whitespace, reported once every
+    // diff has succeeded. --strip-trailing-whitespace removes it from the
+    // diff, and then from the files.
     std::map<std::string, std::vector<ptrdiff_t>> ws_lines;
 
     for (const auto &file : tracked) {
@@ -1612,8 +1612,10 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
             err("Diff failed on file '"); err(file); err_line("', aborting");
             return 1;
         }
-        if (opt_strip_whitespace) {
-            auto lines = strip_diff_trailing_ws(diff_out);
+        {
+            std::string stripped = diff_out;
+            auto lines = strip_diff_trailing_ws(stripped);
+            if (opt_strip_whitespace) diff_out = std::move(stripped);
             if (!lines.empty()) ws_lines[file] = std::move(lines);
         }
         if (!diff_out.empty()) {
@@ -1638,6 +1640,12 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         for (auto n : lines) {
             if (!list.empty()) list += ',';
             list += std::to_string(n);
+        }
+        if (!opt_strip_whitespace) {
+            err(std::ssize(lines) == 1 ? "Warning: trailing whitespace in line "
+                                       : "Warning: trailing whitespace in lines ");
+            err(list); err(" of "); err_line(file);
+            continue;
         }
         err(std::ssize(lines) == 1 ? "Removing trailing whitespace from line "
                                    : "Removing trailing whitespace from lines ");
