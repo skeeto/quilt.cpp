@@ -69,6 +69,7 @@ set(QUILT_TEST_SCENARIOS
     remove_not_tracked
     subdirectory_files
     subdirectory_add_edit
+    subdirectory_patches_prefix
     empty_patch
     multiple_patches_same_file
     many_patches
@@ -2333,6 +2334,33 @@ function(qt_scenario_subdirectory_files)
     qt_assert_file_text("${QT_WORK_DIR}/sub/dir/deep.txt" "deep" "subdirectory restore failed")
     qt_quilt_ok(ARGS push MESSAGE "push failed")
     qt_assert_file_text("${QT_WORK_DIR}/sub/dir/deep.txt" "modified" "subdirectory apply failed")
+endfunction()
+
+# From a subdirectory, QUILT_PATCHES_PREFIX names the patches directory
+# with one ../ per level, and patch arguments drop only that prefix
+function(qt_scenario_subdirectory_patches_prefix)
+    qt_begin_test("subdirectory_patches_prefix")
+    qt_write_file("${QT_WORK_DIR}/a/b/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new p failed")
+    qt_quilt_ok(ARGS new q.patch MESSAGE "new q failed")
+    set(sub "${QT_WORK_DIR}/a/b")
+    qt_quilt(RESULT rc OUTPUT out ERROR err WORKING_DIRECTORY "${sub}"
+        ENV "QUILT_PATCHES_PREFIX=1" ARGS series)
+    qt_assert_success("${rc}" "series failed")
+    qt_assert_equal("${out}" "../../patches/p.patch\n../../patches/q.patch\n" "series from a subdirectory")
+    qt_quilt(RESULT rc OUTPUT out ERROR err WORKING_DIRECTORY "${sub}"
+        ENV "QUILT_PATCHES_PREFIX=1" ARGS top)
+    qt_assert_equal("${out}" "../../patches/q.patch\n" "top from a subdirectory")
+    qt_quilt(RESULT rc OUTPUT out ERROR err WORKING_DIRECTORY "${sub}"
+        ENV "QUILT_PATCHES_PREFIX=1" ARGS pop ../../patches/p.patch)
+    qt_assert_success("${rc}" "pop ../../patches/p.patch failed")
+    qt_assert_contains("${out}" "Now at patch ../../patches/p.patch" "pop output")
+    qt_quilt(RESULT rc OUTPUT out ERROR err WORKING_DIRECTORY "${sub}" ARGS push patches/q.patch)
+    qt_assert_failure("${rc}" "push patches/q.patch from a subdirectory should fail")
+    qt_assert_equal("${err}" "Patch patches/q.patch is not in series\n" "patches/ names no patch here")
+    qt_quilt(RESULT rc OUTPUT out ERROR err WORKING_DIRECTORY "${sub}" ARGS push ../../patches/q.patch)
+    qt_assert_success("${rc}" "push ../../patches/q.patch failed")
+    qt_assert_contains("${out}" "Now at patch q.patch" "push output without the prefix")
 endfunction()
 
 function(qt_scenario_subdirectory_add_edit)
@@ -7398,6 +7426,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_remove_not_tracked()
     elseif(scenario STREQUAL "subdirectory_files")
         qt_scenario_subdirectory_files()
+    elseif(scenario STREQUAL "subdirectory_patches_prefix")
+        qt_scenario_subdirectory_patches_prefix()
     elseif(scenario STREQUAL "subdirectory_add_edit")
         qt_scenario_subdirectory_add_edit()
     elseif(scenario STREQUAL "empty_patch")

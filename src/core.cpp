@@ -112,9 +112,24 @@ std::string strip_trailing_slash(std::string_view s) {
     return s.empty() ? std::string("/") : std::string(s);
 }
 
+// The patches directory as named from where quilt was run, like
+// upstream's $SUBDIR_DOWN$QUILT_PATCHES/: one ../ per subdirectory level.
+// Upstream prepends the ../ to an absolute directory too, naming nothing,
+// so here an absolute directory is used as it is.
+static std::string patches_prefix(const QuiltState &q) {
+    std::string prefix;
+    if (!q.subdir.empty() && !is_absolute_path(q.patches_dir)) {
+        prefix = "../";
+        for (char c : q.subdir) {
+            if (c == '/') prefix += "../";
+        }
+    }
+    return prefix + q.patches_dir + "/";
+}
+
 std::string format_patch(const QuiltState &q, std::string_view name) {
     if (!get_env("QUILT_PATCHES_PREFIX").empty()) {
-        return q.patches_dir + "/" + std::string(name);
+        return patches_prefix(q) + std::string(name);
     }
     return std::string(name);
 }
@@ -163,8 +178,12 @@ std::string next_filename(std::string_view patch) {
 }
 
 std::optional<std::string> find_patch(const QuiltState &q, std::string_view name) {
-    // A bare "patches/" strips to nothing, which names no patch
-    std::string_view patch = strip_patches_prefix(q, name);
+    // Like upstream, strip the patches directory as format_patch names it,
+    // so from a subdirectory only ../patches/ is stripped. A bare
+    // "patches/" strips to nothing, which names no patch.
+    std::string prefix = patches_prefix(q);
+    std::string_view patch = name;
+    if (patch.starts_with(prefix)) patch.remove_prefix(prefix.size());
     if (!patch.empty() && q.find_in_series(patch)) {
         return std::string(patch);
     }
