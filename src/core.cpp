@@ -109,6 +109,20 @@ std::string format_patch(const QuiltState &q, std::string_view name) {
     return std::string(name);
 }
 
+std::optional<std::string> find_applied_patch(const QuiltState &q, std::string_view name) {
+    std::string_view patch = strip_patches_prefix(q, name);
+    if (!q.find_in_series(patch)) {
+        // Upstream echoes the name as given here, but not below
+        err("Patch "); err(name); err_line(" is not in series");
+        return std::nullopt;
+    }
+    if (!q.is_applied(patch)) {
+        err("Patch "); err(format_patch(q, patch)); err_line(" is not applied");
+        return std::nullopt;
+    }
+    return std::string(patch);
+}
+
 std::string trim(std::string_view s) {
     while (!s.empty() && (s.front() == ' ' || s.front() == '\t' ||
                           s.front() == '\r' || s.front() == '\n'))

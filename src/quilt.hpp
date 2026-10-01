@@ -149,6 +149,11 @@ inline std::string patch_path_display(const QuiltState &q, std::string_view name
     return format_patch(q, name);
 }
 
+// Resolve a user-supplied patch name that must be in the series and
+// applied, like upstream's find_applied_patch. On failure, prints
+// "is not in series" or "is not applied" and returns nullopt.
+std::optional<std::string> find_applied_patch(const QuiltState &q, std::string_view name);
+
 // Resolve a user-provided file path relative to the current subdirectory.
 inline std::string subdir_path(const QuiltState &q, std::string_view file) {
     if (q.subdir.empty()) return std::string(file);

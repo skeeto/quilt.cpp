@@ -365,6 +365,10 @@ set(QUILT_TEST_SCENARIOS
     previous_no_series_exit1
     dotfile_toplevel
     dotfile_subdir
+    refresh_named_unapplied
+    refresh_named_not_in_series
+    diff_P_unapplied
+    diff_combine_wrong_order
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -477,7 +481,6 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     diff_external_with_C
     diff_quilt_diff_opts_combined
     diff_quilt_diff_opts_separate
-    diff_P_unapplied
     diff_external_context_no_newline
     graph_lines_with_num
     graph_lines_nan
@@ -5937,22 +5940,6 @@ function(qt_scenario_diff_external_context_format)
     qt_assert_contains("${diff_out}" "! new" "context diff should show changed new line")
 endfunction()
 
-function(qt_scenario_diff_P_unapplied)
-    qt_begin_test("diff_P_unapplied")
-    qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
-    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
-    qt_quilt_ok(ARGS add f.txt MESSAGE "add p1 failed")
-    qt_write_file("${QT_WORK_DIR}/f.txt" "v1\n")
-    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
-    # Create p2 in series but do NOT apply it
-    file(APPEND "${QT_WORK_DIR}/patches/series" "p2.patch\n")
-    file(WRITE "${QT_WORK_DIR}/patches/p2.patch" "")
-    # diff -P p2.patch: p2 not in applied list, triggers patch_range_for_diff line 673
-    # p2 has no .pc dir so no tracked files → empty diff, exits 0
-    qt_quilt(RESULT rc OUTPUT diff_out ERROR diff_err ARGS diff -P p2.patch)
-    qt_assert_success("${rc}" "diff -P unapplied should succeed with empty output")
-endfunction()
-
 function(qt_scenario_refresh_diffstat_delete_file)
     qt_begin_test("refresh_diffstat_delete_file")
     qt_write_file("${QT_WORK_DIR}/f.txt" "line1\nline2\n")
@@ -7197,8 +7184,6 @@ function(qt_run_named_scenario scenario)
         qt_scenario_refresh_re_diffstat()
     elseif(scenario STREQUAL "diff_quilt_diff_opts_separate")
         qt_scenario_diff_quilt_diff_opts_separate()
-    elseif(scenario STREQUAL "diff_P_unapplied")
-        qt_scenario_diff_P_unapplied()
     elseif(scenario STREQUAL "refresh_diffstat_delete_file")
         qt_scenario_refresh_diffstat_delete_file()
     elseif(scenario STREQUAL "refresh_strip_ws_blank_context")
@@ -7543,6 +7528,14 @@ function(qt_run_named_scenario scenario)
         qt_scenario_dotfile_toplevel()
     elseif(scenario STREQUAL "dotfile_subdir")
         qt_scenario_dotfile_subdir()
+    elseif(scenario STREQUAL "refresh_named_unapplied")
+        qt_scenario_refresh_named_unapplied()
+    elseif(scenario STREQUAL "refresh_named_not_in_series")
+        qt_scenario_refresh_named_not_in_series()
+    elseif(scenario STREQUAL "diff_P_unapplied")
+        qt_scenario_diff_P_unapplied()
+    elseif(scenario STREQUAL "diff_combine_wrong_order")
+        qt_scenario_diff_combine_wrong_order()
     elseif(scenario STREQUAL "diff_algorithm_myers")
         qt_scenario_diff_algorithm_myers()
     elseif(scenario STREQUAL "diff_algorithm_minimal")
@@ -10124,6 +10117,71 @@ function(qt_scenario_dotfile_subdir)
     qt_assert_file_text("${QT_WORK_DIR}/sub/.needs_refresh" "n" "pop should restore sub/.needs_refresh")
     qt_quilt_ok(ARGS push MESSAGE "push failed")
     qt_assert_file_text("${QT_WORK_DIR}/sub/.hidden" "S" "push should reapply sub/.hidden")
+endfunction()
+
+# Build a two-patch stack where both patches modify g.txt
+function(qt_setup_two_patch_stack)
+    qt_write_file("${QT_WORK_DIR}/g.txt" "a\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add g.txt MESSAGE "add to p1 failed")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add g.txt MESSAGE "add to p2 failed")
+    qt_write_file("${QT_WORK_DIR}/g.txt" "c\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2 failed")
+endfunction()
+
+# refresh_named_unapplied: refreshing a named unapplied patch while another
+# patch is applied must fail and leave the patch file untouched
+function(qt_scenario_refresh_named_unapplied)
+    qt_begin_test("refresh_named_unapplied")
+    qt_setup_two_patch_stack()
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_read_file_raw(before "${QT_WORK_DIR}/patches/p2.patch")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh p2.patch)
+    qt_assert_failure("${rc}" "refresh of unapplied patch should fail")
+    qt_assert_contains("${err}" "Patch p2.patch is not applied" "should report patch not applied")
+    qt_read_file_raw(after "${QT_WORK_DIR}/patches/p2.patch")
+    qt_assert_equal("${after}" "${before}" "unapplied patch file must be unchanged")
+endfunction()
+
+# refresh_named_not_in_series: refreshing a name missing from the series fails
+function(qt_scenario_refresh_named_not_in_series)
+    qt_begin_test("refresh_named_not_in_series")
+    qt_setup_two_patch_stack()
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh nope.patch)
+    qt_assert_failure("${rc}" "refresh of unknown patch should fail")
+    qt_assert_contains("${err}" "Patch nope.patch is not in series" "should report patch not in series")
+    qt_assert_not_exists("${QT_WORK_DIR}/patches/nope.patch" "refresh must not create unknown patch")
+endfunction()
+
+# diff_P_unapplied: diff -P and --combine reject a named unapplied patch
+function(qt_scenario_diff_P_unapplied)
+    qt_begin_test("diff_P_unapplied")
+    qt_setup_two_patch_stack()
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS diff -P p2.patch)
+    qt_assert_failure("${rc}" "diff -P of unapplied patch should fail")
+    qt_assert_contains("${err}" "Patch p2.patch is not applied" "diff -P should report patch not applied")
+    qt_assert_equal("${out}" "" "diff -P of unapplied patch should print no diff")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS diff --combine p2.patch)
+    qt_assert_failure("${rc}" "diff --combine of unapplied patch should fail")
+    qt_assert_contains("${err}" "Patch p2.patch is not applied" "--combine should report patch not applied")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS diff -P nope.patch)
+    qt_assert_failure("${rc}" "diff -P of unknown patch should fail")
+    qt_assert_contains("${err}" "Patch nope.patch is not in series" "diff -P should report patch not in series")
+endfunction()
+
+# diff_combine_wrong_order: --combine start must not be above the -P patch
+function(qt_scenario_diff_combine_wrong_order)
+    qt_begin_test("diff_combine_wrong_order")
+    qt_setup_two_patch_stack()
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS diff --combine p2.patch -P p1.patch)
+    qt_assert_failure("${rc}" "diff --combine in wrong order should fail")
+    qt_assert_contains("${err}" "Patch p2.patch not applied before patch p1.patch"
+        "should report combine order error")
+    qt_assert_equal("${out}" "" "wrong-order combine should print no diff")
 endfunction()
 
 # --diff-algorithm tests

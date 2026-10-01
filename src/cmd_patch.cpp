@@ -1183,6 +1183,10 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
 
     if (patch.empty()) {
         patch = q.applied.back();
+    } else {
+        auto found = find_applied_patch(q, patch);
+        if (!found) return 1;
+        patch = *found;
     }
 
     if (!explicit_p) {
@@ -1589,7 +1593,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
     }
 
     // Parse options
-    std::string_view patch;
+    std::string patch;
     std::string p_format;
     bool explicit_p = false;
     std::vector<std::string> file_filter;
@@ -1620,7 +1624,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
     while (i < argc) {
         std::string_view arg = argv[i];
         if (arg == "-P" && i + 1 < argc) {
-            patch = strip_patches_prefix(q, argv[i + 1]);
+            patch = argv[i + 1];
             i += 2;
             continue;
         }
@@ -1759,12 +1763,14 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
         i += 1;
     }
 
-    if (patch.empty()) {
-        patch = q.applied.back();
-    }
-
-    if (!explicit_p) {
-        p_format = q.get_p_format(patch);
+    // Resolve --combine before -P, in the same order as upstream
+    std::string combine_start;
+    if (combine_patch == "-") {
+        combine_start = q.applied.front();
+    } else if (!combine_patch.empty()) {
+        auto found = find_applied_patch(q, combine_patch);
+        if (!found) return 1;
+        combine_start = *found;
     }
 
     if (since_refresh && against_snapshot) {
@@ -1780,6 +1786,25 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
     if (!combine_patch.empty() && against_snapshot) {
         err_line("Options `--combine' and `--snapshot' cannot be combined.");
         return 1;
+    }
+
+    if (patch.empty()) {
+        patch = q.applied.back();
+    } else {
+        auto found = find_applied_patch(q, patch);
+        if (!found) return 1;
+        patch = *found;
+    }
+
+    if (!combine_start.empty() &&
+        std::ranges::find(q.applied, combine_start) > std::ranges::find(q.applied, patch)) {
+        err("Patch "); err(format_patch(q, combine_start));
+        err(" not applied before patch "); err_line(format_patch(q, patch));
+        return 1;
+    }
+
+    if (!explicit_p) {
+        p_format = q.get_p_format(patch);
     }
 
     // Determine diff format and context lines for builtin diff
@@ -1816,16 +1841,6 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
         else
             out(d);
     };
-
-    // Resolve --combine patch name
-    std::string combine_start;
-    if (!combine_patch.empty()) {
-        if (combine_patch == "-") {
-            combine_start = q.applied.front();
-        } else {
-            combine_start = strip_patches_prefix(q, combine_patch);
-        }
-    }
 
     auto patches = patch_range_for_diff(q, patch);
     std::vector<std::string> tracked;
