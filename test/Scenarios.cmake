@@ -320,6 +320,7 @@ set(QUILT_TEST_SCENARIOS
     push_quilt_patch_opts_fuzz
     push_missing_file
     push_fuzz_offset
+    push_offset_one_line
     push_backward_offset
     push_hunk_past_eof
     push_new_file_subdir
@@ -7716,6 +7717,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_files_unapplied_duplicate()
     elseif(scenario STREQUAL "push_fuzz_offset")
         qt_scenario_push_fuzz_offset()
+    elseif(scenario STREQUAL "push_offset_one_line")
+        qt_scenario_push_offset_one_line()
     elseif(scenario STREQUAL "header_edit_fail")
         qt_scenario_header_edit_fail()
     elseif(scenario STREQUAL "push_backward_offset")
@@ -8607,6 +8610,55 @@ function(qt_scenario_push_fuzz_offset)
     qt_combine_output(combined "${push_out}" "${push_err}")
     qt_assert_contains("${combined}" "fuzz" "should report fuzz used")
     qt_assert_contains("${combined}" "offset" "should report offset")
+endfunction()
+
+# push_offset_one_line: an offset of exactly 1 is singular, like GNU
+# patch's &"s"[in_offset == 1]; -1 keeps the plural.
+function(qt_scenario_push_offset_one_line)
+    qt_begin_test("push_offset_one_line")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "a.diff\nb.diff\nc.diff\n")
+    qt_write_file("${QT_WORK_DIR}/patches/a.diff" [=[--- a/a.txt
++++ b/a.txt
+@@ -1,3 +1,3 @@
+ one
+-two
++2
+ three
+]=])
+    qt_write_file("${QT_WORK_DIR}/patches/b.diff" [=[--- a/b.txt
++++ b/b.txt
+@@ -2,3 +2,3 @@
+ one
+-two
++2
+ three
+]=])
+    qt_write_file("${QT_WORK_DIR}/patches/c.diff" [=[--- a/c.txt
++++ b/c.txt
+@@ -1,3 +1,3 @@
+ one
+-two
++2
+ three
+]=])
+    qt_write_file("${QT_WORK_DIR}/a.txt" "x\none\ntwo\nthree\n")
+    qt_write_file("${QT_WORK_DIR}/b.txt" "one\ntwo\nthree\n")
+    qt_write_file("${QT_WORK_DIR}/c.txt" "x\nONE\ntwo\nthree\n")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_success("${rc}" "push a.diff should succeed")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Hunk #1 succeeded at 2 (offset 1 line)." "offset 1 should be singular")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_success("${rc}" "push b.diff should succeed")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Hunk #1 succeeded at 1 (offset -1 lines)." "offset -1 should be plural")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_success("${rc}" "push c.diff should succeed")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Hunk #1 succeeded at 2 with fuzz 1 (offset 1 line)." "fuzzy offset 1 should be singular")
 endfunction()
 
 # header_edit_fail: quilt header -e with editor that exits with error

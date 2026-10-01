@@ -1209,14 +1209,17 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                 auto &fz = hunk_fuzz[checked_cast<size_t>(h)];
 
                 if (actual_offset != cumulative_offset && !opts.quiet) {
+                    // Like GNU patch, only +1 is singular; -1 stays "lines"
+                    ptrdiff_t offset = actual_offset - cumulative_offset;
+                    const char *plural = offset == 1 ? "" : "s";
                     if (fuzz_used > 0) {
                         result.out += std::format(
-                            "Hunk #{} succeeded at {} with fuzz {} (offset {} lines).\n",
-                            h + 1, pos + 1, fuzz_used, actual_offset - cumulative_offset);
+                            "Hunk #{} succeeded at {} with fuzz {} (offset {} line{}).\n",
+                            h + 1, pos + 1, fuzz_used, offset, plural);
                     } else {
                         result.out += std::format(
-                            "Hunk #{} succeeded at {} (offset {} lines).\n",
-                            h + 1, pos + 1, actual_offset - cumulative_offset);
+                            "Hunk #{} succeeded at {} (offset {} line{}).\n",
+                            h + 1, pos + 1, offset, plural);
                     }
                 } else if (fuzz_used > 0 && !opts.quiet) {
                     result.out += std::format(
