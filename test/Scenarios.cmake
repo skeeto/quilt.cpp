@@ -8804,32 +8804,34 @@ function(qt_scenario_push_missing_file)
     qt_assert_contains("${combined}" "can't find file" "should report missing file")
 endfunction()
 
-# refresh_diffstat_scale: large patch triggers diffstat bar-graph capping
-# covers cmd_patch.cpp lines 869-870 (plus_bars > minus_bars branch) and
-# line 872 (else branch) inside the bar scaling/capping code
+# refresh_diffstat_scale: like diffstat(1), a histogram too wide for 80
+# columns is scaled down, each mark's remainder carrying into the next, so
+# a small change may get fewer marks than it has lines, or none at all
 function(qt_scenario_refresh_diffstat_scale)
     qt_begin_test("refresh_diffstat_scale")
-    # a.txt: created from scratch with 200 lines (max_changes = 200, scale = 59/200)
-    # b.txt: 2 original lines replaced by 6 new lines (6 adds + 2 removes = 8 total)
-    # c.txt: 6 original lines replaced by 2 new lines (2 adds + 6 removes = 8 total)
-    # With scale = 0.295, b.txt gets plus_bars=2, minus_bars=1, total=3 > limit=2 (line 870)
-    # and c.txt gets plus_bars=1, minus_bars=2, total=3 > limit=2 (line 872)
-    qt_write_file("${QT_WORK_DIR}/b.txt" "orig1\norig2\n")
+    qt_write_file("${QT_WORK_DIR}/B.txt" "orig1\norig2\n")
     qt_write_file("${QT_WORK_DIR}/c.txt" "old1\nold2\nold3\nold4\nold5\nold6\n")
+    qt_write_file("${QT_WORK_DIR}/d.txt" "same\nold\n")
     qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
-    qt_quilt_ok(ARGS add a.txt b.txt c.txt MESSAGE "add failed")
-    # Generate 200 lines for a.txt using foreach
+    qt_quilt_ok(ARGS add c.txt a.txt B.txt d.txt MESSAGE "add failed")
     set(big_content "")
     foreach(i RANGE 1 200)
         string(APPEND big_content "line${i}\n")
     endforeach()
     qt_write_file("${QT_WORK_DIR}/a.txt" "${big_content}")
-    qt_write_file("${QT_WORK_DIR}/b.txt" "new1\nnew2\nnew3\nnew4\nnew5\nnew6\n")
+    qt_write_file("${QT_WORK_DIR}/B.txt" "new1\nnew2\nnew3\nnew4\nnew5\nnew6\n")
     qt_write_file("${QT_WORK_DIR}/c.txt" "newer1\nnewer2\n")
+    qt_write_file("${QT_WORK_DIR}/d.txt" "same\nnew\n")
     qt_quilt_ok(ARGS refresh --diffstat MESSAGE "refresh --diffstat failed")
     qt_read_file_raw(patch_text "${QT_WORK_DIR}/patches/p.patch")
-    qt_assert_contains("${patch_text}" "file" "diffstat should appear in patch header")
-    qt_assert_contains("${patch_text}" "changed" "diffstat summary line should appear")
+    qt_assert_contains("${patch_text}" "---
+ B.txt |    8 +-
+ a.txt |  200 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ c.txt |    8 --
+ d.txt |    2 
+ 4 files changed, 209 insertions(+), 9 deletions(-)
+
+" "diffstat should be scaled like diffstat(1)")
 endfunction()
 
 # diff_combine_shadowing: quilt diff --combine -P patch2 when patch3 (above) also tracks the file

@@ -797,7 +797,8 @@ int cmd_snapshot(QuiltState &q, int argc, char **argv) {
 }
 
 // Built-in diffstat: parse unified diff, produce a summary matching
-// the output format of the external diffstat(1) utility.
+// the output of the external diffstat(1) utility with its default
+// options and 80 columns.
 static std::string generate_diffstat(std::string_view diff)
 {
     struct FileStat {
@@ -806,6 +807,8 @@ static std::string generate_diffstat(std::string_view diff)
         ptrdiff_t removed = 0;
     };
 
+    // diffstat(1) lists files in byte order by name, the order refresh
+    // already lists them in
     std::vector<FileStat> stats;
     auto lines = split_lines(diff);
 
@@ -851,31 +854,19 @@ static std::string generate_diffstat(std::string_view diff)
     // Like diffstat(1), an empty diff gives just the summary
     if (stats.empty()) return " 0 files changed\n";
 
-    std::string result;
-
-    // Find max filename width and max change count
-    ptrdiff_t max_name = 0;
-    ptrdiff_t max_changes = 0;
+    // Each line is " name |", the name padded one past the longest, then
+    // the file's total in at least five columns and a histogram that is
+    // scaled down when the largest total does not fit in the rest
+    ptrdiff_t name_width = 0;
+    ptrdiff_t plot_scale = 0;
     for (const auto &s : stats) {
-        max_name = std::max(max_name, std::ssize(s.name));
-        max_changes = std::max(max_changes, s.added + s.removed);
+        name_width = std::max(name_width, std::ssize(s.name) + 1);
+        plot_scale = std::max(plot_scale, s.added + s.removed);
     }
+    ptrdiff_t plot_width = std::max(80 - name_width - 8, ptrdiff_t{10});
+    plot_scale = std::max(plot_scale, plot_width);
 
-    // Format change count to find its width (minimum 4, matching diffstat)
-    auto num_width = std::max(std::ssize(std::to_string(max_changes)),
-                              static_cast<ptrdiff_t>(4));
-
-    // Bar graph width: fit in ~72 columns after " name | num "
-    //   1 (leading space) + max_name + 3 (" | ") + num_width + 1 (space)
-    ptrdiff_t used = 1 + max_name + 3 + num_width + 1;
-    ptrdiff_t bar_width = std::max(static_cast<ptrdiff_t>(1),
-                                   static_cast<ptrdiff_t>(72) - used);
-
-    // Scale factor for bar graph
-    double scale = (max_changes > bar_width)
-        ? static_cast<double>(bar_width) / static_cast<double>(max_changes)
-        : 1.0;
-
+    std::string result;
     ptrdiff_t total_added = 0, total_removed = 0;
     ptrdiff_t total_files = std::ssize(stats);
 
@@ -883,41 +874,25 @@ static std::string generate_diffstat(std::string_view diff)
         total_added += s.added;
         total_removed += s.removed;
 
-        ptrdiff_t changes = s.added + s.removed;
-        ptrdiff_t plus_bars = static_cast<ptrdiff_t>(
-            static_cast<double>(s.added) * scale + 0.5);
-        ptrdiff_t minus_bars = static_cast<ptrdiff_t>(
-            static_cast<double>(s.removed) * scale + 0.5);
-
-        // Ensure at least 1 bar for non-zero counts
-        if (s.added > 0 && plus_bars == 0) plus_bars = 1;
-        if (s.removed > 0 && minus_bars == 0) minus_bars = 1;
-
-        // Cap total bars at scaled width
-        ptrdiff_t total_bars = plus_bars + minus_bars;
-        ptrdiff_t limit = static_cast<ptrdiff_t>(
-            static_cast<double>(changes) * scale + 0.5);
-        if (limit < 1 && changes > 0) limit = 1;
-        if (total_bars > limit) {
-            // Reduce the larger portion
-            if (plus_bars > minus_bars)
-                plus_bars = limit - minus_bars;
-            else
-                minus_bars = limit - plus_bars;
-        }
-
         result += ' ';
         result += s.name;
-        for (ptrdiff_t j = std::ssize(s.name); j < max_name; ++j)
-            result += ' ';
-        result += " | ";
-        auto num_str = std::to_string(changes);
-        for (ptrdiff_t j = std::ssize(num_str); j < num_width; ++j)
-            result += ' ';
-        result += num_str;
+        result.append(checked_cast<size_t>(name_width - std::ssize(s.name)), ' ');
+        result += '|';
+        std::string total = std::to_string(s.added + s.removed);
+        result.append(checked_cast<size_t>(std::max(5 - std::ssize(total), ptrdiff_t{0})), ' ');
+        result += total;
         result += ' ';
-        for (ptrdiff_t j = 0; j < plus_bars; ++j) result += '+';
-        for (ptrdiff_t j = 0; j < minus_bars; ++j) result += '-';
+
+        // diffstat(1)'s plot_num, including how it carries the remainder
+        // from one mark to the next
+        ptrdiff_t extra = 0;
+        for (auto [count, mark] : {std::pair{s.added, '+'}, std::pair{s.removed, '-'}}) {
+            if (count == 0) continue;
+            ptrdiff_t product = plot_width * count;
+            ptrdiff_t bars = (product + extra) / plot_scale;
+            extra = product - bars * plot_scale - extra;
+            if (bars > 0) result.append(checked_cast<size_t>(bars), mark);
+        }
         result += '\n';
     }
 
