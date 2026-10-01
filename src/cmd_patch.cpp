@@ -1534,72 +1534,63 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     // Generate diffs
     std::string work_base = basename(q.work_dir);
     std::string patch_content = header;
+    // The patch with trailing whitespace stripped from added lines, which
+    // --strip-trailing-whitespace writes if it strips the files too
+    std::string stripped_content = header;
     // Added lines (per file) with trailing whitespace, reported once every
-    // diff has succeeded. --strip-trailing-whitespace removes it from the
-    // diff, and then from the files.
+    // diff has succeeded. Like upstream, which checks the whole generated
+    // patch, this includes files shadowed by later patches.
     std::map<std::string, std::vector<ptrdiff_t>> ws_lines;
+    bool files_were_shadowed = false;
+
+    auto append_diff = [&](std::string &content, const std::string &file,
+                           const std::string &diff) {
+        if (diff.empty()) return;
+        if (!no_index) {
+            std::string idx_name;
+            if (p_format == "0") idx_name = file;
+            else if (p_format == "ab") idx_name = "b/" + file;
+            else idx_name = work_base + "/" + file;
+            content += "Index: " + idx_name + "\n";
+            content += "===================================================================\n";
+        }
+        content += diff;
+        // Ensure trailing newline
+        if (content.back() != '\n') content += '\n';
+    };
 
     for (const auto &file : tracked) {
-        if (shadowed.contains(file)) {
+        std::string diff_out;
+        auto next = shadow_next_patch.find(file);
+        if (next != shadow_next_patch.end()) {
             // Diff this patch's backup against the next patch's backup
-            auto it = shadow_next_patch.find(file);
-            if (it != shadow_next_patch.end()) {
-                std::string this_backup = path_join(pc_patch_dir(q, patch), file);
-                std::string next_backup = path_join(pc_patch_dir(q, it->second), file);
-                std::string diff_out = generate_path_diff(q, file,
-                    this_backup, true, next_backup, true,
-                    p_format, false, {}, ctx_lines, diff_format, no_timestamps,
-                    diff_algorithm);
-                if (diff_out.starts_with("Binary files ")) {
-                    err("Diff failed on file '"); err(file); err_line("', aborting");
-                    return 1;
-                }
-                if (!diff_out.empty()) {
-                    if (!no_index) {
-                        std::string idx_name;
-                        if (p_format == "0") idx_name = file;
-                        else if (p_format == "ab") idx_name = "b/" + file;
-                        else idx_name = basename(q.work_dir) + "/" + file;
-                        patch_content += "Index: " + idx_name + "\n";
-                        patch_content += "===================================================================\n";
-                    }
-                    patch_content += diff_out;
-                    if (!patch_content.empty() && patch_content.back() != '\n') {
-                        patch_content += '\n';
-                    }
-                }
-            }
-            continue;
+            std::string this_backup = path_join(pc_patch_dir(q, patch), file);
+            std::string next_backup = path_join(pc_patch_dir(q, next->second), file);
+            diff_out = generate_path_diff(q, file,
+                this_backup, true, next_backup, true,
+                p_format, false, {}, ctx_lines, diff_format, no_timestamps,
+                diff_algorithm);
+            files_were_shadowed = true;
+        } else {
+            diff_out = generate_file_diff(q, patch, file, p_format,
+                                          false, {}, ctx_lines,
+                                          diff_format, no_timestamps,
+                                          diff_algorithm);
         }
-        std::string diff_out = generate_file_diff(q, patch, file, p_format,
-                                                   false, {}, ctx_lines,
-                                                   diff_format, no_timestamps,
-                                                   diff_algorithm);
         if (diff_out.starts_with("Binary files ")) {
             err("Diff failed on file '"); err(file); err_line("', aborting");
             return fail();
         }
-        {
-            std::string stripped = diff_out;
-            auto lines = strip_diff_trailing_ws(stripped);
-            if (opt_strip_whitespace) diff_out = std::move(stripped);
-            if (!lines.empty()) ws_lines[file] = std::move(lines);
+        // Like upstream, complain for this and every later file once one is
+        // shadowed, but strip them all anyway
+        if (files_were_shadowed && opt_strip_whitespace) {
+            err_line("Cannot use --strip-trailing-whitespace on a patch that has shadowed files.");
         }
-        if (!diff_out.empty()) {
-            if (!no_index) {
-                std::string idx_name;
-                if (p_format == "0") idx_name = file;
-                else if (p_format == "ab") idx_name = "b/" + file;
-                else idx_name = work_base + "/" + file;
-                patch_content += "Index: " + idx_name + "\n";
-                patch_content += "===================================================================\n";
-            }
-            patch_content += diff_out;
-            // Ensure trailing newline
-            if (!patch_content.empty() && patch_content.back() != '\n') {
-                patch_content += '\n';
-            }
-        }
+        std::string stripped = diff_out;
+        auto lines = strip_diff_trailing_ws(stripped);
+        if (!lines.empty()) ws_lines[file] = std::move(lines);
+        append_diff(patch_content, file, diff_out);
+        if (opt_strip_whitespace) append_diff(stripped_content, file, stripped);
     }
 
     if (!fork_of.empty() && patch_content == header) {
@@ -1607,6 +1598,10 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         return fail();
     }
 
+    // Like upstream's remove-trailing-ws, report (or strip) the files in name
+    // order. A file that cannot be opened stops the stripping, and the patch
+    // is then written unstripped.
+    bool strip_patch = opt_strip_whitespace;
     for (const auto &[file, lines] : ws_lines) {
         std::string list;
         for (auto n : lines) {
@@ -1622,11 +1617,22 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         err(std::ssize(lines) == 1 ? "Removing trailing whitespace from line "
                                    : "Removing trailing whitespace from lines ");
         err(list); err(" of "); err_line(file);
-        if (!strip_file_trailing_ws(path_join(q.work_dir, file), lines)) {
+        // A shadowed file's line numbers are those of the next patch's
+        // backup, but like upstream (which has a FIXME for this), they are
+        // stripped in the working file, which may be a later patch's line.
+        // A file that a later patch deleted is missing.
+        std::string path = path_join(q.work_dir, file);
+        if (!file_exists(path)) {
+            err(file); err_line(": No such file or directory");
+            strip_patch = false;
+            break;
+        }
+        if (!strip_file_trailing_ws(path, lines)) {
             err("Failed to write "); err_line(file);
             return fail();
         }
     }
+    if (strip_patch) patch_content = std::move(stripped_content);
 
     // Add diffstat to header if requested
     if (opt_diffstat) {

@@ -248,6 +248,10 @@ set(QUILT_TEST_SCENARIOS
     refresh_strip_whitespace_diff_fail
     refresh_trailing_ws_warning
     refresh_trailing_ws_warning_lines
+    refresh_trailing_ws_warning_shadowed
+    refresh_strip_whitespace_shadowed
+    refresh_strip_whitespace_shadowed_deleted
+    refresh_strip_whitespace_shadowed_late
     refresh_fork_named
     refresh_fork_not_top
     refresh_fork_nothing
@@ -4927,6 +4931,131 @@ function(qt_scenario_refresh_trailing_ws_warning_lines)
     qt_assert_file_hex("${QT_WORK_DIR}/b.txt" "31200a320a33090a34200d0a" "b.txt must still be untouched")
 endfunction()
 
+# Like upstream, which checks the whole generated patch, refresh -f warns
+# about trailing whitespace in a file shadowed by a later patch too, at the
+# line numbers of the later patch's backup (line 2, not the working line 3)
+function(qt_scenario_refresh_trailing_ws_warning_shadowed)
+    qt_begin_test("refresh_trailing_ws_warning_shadowed")
+    qt_write_bytes("${QT_WORK_DIR}/a.txt" "one\\ntwo\\nthree\\n")
+    qt_write_bytes("${QT_WORK_DIR}/b.txt" "alpha\\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add a.txt b.txt MESSAGE "add to p1 failed")
+    qt_write_bytes("${QT_WORK_DIR}/a.txt" "one\\ntwo \\nthree\\n")
+    qt_write_bytes("${QT_WORK_DIR}/b.txt" "alpha\\nbeta\\t\\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh)
+    qt_assert_success("${rc}" "refresh p1 should succeed")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add a.txt MESSAGE "add to p2 failed")
+    qt_write_bytes("${QT_WORK_DIR}/a.txt" "zero\\none\\ntwo \\nthree\\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2 failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh -f p1.patch)
+    qt_assert_success("${rc}" "refresh -f should succeed")
+    qt_assert_equal("${err}" "Warning: trailing whitespace in line 2 of a.txt\nWarning: trailing whitespace in line 2 of b.txt\n"
+        "should warn about the shadowed a.txt as well as b.txt")
+    # " one\n-two\n+two \n"
+    qt_assert_file_contains_hex("${QT_WORK_DIR}/patches/p1.patch" "206f6e650a2d74776f0a2b74776f200a"
+        "patch should keep the trailing whitespace")
+    # "zero\none\ntwo \nthree\n"
+    qt_assert_file_hex("${QT_WORK_DIR}/a.txt" "7a65726f0a6f6e650a74776f200a74687265650a" "a.txt must be untouched")
+endfunction()
+
+# refresh -f --strip-trailing-whitespace on a patch with shadowed files
+# complains once per file from the first shadowed one on, but strips anyway,
+# like upstream: the patch text, and the working file at the line numbers of
+# the later patch's backup (here line 2, which is p2's "half " line). The
+# later patch's backup is left alone.
+function(qt_scenario_refresh_strip_whitespace_shadowed)
+    qt_begin_test("refresh_strip_whitespace_shadowed")
+    qt_write_bytes("${QT_WORK_DIR}/a.txt" "one\\ntwo\\nthree\\n")
+    qt_write_bytes("${QT_WORK_DIR}/b.txt" "alpha\\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add a.txt b.txt MESSAGE "add to p1 failed")
+    qt_write_bytes("${QT_WORK_DIR}/a.txt" "one\\ntwo \\nthree\\n")
+    qt_write_bytes("${QT_WORK_DIR}/b.txt" "alpha\\nbeta\\t\\ngamma  \\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh)
+    qt_assert_success("${rc}" "refresh p1 should succeed")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add a.txt MESSAGE "add to p2 failed")
+    qt_write_bytes("${QT_WORK_DIR}/a.txt" "zero\\nhalf \\ntwo \\nthree\\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh)
+    qt_assert_success("${rc}" "refresh p2 should succeed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh -f --strip-trailing-whitespace p1.patch)
+    qt_assert_success("${rc}" "refresh -f --strip-trailing-whitespace should succeed")
+    set(cannot "Cannot use --strip-trailing-whitespace on a patch that has shadowed files.\n")
+    qt_assert_equal("${err}" "${cannot}${cannot}Removing trailing whitespace from line 2 of a.txt\nRemoving trailing whitespace from lines 2,3 of b.txt\n"
+        "should complain for a.txt and b.txt, then strip both files")
+    qt_assert_contains("${out}" "Refreshed patch" "should refresh patch")
+    # " one\n-two\n+two\n"
+    qt_assert_file_contains_hex("${QT_WORK_DIR}/patches/p1.patch" "206f6e650a2d74776f0a2b74776f0a"
+        "the shadowed file's added line should be stripped in the patch")
+    # "+beta\n+gamma\n"
+    qt_assert_file_contains_hex("${QT_WORK_DIR}/patches/p1.patch" "2b626574610a2b67616d6d610a"
+        "b.txt's added lines should be stripped in the patch")
+    qt_assert_file_hex("${QT_WORK_DIR}/b.txt" "616c7068610a626574610a67616d6d610a" "b.txt should be stripped")
+    # "zero\nhalf\ntwo \nthree\n"
+    qt_assert_file_hex("${QT_WORK_DIR}/a.txt" "7a65726f0a68616c660a74776f200a74687265650a"
+        "a.txt should be stripped at line 2 only")
+    # "one\ntwo \nthree\n"
+    qt_assert_file_hex("${QT_WORK_DIR}/.pc/p2.patch/a.txt" "6f6e650a74776f200a74687265650a"
+        "p2's backup must be untouched")
+endfunction()
+
+# When a later patch deleted a shadowed file, upstream fails to open it, stops
+# stripping (z.txt, sorted after it, is not stripped), and keeps the patch
+# unstripped, but the refresh still succeeds
+function(qt_scenario_refresh_strip_whitespace_shadowed_deleted)
+    qt_begin_test("refresh_strip_whitespace_shadowed_deleted")
+    qt_write_bytes("${QT_WORK_DIR}/a.txt" "one\\ntwo\\n")
+    qt_write_bytes("${QT_WORK_DIR}/z.txt" "zz\\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add a.txt z.txt MESSAGE "add to p1 failed")
+    qt_write_bytes("${QT_WORK_DIR}/a.txt" "one\\ntwo \\n")
+    qt_write_bytes("${QT_WORK_DIR}/z.txt" "zz\\nyy \\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh --no-timestamps)
+    qt_assert_success("${rc}" "refresh p1 should succeed")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add a.txt MESSAGE "add to p2 failed")
+    file(REMOVE "${QT_WORK_DIR}/a.txt")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2 failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err
+             ARGS refresh -f --no-timestamps --strip-trailing-whitespace p1.patch)
+    qt_assert_success("${rc}" "refresh -f --strip-trailing-whitespace should succeed")
+    set(cannot "Cannot use --strip-trailing-whitespace on a patch that has shadowed files.\n")
+    qt_assert_equal("${err}" "${cannot}${cannot}Removing trailing whitespace from line 2 of a.txt\na.txt: No such file or directory\n"
+        "should stop stripping at the missing a.txt")
+    qt_assert_contains("${out}" "Patch p1.patch is unchanged" "patch should stay unstripped")
+    # "+two \n" and "+yy \n"
+    qt_assert_file_contains_hex("${QT_WORK_DIR}/patches/p1.patch" "2b74776f200a"
+        "patch should keep a.txt's trailing whitespace")
+    qt_assert_file_contains_hex("${QT_WORK_DIR}/patches/p1.patch" "2b7979200a"
+        "patch should keep z.txt's trailing whitespace")
+    qt_assert_file_hex("${QT_WORK_DIR}/z.txt" "7a7a0a7979200a" "z.txt must be untouched")
+    qt_assert_not_exists("${QT_WORK_DIR}/a.txt" "a.txt must stay deleted")
+endfunction()
+
+# The complaint about shadowed files starts at the first shadowed file, and
+# comes even when there is no trailing whitespace to strip
+function(qt_scenario_refresh_strip_whitespace_shadowed_late)
+    qt_begin_test("refresh_strip_whitespace_shadowed_late")
+    qt_write_bytes("${QT_WORK_DIR}/a.txt" "a\\n")
+    qt_write_bytes("${QT_WORK_DIR}/b.txt" "b\\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add a.txt b.txt MESSAGE "add to p1 failed")
+    qt_write_bytes("${QT_WORK_DIR}/a.txt" "a1\\n")
+    qt_write_bytes("${QT_WORK_DIR}/b.txt" "b1\\n")
+    qt_quilt_ok(ARGS refresh --no-timestamps MESSAGE "refresh p1 failed")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add b.txt MESSAGE "add to p2 failed")
+    qt_write_bytes("${QT_WORK_DIR}/b.txt" "b2\\n")
+    qt_quilt_ok(ARGS refresh --no-timestamps MESSAGE "refresh p2 failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err
+             ARGS refresh -f --no-timestamps --strip-trailing-whitespace p1.patch)
+    qt_assert_success("${rc}" "refresh -f --strip-trailing-whitespace should succeed")
+    qt_assert_equal("${err}" "Cannot use --strip-trailing-whitespace on a patch that has shadowed files.\n"
+        "should complain once, for b.txt only")
+    qt_assert_contains("${out}" "Patch p1.patch is unchanged" "patch should be unchanged")
+endfunction()
+
 function(qt_scenario_refresh_fork)
     qt_begin_test("refresh_fork")
     qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
@@ -7426,6 +7555,14 @@ function(qt_run_named_scenario scenario)
         qt_scenario_refresh_trailing_ws_warning()
     elseif(scenario STREQUAL "refresh_trailing_ws_warning_lines")
         qt_scenario_refresh_trailing_ws_warning_lines()
+    elseif(scenario STREQUAL "refresh_trailing_ws_warning_shadowed")
+        qt_scenario_refresh_trailing_ws_warning_shadowed()
+    elseif(scenario STREQUAL "refresh_strip_whitespace_shadowed")
+        qt_scenario_refresh_strip_whitespace_shadowed()
+    elseif(scenario STREQUAL "refresh_strip_whitespace_shadowed_deleted")
+        qt_scenario_refresh_strip_whitespace_shadowed_deleted()
+    elseif(scenario STREQUAL "refresh_strip_whitespace_shadowed_late")
+        qt_scenario_refresh_strip_whitespace_shadowed_late()
     elseif(scenario STREQUAL "refresh_fork")
         qt_scenario_refresh_fork()
     elseif(scenario STREQUAL "refresh_fork_named")
