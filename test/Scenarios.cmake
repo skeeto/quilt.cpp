@@ -522,6 +522,7 @@ set(QUILT_TEST_SCENARIOS
     push_quoted_file_names
     refresh_z_increments_suffix
     refresh_z_next_filename_shapes
+    refresh_z_patches_dir_name
     fork_next_filename_shapes
     fork_target_exists
     fork_patches_prefix
@@ -8475,6 +8476,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_fold_garbage_input()
     elseif(scenario STREQUAL "refresh_z_increments_suffix")
         qt_scenario_refresh_z_increments_suffix()
+    elseif(scenario STREQUAL "refresh_z_patches_dir_name")
+        qt_scenario_refresh_z_patches_dir_name()
     elseif(scenario STREQUAL "refresh_z_next_filename_shapes")
         qt_scenario_refresh_z_next_filename_shapes()
     elseif(scenario STREQUAL "fork_next_filename_shapes")
@@ -15056,6 +15059,23 @@ endfunction()
 
 # refresh -z keeps a suffix other than .diff/.dif/.patch as part of the name,
 # and never mistakes a dot in a directory name for one
+# refresh -zpatches/ names the patches directory itself, which upstream
+# fails to write, rather than asking for the default fork name
+function(qt_scenario_refresh_z_patches_dir_name)
+    qt_begin_test("refresh_z_patches_dir_name")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "c\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh -zpatches/)
+    qt_assert_failure("${rc}" "refresh -zpatches/ should fail")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "p.patch" "series should be unchanged")
+    qt_assert_not_exists("${QT_WORK_DIR}/patches/p-2.patch" "no default fork should be written")
+    qt_assert_not_exists("${QT_WORK_DIR}/.pc/p-2.patch" "no default fork should be applied")
+endfunction()
+
 function(qt_scenario_refresh_z_next_filename_shapes)
     qt_begin_test("refresh_z_next_filename_shapes")
     qt_write_file("${QT_WORK_DIR}/f.txt" "0\n")

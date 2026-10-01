@@ -1111,7 +1111,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     std::string diff_type;
     std::string context_num;
     bool opt_fork = false;
-    std::string fork_name;
+    std::optional<std::string> fork_name;
     bool opt_diffstat = false;
     bool opt_backup = false;
     bool opt_strip_whitespace = false;
@@ -1144,7 +1144,9 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
             break;
         case 'z':
             opt_fork = true;
-            fork_name = strip_patches_prefix(q, opt.value);
+            // An empty value means no name was given; a name that strips
+            // to nothing still names the patches directory, as upstream
+            if (!opt.value.empty()) fork_name = strip_patches_prefix(q, opt.value);
             break;
         case 'h': return command_help(argv[0]);
         case NO_TIMESTAMPS: no_timestamps = true; break;
@@ -1223,7 +1225,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     if (opt_fork) {
         std::string old_name(patch);
 
-        std::string new_name = fork_name.empty() ? next_filename(old_name) : fork_name;
+        std::string new_name = fork_name ? *fork_name : next_filename(old_name);
 
         if (file_exists(path_join(q.work_dir, q.patches_dir, new_name))) {
             err("Patch "); err(patch_path_display(q, new_name));

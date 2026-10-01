@@ -92,6 +92,11 @@ shell. This applies to all `QUILT_*_ARGS` and `QUILT_*_OPTS` variables.
 forks to `p-9.patch` and `p-010.patch` to `p-11.patch`, where the original
 Quilt's shell arithmetic reads it as octal (and fails on `08` and `09`).
 
+A name given to `refresh -z` may start with `patches/`, which is dropped
+as it is for `new` and `fork`. The original Quilt uses a `refresh -z`
+name as given, so `-zpatches/x.patch` fails part way, leaving behind
+`patches/patches/x.patch` and a `patches/x.patch` entry in the series.
+
 ### Header merging in `quilt import -f`
 
 When `import -f` replaces a patch without `-d`, the original Quilt keeps
