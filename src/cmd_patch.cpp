@@ -1299,33 +1299,6 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         return 1;
     };
 
-    // Compute shadowed files (files modified by patches above this one)
-    // For each shadowed file, record the first patch above that tracks it
-    // (needed to find its backup as the "new" side of the diff).
-    std::set<std::string> shadowed;
-    std::map<std::string, std::string> shadow_next_patch;
-    if (fork_of.empty() && patch != q.applied.back()) {
-        bool above = false;
-        for (const auto &a : q.applied) {
-            if (above) {
-                auto above_files = files_in_patch(q, a);
-                for (const auto &f : above_files) {
-                    if (!shadowed.contains(f)) {
-                        shadow_next_patch[f] = a;
-                    }
-                    shadowed.insert(f);
-                }
-            }
-            if (a == patch) above = true;
-        }
-    }
-
-    if (!shadowed.empty() && !force) {
-        err("More recent patches modify files in patch ");
-        err(patch_path_display(q, patch)); err_line(". Enforce refresh with -f.");
-        return 1;
-    }
-
     // Get files tracked by this patch
     // Like upstream, the patch's own order unless --sort is given
     std::vector<std::string> tracked;
@@ -1343,11 +1316,6 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     if (file_exists(patch_file)) {
         old_content = read_file(patch_file);
         header = patch_header(old_content);
-    }
-
-    // Backup old patch file if requested
-    if (opt_backup && file_exists(patch_file)) {
-        copy_file(patch_file, patch_file + "~");
     }
 
     // Generate diffs
@@ -1380,11 +1348,12 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
 
     for (const auto &file : tracked) {
         std::string diff_out;
-        auto next = shadow_next_patch.find(file);
-        if (next != shadow_next_patch.end()) {
-            // Diff this patch's backup against the next patch's backup
+        // Like upstream, a file that a later patch also changes is diffed
+        // against that patch's backup
+        std::string next = fork_of.empty() ? next_patch_for_file(q, patch, file) : "";
+        if (!next.empty()) {
             std::string this_backup = path_join(pc_patch_dir(q, patch), file);
-            std::string next_backup = path_join(pc_patch_dir(q, next->second), file);
+            std::string next_backup = path_join(pc_patch_dir(q, next), file);
             diff_out = generate_path_diff(q, file,
                 this_backup, true, next_backup, true,
                 p_format, false, {}, ctx_lines, diff_format, no_timestamps,
@@ -1398,6 +1367,11 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         }
         if (diff_out.starts_with("Binary files ")) {
             err("Diff failed on file '"); err(file); err_line("', aborting");
+            return fail();
+        }
+        if (files_were_shadowed && !force) {
+            err("More recent patches modify files in patch ");
+            err(patch_path_display(q, patch)); err_line(". Enforce refresh with -f.");
             return fail();
         }
         // Like upstream, complain for this and every later file once one is
@@ -1486,6 +1460,11 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     std::string patch_dir = dirname(patch_file);
     if (!is_directory(patch_dir)) {
         make_dirs(patch_dir);
+    }
+
+    // Like upstream, back up the old patch file only when replacing it
+    if (opt_backup && file_exists(patch_file)) {
+        copy_file(patch_file, patch_file + "~");
     }
 
     // Write the patch file

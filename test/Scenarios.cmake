@@ -525,6 +525,7 @@ set(QUILT_TEST_SCENARIOS
     refresh_z_next_filename_shapes
     refresh_z_patches_dir_name
     refresh_diff_patch_order
+    refresh_shadowed_per_file
     fork_next_filename_shapes
     fork_target_exists
     fork_patches_prefix
@@ -8259,6 +8260,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_diff_combine_equals()
     elseif(scenario STREQUAL "refresh_diff_patch_order")
         qt_scenario_refresh_diff_patch_order()
+    elseif(scenario STREQUAL "refresh_shadowed_per_file")
+        qt_scenario_refresh_shadowed_per_file()
     elseif(scenario STREQUAL "refresh_sorted_default")
         qt_scenario_refresh_sorted_default()
     elseif(scenario STREQUAL "diff_P_shadowed")
@@ -10902,6 +10905,46 @@ function(qt_scenario_refresh_diff_patch_order)
     qt_read_file_raw(text "${QT_WORK_DIR}/patches/p.patch")
     qt_order_of(order "${text}")
     qt_assert_equal("${order}" "abcd" "refresh --sort should sort")
+endfunction()
+
+# A later patch blocks refreshing an earlier one only when it changes one
+# of that patch's files, and --backup copies the patch only to replace it
+function(qt_scenario_refresh_shadowed_per_file)
+    qt_begin_test("refresh_shadowed_per_file")
+    foreach(f f g h)
+        qt_write_file("${QT_WORK_DIR}/${f}" "${f}\n")
+    endforeach()
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new p failed")
+    qt_quilt_ok(ARGS add f h MESSAGE "add p failed")
+    qt_write_file("${QT_WORK_DIR}/f" "f1\n")
+    qt_write_file("${QT_WORK_DIR}/h" "h1\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p failed")
+    qt_quilt_ok(ARGS new q.patch MESSAGE "new q failed")
+    qt_quilt_ok(ARGS add g MESSAGE "add q failed")
+    qt_write_file("${QT_WORK_DIR}/g" "g1\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh q failed")
+
+    qt_write_file("${QT_WORK_DIR}/f" "f2\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh p.patch)
+    qt_assert_success("${rc}" "an unrelated later patch should not block refresh")
+    qt_assert_equal("${out}" "Refreshed patch p.patch\n" "refresh output")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/p.patch" "+f2" "refresh should take the new f")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh --backup p.patch)
+    qt_assert_equal("${out}" "Patch p.patch is unchanged\n" "second refresh output")
+    qt_assert_not_exists("${QT_WORK_DIR}/patches/p.patch~" "an unchanged patch should not be backed up")
+
+    qt_quilt_ok(ARGS add h MESSAGE "add h to q failed")
+    qt_write_file("${QT_WORK_DIR}/h" "h2\n")
+    qt_write_file("${QT_WORK_DIR}/f" "f3\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh --backup p.patch)
+    qt_assert_failure("${rc}" "a later patch changing h should block refresh")
+    qt_assert_equal("${err}" "More recent patches modify files in patch p.patch. Enforce refresh with -f.\n" "shadow error")
+    qt_assert_not_exists("${QT_WORK_DIR}/patches/p.patch~" "a refused refresh should not back up the patch")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh -f --backup p.patch)
+    qt_assert_success("${rc}" "refresh -f failed")
+    qt_assert_exists("${QT_WORK_DIR}/patches/p.patch~" "refresh --backup should back up a replaced patch")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/p.patch" "+f3" "refresh -f should take the new f")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/p.patch" "+h1" "h should come from the later patch's backup")
 endfunction()
 
 function(qt_scenario_refresh_sorted_default)
