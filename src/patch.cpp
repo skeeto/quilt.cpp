@@ -21,11 +21,22 @@ struct PatchHunk {
     // Flags for "\ No newline at end of file" on old/new side
     bool old_no_newline = false;
     bool new_no_newline = false;
+    // What follows the ranges in the header, from the space before it,
+    // usually a function name, which GNU patch copies into the rejects
+    std::string function;
+    // In a context diff, the old and new sections as given, or as filled
+    // in when diff omitted one, each line with its marker (' ', '-', '+'
+    // or '!'), which GNU patch writes back into the rejects
+    std::vector<std::string> old_section;
+    std::vector<std::string> new_section;
 };
 
 struct PatchFile {
-    std::string old_path;
-    std::string new_path;
+    // The names and timestamps of the file headers, as GNU patch writes
+    // them in the rejects
+    std::string old_label;
+    std::string new_label;
+    bool context = false;      // a context diff rather than a unified one
     std::string target_path;   // after strip-level
     // How surely the patch says the file is absent before (old) and after
     // (new) it, as GNU patch judges: 0 not at all, 1 when the first hunk's
@@ -81,6 +92,24 @@ static std::string extract_path(std::string_view line)
         rest = rest.substr(0, checked_cast<size_t>(std::ssize(rest) - 1));
     }
     return std::string(rest);
+}
+
+// A file header as GNU patch writes it in the rejects: the name stripped of
+// strip leading components, then the rest of the line, the timestamp.  The
+// name /dev/null, or one with fewer slashes than it must strip, stands
+// alone as /dev/null.
+static std::string reject_label(std::string_view header, int strip)
+{
+    std::string name = extract_path(header);
+    ptrdiff_t slashes = 0;  // runs of them, as strip_path counts them
+    for (ptrdiff_t k = 0; k < std::ssize(name); ++k) {
+        if (name[checked_cast<size_t>(k)] == '/' &&
+            (k + 1 == std::ssize(name) || name[checked_cast<size_t>(k + 1)] != '/')) {
+            ++slashes;
+        }
+    }
+    if (name == "/dev/null" || slashes < strip) return "/dev/null";
+    return strip_path(name, strip) + std::string(header.substr(name.size()));
 }
 
 // ── Diff parser ────────────────────────────────────────────────────────
@@ -195,7 +224,8 @@ static std::string malformed(std::span<const std::string> lines, ptrdiff_t i)
 
 // Parse a unified hunk header "@@ -start[,count] +start[,count] @@" as
 // leniently as GNU patch: the spaces are optional, and anything may follow
-// the first '@' of the closing "@@".
+// the first '@' of the closing "@@".  Only what follows "@@ " counts as the
+// function, though.
 static bool parse_unified_range(std::string_view s, PatchHunk &hunk)
 {
     hunk.old_count = hunk.new_count = 1;
@@ -205,7 +235,9 @@ static bool parse_unified_range(std::string_view s, PatchHunk &hunk)
     if (!take(s, "+") || !take_number(s, hunk.new_start)) return false;
     if (take(s, ",") && !take_number(s, hunk.new_count)) return false;
     take(s, " ");
-    return s.starts_with("@");
+    if (!s.starts_with("@")) return false;
+    if (s.starts_with("@@ ")) hunk.function = s.substr(2);
+    return true;
 }
 
 // Parse the unified hunk whose header is lines[i], advancing i past it.
@@ -328,6 +360,11 @@ static bool parse_context_hunk(std::span<const std::string> lines, ptrdiff_t &i,
         return lines[checked_cast<size_t>(k)];
     };
 
+    // Like GNU patch, take a space after the stars to begin the function
+    std::string_view stars = at(i);
+    while (take(stars, "*")) {}
+    if (stars.starts_with(' ')) hunk.function = stars;
+
     ++i;
     ptrdiff_t range_line = i;
     if (i >= n) {
@@ -439,6 +476,8 @@ static bool parse_context_hunk(std::span<const std::string> lines, ptrdiff_t &i,
     }
     hunk.old_no_newline = old_sec.no_newline;
     hunk.new_no_newline = new_sec.no_newline;
+    for (const auto &cl : old_sec.lines) hunk.old_section.push_back(cl.mark + std::string(cl.text));
+    for (const auto &cl : new_sec.lines) hunk.new_section.push_back(cl.mark + std::string(cl.text));
     return true;
 }
 
@@ -448,9 +487,12 @@ static void reverse_hunk(PatchHunk &hunk)
     std::swap(hunk.old_start, hunk.new_start);
     std::swap(hunk.old_count, hunk.new_count);
     std::swap(hunk.old_no_newline, hunk.new_no_newline);
-    for (auto &line : hunk.lines) {
-        if (line[0] == '-') line[0] = '+';
-        else if (line[0] == '+') line[0] = '-';
+    std::swap(hunk.old_section, hunk.new_section);
+    for (auto *lines : {&hunk.lines, &hunk.old_section, &hunk.new_section}) {
+        for (auto &line : *lines) {
+            if (line[0] == '-') line[0] = '+';
+            else if (line[0] == '+') line[0] = '-';
+        }
     }
 }
 
@@ -492,8 +534,9 @@ static std::vector<PatchFile> parse_patch(std::span<const std::string> lines,
 
         std::string raw_old = extract_path(old_header);
         std::string raw_new = extract_path(new_header);
-        pf.old_path = raw_old;
-        pf.new_path = raw_new;
+        pf.old_label = reject_label(old_header, strip_level);
+        pf.new_label = reject_label(new_header, strip_level);
+        pf.context = context;
 
         // Determine target path
         // Prefer new path like GNU patch does for the common -p0 case
@@ -1020,40 +1063,91 @@ static std::string build_merge_output(std::span<const std::string> file_lines,
 
 // ── Reject file generation ─────────────────────────────────────────────
 
-// Format rejected hunks as a unified diff .rej file.
-static std::string format_rejects(const PatchFile &pf,
-                                   const std::vector<bool> &rejected)
+// A unified diff range as GNU patch writes it, with no count for one line.
+static std::string unified_range(ptrdiff_t start, ptrdiff_t count)
 {
-    std::string result;
-    bool has_any = false;
+    if (count == 1) return std::format("{}", start);
+    return std::format("{},{}", start, count);
+}
+
+// A context diff range as GNU patch writes it, from first to last line,
+// either alone for one line, or 0 for none.
+static std::string context_range(ptrdiff_t start, ptrdiff_t count)
+{
+    if (count == 0) return "0";
+    if (count == 1) return std::format("{}", start);
+    return std::format("{},{}", start, start + count - 1);
+}
+
+// Format a file's rejected hunks for its .rej file like GNU patch does: as
+// a diff of the same form, with each hunk moved by the lines that the hunks
+// applied before it added, offsets[h].  GNU patch runs a line that lacks a
+// newline into the next one, though, where this marks it as diff does.
+static std::string format_rejects(const PatchFile &pf,
+                                  const std::vector<bool> &rejected,
+                                  const std::vector<ptrdiff_t> &offsets)
+{
+    static constexpr std::string_view no_newline = "\\ No newline at end of file\n";
+    std::string result = pf.context
+        ? "*** " + pf.old_label + "\n--- " + pf.new_label + "\n"
+        : "--- " + pf.old_label + "\n+++ " + pf.new_label + "\n";
 
     for (ptrdiff_t h = 0; h < std::ssize(pf.hunks); ++h) {
         if (!rejected[checked_cast<size_t>(h)]) continue;
         const auto &hunk = pf.hunks[checked_cast<size_t>(h)];
+        ptrdiff_t offset = offsets[checked_cast<size_t>(h)];
 
-        if (!has_any) {
-            // Write file headers
-            result += "--- ";
-            result += pf.old_path;
-            result += '\n';
-            result += "+++ ";
-            result += pf.new_path;
-            result += '\n';
-            has_any = true;
+        if (pf.context) {
+            auto add_section = [&](std::span<const std::string> section, bool no_nl) {
+                for (const auto &line : section) {
+                    result += line[0];
+                    result += ' ';
+                    result += std::string_view(line).substr(1);
+                    result += '\n';
+                }
+                if (no_nl && !section.empty()) result += no_newline;
+            };
+            result += "***************" + hunk.function + "\n";
+            result += "*** " + context_range(hunk.old_start + offset, hunk.old_count) + " ****\n";
+            add_section(hunk.old_section, hunk.old_no_newline);
+            result += "--- " + context_range(hunk.new_start + offset, hunk.new_count) + " ----\n";
+            add_section(hunk.new_section, hunk.new_no_newline);
+            continue;
         }
 
-        // Write hunk header
-        result += std::format("@@ -{},{} +{},{} @@\n",
-                              hunk.old_start, hunk.old_count,
-                              hunk.new_start, hunk.new_count);
+        result += std::format("@@ -{} +{} @@{}\n",
+                              unified_range(hunk.old_start + offset, hunk.old_count),
+                              unified_range(hunk.new_start + offset, hunk.new_count),
+                              hunk.function);
 
-        // Write hunk lines
-        for (const auto &line : hunk.lines) {
-            result += line;
-            result += '\n';
+        // The last line on each side, which alone may lack a newline
+        ptrdiff_t n = std::ssize(hunk.lines);
+        ptrdiff_t last_old = -1, last_new = -1;
+        for (ptrdiff_t k = 0; k < n; ++k) {
+            char mark = hunk.lines[checked_cast<size_t>(k)][0];
+            if (mark != '+') last_old = k;
+            if (mark != '-') last_new = k;
         }
-        if (hunk.old_no_newline) {
-            result += "\\ No newline at end of file\n";
+        auto add_line = [&](ptrdiff_t k) {
+            result += hunk.lines[checked_cast<size_t>(k)];
+            result += '\n';
+            if ((k == last_old && hunk.old_no_newline) ||
+                (k == last_new && hunk.new_no_newline)) {
+                result += no_newline;
+            }
+        };
+
+        // Like GNU patch, list each change's deletions before its additions
+        for (ptrdiff_t k = 0; k < n; ++k) {
+            ptrdiff_t end = k;
+            while (end < n && hunk.lines[checked_cast<size_t>(end)][0] != ' ') ++end;
+            for (char mark : {'-', '+'}) {
+                for (ptrdiff_t j = k; j < end; ++j) {
+                    if (hunk.lines[checked_cast<size_t>(j)][0] == mark) add_line(j);
+                }
+            }
+            if (end < n) add_line(end);
+            k = end;
         }
     }
 
@@ -1201,12 +1295,17 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
         std::vector<HunkFuzz> hunk_fuzz(checked_cast<size_t>(std::ssize(pf.hunks)));
         std::vector<bool> rejected(checked_cast<size_t>(std::ssize(pf.hunks)), false);
         ptrdiff_t cumulative_offset = 0;
+        // Lines that the hunks applied so far added, which GNU patch adds to
+        // the line numbers it reports, and offset_before[h] before hunk h
+        ptrdiff_t out_offset = 0;
+        std::vector<ptrdiff_t> offset_before(checked_cast<size_t>(std::ssize(pf.hunks)));
         ptrdiff_t last_frozen_line = 0;  // 0-based, exclusive: lines before this are frozen
         bool file_has_rejects = false;
 
         for (ptrdiff_t h = 0; h < std::ssize(pf.hunks); ++h) {
             const auto &hunk = pf.hunks[checked_cast<size_t>(h)];
             auto pattern = get_old_pattern(hunk);
+            offset_before[checked_cast<size_t>(h)] = out_offset;
 
             ptrdiff_t pos = locate_hunk(fc.lines, hunk, pattern,
                                          last_frozen_line, cumulative_offset,
@@ -1262,6 +1361,7 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                 // Update offset and frozen line (adjusted for fuzz)
                 cumulative_offset = actual_offset;
                 last_frozen_line = pos + pat_len - fz.suffix;
+                out_offset += hunk.new_count - hunk.old_count;
             } else {
                 // Hunk failed
                 rejected[checked_cast<size_t>(h)] = true;
@@ -1347,10 +1447,7 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
 
             // Write reject file if needed (and not in merge mode)
             if (file_has_rejects && !opts.merge) {
-                std::string rej_content = format_rejects(pf, rejected);
-                if (!rej_content.empty()) {
-                    fs_write(pf.target_path + ".rej", rej_content);
-                }
+                fs_write(pf.target_path + ".rej", format_rejects(pf, rejected, offset_before));
                 // Like GNU patch, even with -s
                 ptrdiff_t rej_count = 0;
                 for (bool r : rejected) if (r) ++rej_count;

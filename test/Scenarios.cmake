@@ -488,6 +488,7 @@ set(QUILT_TEST_SCENARIOS
     diff_last_line_newline_change
     push_reverse_applied
     push_verbose_rollback
+    push_reject_format
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -8209,6 +8210,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_push_reverse_applied()
     elseif(scenario STREQUAL "push_verbose_rollback")
         qt_scenario_push_verbose_rollback()
+    elseif(scenario STREQUAL "push_reject_format")
+        qt_scenario_push_reject_format()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -9342,11 +9345,10 @@ function(qt_scenario_annotate_no_series_file)
     qt_assert_contains("${err}" "No series file found" "should say no series file found")
 endfunction()
 
-# push_reject_no_newline: patch.cpp line 636
-# format_rejects adds "\ No newline at end of file" when the rejected hunk's
-# old side had no trailing newline (old_no_newline=true). Requires a patch
-# that (1) fails to apply and (2) has "\ No newline at end of file" after
-# a '-' line.
+# push_reject_no_newline: format_rejects adds "\ No newline at end of file"
+# after each line of a rejected hunk that lacks a newline, in unified and
+# context form.  Requires a patch that (1) fails to apply and (2) has
+# "\ No newline at end of file" after a line.
 function(qt_scenario_push_reject_no_newline)
     qt_begin_test("push_reject_no_newline")
     # Create a file without trailing newline
@@ -9366,10 +9368,30 @@ function(qt_scenario_push_reject_no_newline)
     # Push with --leave-rejects to keep the .rej file
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --leave-rejects)
     qt_assert_failure("${rc}" "push should fail when patch doesn't apply")
-    # The .rej file should contain the "No newline" marker
-    qt_assert_exists("${QT_WORK_DIR}/f.txt.rej" "f.txt.rej should exist")
-    file(READ "${QT_WORK_DIR}/f.txt.rej" rej_content)
-    qt_assert_contains("${rej_content}" "No newline" "rej file should contain no-newline marker")
+    # The marker follows the line that lacks a newline.  GNU patch instead
+    # runs that line into the next one, "-wrong+patched".
+    qt_read_file_raw(rej_content "${QT_WORK_DIR}/f.txt.rej")
+    qt_assert_equal("${rej_content}"
+        "--- f.txt\n+++ f.txt\n@@ -1 +1 @@\n-wrong\n\\ No newline at end of file\n+patched\n"
+        "rej file should mark the line without a newline")
+
+    # Both sides of a context diff, and a context line that ends both
+    file(WRITE "${QT_WORK_DIR}/patches/bad.patch"
+"*** a/f.txt\n--- b/f.txt\n***************\n*** 1,2 ****\n! a\n  b\n\\ No newline at end of file\n--- 1,2 ----\n! c\n  b\n\\ No newline at end of file\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --leave-rejects)
+    qt_assert_failure("${rc}" "push should fail when patch doesn't apply")
+    qt_read_file_raw(rej_content "${QT_WORK_DIR}/f.txt.rej")
+    qt_assert_equal("${rej_content}"
+        "*** f.txt\n--- f.txt\n***************\n*** 1,2 ****\n! a\n  b\n\\ No newline at end of file\n--- 1,2 ----\n! c\n  b\n\\ No newline at end of file\n"
+        "context rej file should mark the lines without a newline")
+    file(WRITE "${QT_WORK_DIR}/patches/bad.patch"
+"--- a/f.txt\n+++ b/f.txt\n@@ -1,2 +1,2 @@\n-a\n+c\n b\n\\ No newline at end of file\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --leave-rejects)
+    qt_assert_failure("${rc}" "push should fail when patch doesn't apply")
+    qt_read_file_raw(rej_content "${QT_WORK_DIR}/f.txt.rej")
+    qt_assert_equal("${rej_content}"
+        "--- f.txt\n+++ f.txt\n@@ -1,2 +1,2 @@\n-a\n+c\n b\n\\ No newline at end of file\n"
+        "rej file should mark a context line without a newline once")
 endfunction()
 
 # fork_applied_not_in_series: cmd_manage.cpp lines 996-997
@@ -13901,4 +13923,136 @@ function(qt_scenario_push_verbose_rollback)
     qt_assert_not_contains("${out}" "Restoring missing.txt" "push -q -v should not restore missing.txt")
     qt_assert_not_contains("${out}" "Removing missing.txt" "push -q -v should not remove missing.txt")
     qt_assert_not_exists("${QT_WORK_DIR}/missing.txt" "push should not create missing.txt")
+endfunction()
+
+# push_reject_format: like GNU patch, the rejects name each file as stripped,
+# or /dev/null when it has too few components to strip, keep the timestamps
+# and the function text of the hunk headers, give no count for a range of
+# one line, list a change's deletions before its additions, and move each
+# hunk by the lines that the hunks applied before it added.  A context
+# diff's rejects stay in context form, and -R reverses the rejects too.
+function(qt_scenario_push_reject_format)
+    qt_begin_test("push_reject_format")
+    foreach(name f new gone short)
+        qt_write_file("${QT_WORK_DIR}/${name}.txt" "x\n")
+    endforeach()
+    set(lines "")
+    foreach(n RANGE 1 20)
+        string(APPEND lines "${n}\n")
+    endforeach()
+    qt_write_file("${QT_WORK_DIR}/off.txt" "${lines}")
+    qt_write_file("${QT_WORK_DIR}/ctx.txt" "1\n2\n3\n4\n5\n6\n7\n8\n9\n")
+    qt_write_file("${QT_WORK_DIR}/r.txt" "x\n")
+    qt_write_file("${QT_WORK_DIR}/rc.txt" "x\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\nr.diff -R\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff" [=[
+--- a/f.txt	2020-01-01 00:00:00.000000000 +0000
++++ b/f.txt	2020-01-02 00:00:00.000000000 +0000
+@@ -1 +1 @@ func
+-a
++b
+--- /dev/null
++++ b/new.txt
+@@ -0,0 +1 @@
++b
+--- a/gone.txt
++++ /dev/null
+@@ -1 +0,0 @@
+-a
+--- short.txt
++++ b/short.txt
+@@ -1 +1 @@
+-a
++b
+--- a/off.txt
++++ b/off.txt
+@@ -1,4 +1,6 @@
+ 1
+ 2
++a
++b
+ 3
+ 4
+@@ -10,4 +12,4 @@
+ 10
+-XX
++YY
+-ZZ
++WW
+ 13
+*** a/ctx.txt
+--- b/ctx.txt
+***************
+*** 1,3 ****
+  1
+- 2
+  3
+--- 1,2 ----
+*************** fn
+*** 4,6 ****
+  4
+! X
+  6
+--- 3,5 ----
+  4
+! Y
+  6
+***************
+*** 7,9 ****
+  7
+- QQ
+  9
+--- 6,7 ----
+]=])
+    qt_write_file("${QT_WORK_DIR}/patches/r.diff" [=[
+--- a/r.txt	2020-01-01
++++ b/r.txt	2020-01-02
+@@ -1,2 +1 @@ func
+-a
+-c
++b
+*** a/rc.txt
+--- b/rc.txt
+***************
+*** 1,2 ****
+! a
+  c
+--- 1,3 ----
+! b
++ d
+  c
+]=])
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -f)
+    qt_assert_failure("${rc}" "push -f of a patch with failed hunks should fail")
+    qt_read_file_raw(rej "${QT_WORK_DIR}/f.txt.rej")
+    qt_assert_equal("${rej}"
+        "--- f.txt\t2020-01-01 00:00:00.000000000 +0000\n+++ f.txt\t2020-01-02 00:00:00.000000000 +0000\n@@ -1 +1 @@ func\n-a\n+b\n"
+        "the rejects should strip the names and keep the timestamps")
+    qt_read_file_raw(rej "${QT_WORK_DIR}/new.txt.rej")
+    qt_assert_equal("${rej}" "--- /dev/null\n+++ new.txt\n@@ -0,0 +1 @@\n+b\n"
+        "the rejects of a creation should name /dev/null")
+    qt_read_file_raw(rej "${QT_WORK_DIR}/gone.txt.rej")
+    qt_assert_equal("${rej}" "--- gone.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-a\n"
+        "the rejects of a deletion should name /dev/null")
+    qt_read_file_raw(rej "${QT_WORK_DIR}/short.txt.rej")
+    qt_assert_equal("${rej}" "--- /dev/null\n+++ short.txt\n@@ -1 +1 @@\n-a\n+b\n"
+        "the rejects should name /dev/null for a name with too few components")
+    qt_read_file_raw(rej "${QT_WORK_DIR}/off.txt.rej")
+    qt_assert_equal("${rej}" "--- off.txt\n+++ off.txt\n@@ -12,4 +14,4 @@\n 10\n-XX\n-ZZ\n+YY\n+WW\n 13\n"
+        "the rejects should move a hunk by the lines added before it")
+    qt_read_file_raw(rej "${QT_WORK_DIR}/ctx.txt.rej")
+    qt_assert_equal("${rej}"
+        "*** ctx.txt\n--- ctx.txt\n*************** fn\n*** 3,5 ****\n  4\n! X\n  6\n--- 2,4 ----\n  4\n! Y\n  6\n***************\n*** 6,8 ****\n  7\n- QQ\n  9\n--- 5,6 ----\n  7\n  9\n"
+        "the rejects of a context diff should be a context diff")
+
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -f)
+    qt_assert_failure("${rc}" "push -f of a reversed patch with failed hunks should fail")
+    qt_read_file_raw(rej "${QT_WORK_DIR}/r.txt.rej")
+    qt_assert_equal("${rej}" "--- r.txt\t2020-01-02\n+++ r.txt\t2020-01-01\n@@ -1 +1,2 @@ func\n-b\n+a\n+c\n"
+        "the rejects of a reversed patch should be reversed")
+    qt_read_file_raw(rej "${QT_WORK_DIR}/rc.txt.rej")
+    qt_assert_equal("${rej}"
+        "*** rc.txt\n--- rc.txt\n***************\n*** 1,3 ****\n! b\n- d\n  c\n--- 1,2 ----\n! a\n  c\n"
+        "the rejects of a reversed context diff should be reversed")
 endfunction()
