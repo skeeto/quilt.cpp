@@ -470,6 +470,7 @@ set(QUILT_TEST_SCENARIOS
     push_skip_missing_file
     push_skip_missing_later_file
     fold_skip_missing_file
+    fold_fail_rollback
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -643,6 +644,7 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     refresh_z_fork_series_args
     series_insert_crlf
     push_context_diff_zero_context
+    fold_fail_rollback_create_delete
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -8152,6 +8154,10 @@ function(qt_run_named_scenario scenario)
         qt_scenario_push_context_diff_zero_context()
     elseif(scenario STREQUAL "push_missing_patch_file")
         qt_scenario_push_missing_patch_file()
+    elseif(scenario STREQUAL "fold_fail_rollback")
+        qt_scenario_fold_fail_rollback()
+    elseif(scenario STREQUAL "fold_fail_rollback_create_delete")
+        qt_scenario_fold_fail_rollback_create_delete()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -13183,4 +13189,95 @@ function(qt_scenario_fold_garbage_input)
     qt_assert_success("${rc}" "fold -f should ignore the failure")
     qt_assert_equal("${err}" "patch: **** Only garbage was found in the patch input.\n"
                     "fold -f should still report garbage")
+endfunction()
+
+# A fold that fails without -f changes nothing: patched files return to
+# their pre-fold contents, including files the top patch already tracks,
+# and the top patch gains no files. Rejects stay behind.
+function(qt_scenario_fold_fail_rollback)
+    qt_begin_test("fold_fail_rollback")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_write_file("${QT_WORK_DIR}/h.txt" "h\n")
+    qt_write_file("${QT_WORK_DIR}/t.txt" "t\n")
+    qt_write_file("${QT_WORK_DIR}/sub/g.txt" "g\n")
+    qt_quilt_ok(ARGS new top.diff MESSAGE "new failed")
+    qt_quilt_ok(ARGS add t.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/t.txt" "t2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt(
+        RESULT rc OUTPUT out ERROR err
+        ARGS fold
+        INPUT [=[--- a/t.txt
++++ b/t.txt
+@@ -1 +1 @@
+-t2
++t3
+--- a/f.txt
++++ b/f.txt
+@@ -1 +1 @@
+-x
++y
+--- a/sub/g.txt
++++ b/sub/g.txt
+@@ -1 +1 @@
+-g
++g2
+--- a/h.txt
++++ b/h.txt
+@@ -1 +1 @@
+-zzz
++b
+]=]
+    )
+    qt_assert_failure("${rc}" "fold with a failing hunk should fail")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "x" "f.txt should be restored")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/g.txt" "g" "sub/g.txt should be restored")
+    qt_assert_file_text("${QT_WORK_DIR}/t.txt" "t2" "tracked t.txt should be restored")
+    qt_assert_file_text("${QT_WORK_DIR}/h.txt" "h" "h.txt should be unchanged")
+    qt_assert_exists("${QT_WORK_DIR}/h.txt.rej" "the reject file should remain")
+    qt_quilt_ok(OUTPUT out ARGS files MESSAGE "files failed")
+    qt_assert_equal("${out}" "t.txt\n" "fold should add no files to the top patch")
+    qt_assert_file_text("${QT_WORK_DIR}/.pc/top.diff/t.txt" "t"
+                        "backup of t.txt should keep its pre-patch contents")
+    qt_assert_not_exists("${QT_WORK_DIR}/.pc/top.diff/sub" "no backup directory should remain")
+    qt_quilt_ok(OUTPUT out ARGS diff -p ab --no-index --no-timestamps MESSAGE "diff failed")
+    qt_assert_equal("${out}" "--- a/t.txt\n+++ b/t.txt\n@@ -1 +1 @@\n-t\n+t2\n"
+                    "the top patch should be unchanged")
+endfunction()
+
+# A fold that fails without -f removes the files it created and restores
+# the files it deleted. Upstream leaves a created file behind empty, since
+# it moves GNU patch's empty placeholder backup over it, and cannot restore
+# a deleted file whose directory patch removed.
+function(qt_scenario_fold_fail_rollback_create_delete)
+    qt_begin_test("fold_fail_rollback_create_delete")
+    qt_write_file("${QT_WORK_DIR}/h.txt" "h\n")
+    qt_write_file("${QT_WORK_DIR}/d/only.txt" "gone\n")
+    qt_quilt_ok(ARGS new top.diff MESSAGE "new failed")
+    qt_quilt(
+        RESULT rc OUTPUT out ERROR err
+        ARGS fold
+        INPUT [=[--- /dev/null
++++ b/sub/new.txt
+@@ -0,0 +1 @@
++n
+--- a/d/only.txt
++++ /dev/null
+@@ -1 +0,0 @@
+-gone
+--- a/h.txt
++++ b/h.txt
+@@ -1 +1 @@
+-zzz
++b
+]=]
+    )
+    qt_assert_failure("${rc}" "fold with a failing hunk should fail")
+    qt_assert_not_exists("${QT_WORK_DIR}/sub/new.txt" "the created file should be removed")
+    qt_assert_file_text("${QT_WORK_DIR}/d/only.txt" "gone" "the deleted file should be restored")
+    qt_assert_file_text("${QT_WORK_DIR}/h.txt" "h" "h.txt should be unchanged")
+    qt_quilt_ok(OUTPUT out ARGS files MESSAGE "files failed")
+    qt_assert_equal("${out}" "" "fold should add no files to the top patch")
+    qt_assert_not_exists("${QT_WORK_DIR}/.pc/top.diff/sub" "no backup directory should remain")
+    qt_assert_not_exists("${QT_WORK_DIR}/.pc/top.diff/d" "no backup directory should remain")
 endfunction()

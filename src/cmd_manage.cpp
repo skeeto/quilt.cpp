@@ -973,7 +973,16 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
         }
     }
 
-    // Track new files in the current patch, including deletions
+    // Track new files in the current patch, including deletions. Snapshot
+    // every target file so that a failed fold can be undone: backups of
+    // files the top patch already tracks predate the top patch, not the fold.
+    struct Snapshot {
+        std::string file;
+        bool existed;
+        std::string content;
+        bool added;  // backed up into the top patch by this fold
+    };
+    std::vector<Snapshot> snapshots;
     auto affected_files = patch_target_files(stdin_data, patch_opts.strip_level,
                                              patch_opts.reverse);
     auto currently_tracked = files_in_patch(q, top);
@@ -981,9 +990,11 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
         return std::ranges::find(currently_tracked, f) != currently_tracked.end();
     };
     for (const auto &f : affected_files) {
-        if (!is_tracked(f)) {
-            backup_file(q, top, f);
-        }
+        std::string path = path_join(q.work_dir, f);
+        Snapshot s{f, file_exists(path), {}, !is_tracked(f)};
+        if (s.existed) s.content = read_file(path);
+        if (s.added) backup_file(q, top, f);
+        snapshots.push_back(std::move(s));
     }
 
     PatchResult r = builtin_patch(stdin_data, patch_opts);
@@ -1001,6 +1012,34 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
     if (!r.err.empty()) err(r.err);
 
     if (r.exit_code != 0 && !opt_force) {
+        // Like upstream, restore the pre-fold state and drop the backups
+        // this fold added. Reject files stay behind.
+        std::string pc_dir = pc_patch_dir(q, top);
+        for (const auto &s : snapshots) {
+            std::string path = path_join(q.work_dir, s.file);
+            bool exists = file_exists(path);
+            if (exists != s.existed || (exists && read_file(path) != s.content)) {
+                bool ok;
+                if (s.existed) {
+                    std::string dir = dirname(path);
+                    ok = (is_directory(dir) || make_dirs(dir)) &&
+                         write_file(path, s.content);
+                } else {
+                    ok = delete_file(path);
+                }
+                if (!ok) {
+                    err("File "); err(s.file); err_line(" may be corrupted");
+                }
+            }
+            if (s.added) {
+                std::string backup = path_join(pc_dir, s.file);
+                delete_file(backup);
+                for (std::string dir = dirname(backup);
+                     std::ssize(dir) > std::ssize(pc_dir); dir = dirname(dir)) {
+                    if (!delete_dir(dir)) break;
+                }
+            }
+        }
         return 1;
     }
 
