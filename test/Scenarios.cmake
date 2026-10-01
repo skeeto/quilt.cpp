@@ -503,6 +503,11 @@ set(QUILT_TEST_SCENARIOS
     fork_target_exists
     fork_patches_prefix
     fork_empty_name
+    revert_checks_all_files_first
+    revert_shadowed_file
+    revert_unnormalized_path
+    revert_patch_resolution
+    revert_no_series
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -8284,6 +8289,16 @@ function(qt_run_named_scenario scenario)
         qt_scenario_fork_empty_name()
     elseif(scenario STREQUAL "fork_leading_zero_suffix")
         qt_scenario_fork_leading_zero_suffix()
+    elseif(scenario STREQUAL "revert_checks_all_files_first")
+        qt_scenario_revert_checks_all_files_first()
+    elseif(scenario STREQUAL "revert_shadowed_file")
+        qt_scenario_revert_shadowed_file()
+    elseif(scenario STREQUAL "revert_unnormalized_path")
+        qt_scenario_revert_unnormalized_path()
+    elseif(scenario STREQUAL "revert_patch_resolution")
+        qt_scenario_revert_patch_resolution()
+    elseif(scenario STREQUAL "revert_no_series")
+        qt_scenario_revert_no_series()
     elseif(scenario STREQUAL "refresh_z_strip_migration")
         qt_scenario_refresh_z_strip_migration()
     elseif(scenario STREQUAL "annotate_P_missing_arg")
@@ -14605,4 +14620,177 @@ function(qt_scenario_fork_leading_zero_suffix)
     qt_quilt_ok(OUTPUT out ARGS refresh -z MESSAGE "refresh -z of r-09.patch failed")
     qt_assert_equal("${out}" "Fork of patch r-09.patch created as r-10.patch\n"
                     "the fork of r-09.patch should be r-10.patch")
+endfunction()
+
+# revert checks every file before changing any, and reports each file that
+# is not in the patch, including a directory
+function(qt_scenario_revert_checks_all_files_first)
+    qt_begin_test("revert_checks_all_files_first")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "a1\n")
+    qt_write_file("${QT_WORK_DIR}/b.txt" "b1\n")
+    qt_write_file("${QT_WORK_DIR}/c.txt" "c1\n")
+    qt_write_file("${QT_WORK_DIR}/sub/s.txt" "s1\n")
+    qt_write_file("${QT_WORK_DIR}/sub/t.txt" "t1\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add a.txt b.txt sub/s.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "a2\n")
+    qt_write_file("${QT_WORK_DIR}/b.txt" "b2\n")
+    qt_write_file("${QT_WORK_DIR}/sub/s.txt" "s2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "a-dirty\n")
+    qt_write_file("${QT_WORK_DIR}/b.txt" "b-dirty\n")
+    qt_write_file("${QT_WORK_DIR}/sub/s.txt" "s-dirty\n")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS revert a.txt c.txt b.txt)
+    qt_assert_failure("${rc}" "revert with an untracked file should fail")
+    qt_assert_equal("${out}" "" "revert should revert nothing")
+    qt_assert_equal("${err}" "File c.txt is not in patch p.patch\n"
+                    "revert should report the untracked file")
+    qt_assert_file_text("${QT_WORK_DIR}/a.txt" "a-dirty" "a.txt should be untouched")
+    qt_assert_file_text("${QT_WORK_DIR}/b.txt" "b-dirty" "b.txt should be untouched")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS revert c.txt a.txt e.txt)
+    qt_assert_failure("${rc}" "revert with untracked files should fail")
+    qt_assert_equal("${out}" "" "revert should revert nothing")
+    qt_assert_equal("${err}"
+        "File c.txt is not in patch p.patch\nFile e.txt is not in patch p.patch\n"
+        "revert should report every untracked file")
+    qt_assert_file_text("${QT_WORK_DIR}/a.txt" "a-dirty" "a.txt should be untouched")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS revert s.txt t.txt
+             WORKING_DIRECTORY "${QT_WORK_DIR}/sub")
+    qt_assert_failure("${rc}" "revert from a subdirectory should fail")
+    qt_assert_equal("${out}" "" "revert should revert nothing")
+    qt_assert_equal("${err}" "File sub/t.txt is not in patch p.patch\n"
+                    "revert should report the untracked file")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/s.txt" "s-dirty" "sub/s.txt should be untouched")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS revert sub)
+    qt_assert_failure("${rc}" "revert of a directory should fail")
+    qt_assert_equal("${out}" "" "revert of a directory should print nothing")
+    qt_assert_equal("${err}" "File sub is not in patch p.patch\n"
+                    "a directory should not count as a file in the patch")
+endfunction()
+
+# revert refuses files a later patch modifies, on stdout, after checking
+# that the file is in the named patch
+function(qt_scenario_revert_shadowed_file)
+    qt_begin_test("revert_shadowed_file")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "a1\n")
+    qt_write_file("${QT_WORK_DIR}/b.txt" "b1\n")
+    qt_write_file("${QT_WORK_DIR}/c.txt" "c1\n")
+    qt_write_file("${QT_WORK_DIR}/d.txt" "d1\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add a.txt b.txt MESSAGE "add p1 failed")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "a2\n")
+    qt_write_file("${QT_WORK_DIR}/b.txt" "b2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add b.txt d.txt MESSAGE "add p2 failed")
+    qt_write_file("${QT_WORK_DIR}/b.txt" "b3\n")
+    qt_write_file("${QT_WORK_DIR}/d.txt" "d2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2 failed")
+    qt_write_file("${QT_WORK_DIR}/b.txt" "b-dirty\n")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS revert -P p1.patch c.txt b.txt)
+    qt_assert_failure("${rc}" "revert should fail")
+    qt_assert_equal("${out}" "File b.txt modified by patch p2.patch\n"
+                    "revert should report the later patch on stdout")
+    qt_assert_equal("${err}" "File c.txt is not in patch p1.patch\n"
+                    "revert should also report the untracked file")
+    qt_assert_file_text("${QT_WORK_DIR}/b.txt" "b-dirty" "b.txt should be untouched")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS revert -P p1.patch d.txt)
+    qt_assert_failure("${rc}" "revert of a file not in p1 should fail")
+    qt_assert_equal("${out}" "" "a file not in p1 is not shadowed")
+    qt_assert_equal("${err}" "File d.txt is not in patch p1.patch\n"
+                    "revert should report the file is not in p1")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS revert -P p1.patch ./b.txt)
+    qt_assert_failure("${rc}" "revert of a shadowed ./ path should fail")
+    qt_assert_equal("${out}" "File ./b.txt modified by patch p2.patch\n"
+                    "the shadow check should resolve ./b.txt")
+    qt_assert_file_text("${QT_WORK_DIR}/b.txt" "b-dirty" "b.txt should be untouched")
+endfunction()
+
+# revert of "./f", "d//f", or "../f" from a subdirectory restores the
+# post-patch content, not the backup
+function(qt_scenario_revert_unnormalized_path)
+    qt_begin_test("revert_unnormalized_path")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "a1\n")
+    qt_write_file("${QT_WORK_DIR}/sub/s.txt" "s1\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add a.txt sub/s.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "a2\n")
+    qt_write_file("${QT_WORK_DIR}/sub/s.txt" "s2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+
+    qt_write_file("${QT_WORK_DIR}/a.txt" "a-dirty\n")
+    qt_quilt_ok(OUTPUT out ARGS revert ./a.txt MESSAGE "revert ./a.txt failed")
+    qt_assert_equal("${out}" "Changes to ./a.txt in patch p.patch reverted\n"
+                    "revert should name the file as given")
+    qt_assert_file_text("${QT_WORK_DIR}/a.txt" "a2" "./a.txt should get the post-patch content")
+
+    qt_write_file("${QT_WORK_DIR}/sub/s.txt" "s-dirty\n")
+    qt_quilt_ok(OUTPUT out ARGS revert sub//s.txt MESSAGE "revert sub//s.txt failed")
+    qt_assert_equal("${out}" "Changes to sub//s.txt in patch p.patch reverted\n"
+                    "revert should name the file as given")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/s.txt" "s2" "sub//s.txt should get the post-patch content")
+
+    qt_write_file("${QT_WORK_DIR}/a.txt" "a-dirty\n")
+    qt_quilt_ok(OUTPUT out ARGS revert ../a.txt WORKING_DIRECTORY "${QT_WORK_DIR}/sub"
+                MESSAGE "revert ../a.txt failed")
+    qt_assert_equal("${out}" "Changes to sub/../a.txt in patch p.patch reverted\n"
+                    "revert should name the file as given")
+    qt_assert_file_text("${QT_WORK_DIR}/a.txt" "a2" "../a.txt should get the post-patch content")
+endfunction()
+
+# revert prints usage before checking the stack, then resolves -P like
+# upstream's find_applied_patch
+function(qt_scenario_revert_patch_resolution)
+    qt_begin_test("revert_patch_resolution")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "a1\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add a.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "a2\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS revert -P nosuch.patch a.txt)
+    qt_assert_failure("${rc}" "revert -P with an unknown patch should fail")
+    qt_assert_equal("${err}" "Patch nosuch.patch is not in series\n"
+                    "revert should report the patch is not in the series")
+
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS revert -P p.patch a.txt)
+    qt_assert_failure("${rc}" "revert -P with an unapplied patch should fail")
+    qt_assert_equal("${err}" "Patch p.patch is not applied\n"
+                    "revert should report the patch is not applied")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS revert)
+    qt_assert_failure("${rc}" "revert without files should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Usage" "revert without files should print usage")
+    qt_assert_not_contains("${combined}" "No patches applied"
+                           "usage should come before the stack checks")
+endfunction()
+
+# revert reports a missing or empty series file like other commands
+function(qt_scenario_revert_no_series)
+    qt_begin_test("revert_no_series")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "a1\n")
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/patches")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS revert a.txt)
+    qt_assert_failure("${rc}" "revert without a series file should fail")
+    qt_assert_equal("${err}" "No series file found\n" "missing series file should be reported")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS revert -P x.patch a.txt)
+    qt_assert_failure("${rc}" "revert -P without a series file should fail")
+    qt_assert_equal("${err}" "No series file found\n" "missing series file should be reported")
+
+    qt_write_file("${QT_WORK_DIR}/patches/series" "")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS revert a.txt)
+    qt_assert_failure("${rc}" "revert with an empty series should fail")
+    qt_assert_equal("${err}" "No patches in series\n" "empty series should be reported")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS revert -P x.patch a.txt)
+    qt_assert_failure("${rc}" "revert -P with an empty series should fail")
+    qt_assert_equal("${err}" "No patches in series\n" "empty series should be reported")
 endfunction()

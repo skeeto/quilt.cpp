@@ -396,7 +396,7 @@ quilt delete -n                    # Delete next unapplied patch
 
 #### `quilt revert [-P patch] {file} ...`
 
-Reverts uncommitted changes to specific files in the topmost or named patch. "Uncommitted" means changes not yet captured by `quilt refresh`. After revert, `quilt diff -z` shows no differences for those files. Restores from `.pc/<patchname>/` backup. Cannot revert files modified by patches applied on top.
+Reverts uncommitted changes to specific files in the topmost or named patch. "Uncommitted" means changes not yet captured by `quilt refresh`. After revert, `quilt diff -z` shows no differences for those files. Restores from `.pc/<patchname>/` backup. Cannot revert files modified by patches applied on top. Every file is checked first: if any file is not in the patch or is modified by a later patch, each problem is reported and no file is reverted.
 
 ```bash
 quilt revert src/main.c           # Undo uncommitted changes

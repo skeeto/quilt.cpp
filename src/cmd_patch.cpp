@@ -2313,20 +2313,60 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
     return 0;
 }
 
-int cmd_revert(QuiltState &q, int argc, char **argv) {
-    if (q.applied.empty()) {
-        err_line("No patches applied");
-        return 1;
-    }
+// The backup of a file named as the user typed it. Unlike path_join,
+// concatenation keeps an absolute name inside the .pc directory, as
+// upstream's "$QUILT_PC/$patch/$file" does.
+static std::string revert_backup_path(const QuiltState &q, std::string_view patch,
+                                      std::string_view file) {
+    return pc_patch_dir(q, patch) + "/" + std::string(file);
+}
 
+// Like upstream's file_in_patch: the backup must be a regular file, and
+// it is looked up through the filesystem, so "./f" and "d/../f" find the
+// backup of "f".
+static bool revert_file_in_patch(const QuiltState &q, std::string_view patch,
+                                 std::string_view file) {
+    std::string path = revert_backup_path(q, patch, file);
+    return file_exists(path) && !is_directory(path);
+}
+
+// Lexically normalize a relative path ("./f", "d//f", "d/../f" become
+// "f"), the form builtin_patch uses for file names.
+static std::string normalize_relative_path(std::string_view path) {
+    std::vector<std::string_view> parts;
+    while (!path.empty()) {
+        ptrdiff_t slash = str_find(path, '/');
+        std::string_view part = path;
+        if (slash < 0) {
+            path = {};
+        } else {
+            part = path.substr(0, checked_cast<size_t>(slash));
+            path.remove_prefix(checked_cast<size_t>(slash + 1));
+        }
+        if (part.empty() || part == ".") continue;
+        if (part == ".." && !parts.empty() && parts.back() != "..") {
+            parts.pop_back();
+        } else {
+            parts.push_back(part);
+        }
+    }
+    std::string result;
+    for (auto part : parts) {
+        if (!result.empty()) result += '/';
+        result += part;
+    }
+    return result;
+}
+
+int cmd_revert(QuiltState &q, int argc, char **argv) {
     // Parse options
-    std::string_view patch = q.applied.back();
+    std::string_view opt_patch;
     std::vector<std::string> files;
     int i = 1;
     while (i < argc) {
         std::string_view arg = argv[i];
         if (arg == "-P" && i + 1 < argc) {
-            patch = strip_patches_prefix(q, argv[i + 1]);
+            opt_patch = argv[i + 1];
             i += 2;
             continue;
         }
@@ -2344,58 +2384,68 @@ int cmd_revert(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    if (!q.is_applied(patch)) {
-        err("Patch "); err(format_patch(q, patch)); err_line(" is not applied");
+    // Resolve the patch like upstream's find_applied_patch
+    if (!q.series_file_exists) {
+        err_line("No series file found");
+        return 1;
+    }
+    std::string patch;
+    if (!opt_patch.empty()) {
+        if (q.series.empty()) {
+            err_line("No patches in series");
+            return 1;
+        }
+        auto found = find_applied_patch(q, opt_patch);
+        if (!found) return 1;
+        patch = *found;
+    } else if (!q.applied.empty()) {
+        patch = q.applied.back();
+    } else {
+        err_line(q.series.empty() ? "No patches in series" : "No patches applied");
         return 1;
     }
 
-    // Check if any later applied patch also modifies these files
-    bool found_patch = false;
-    for (const auto &ap : q.applied) {
-        if (!found_patch) {
-            if (ap == patch) found_patch = true;
+    // Check every file before changing any, reporting each problem
+    int status = 0;
+    for (const auto &file : files) {
+        if (!revert_file_in_patch(q, patch, file)) {
+            err("File "); err(file); err(" is not in patch ");
+            err_line(patch_path_display(q, patch));
+            status = 1;
             continue;
         }
-        // ap is a patch applied after 'patch'
-        auto later_files = files_in_patch(q, ap);
-        for (const auto &file : files) {
-            for (const auto &lf : later_files) {
-                if (lf == file) {
-                    err("File "); err(file);
-                    err(" modified by patch ");
-                    err_line(patch_path_display(q, ap));
-                    return 1;
-                }
+        auto later = std::ranges::find(q.applied, patch);
+        for (++later; later != q.applied.end(); ++later) {
+            if (revert_file_in_patch(q, *later, file)) {
+                out("File "); out(file); out(" modified by patch ");
+                out_line(patch_path_display(q, *later));
+                status = 1;
+                break;
             }
         }
     }
+    if (status != 0) return status;
 
     // Read the patch file to apply its hunks to backup content
     std::string patch_file = path_join(q.work_dir, q.patches_dir, patch);
     std::string patch_text = read_file(patch_file);
-    int strip_level = q.patch_strip_level.count(std::string(patch))
-        ? q.patch_strip_level.at(std::string(patch)) : 1;
+    int strip_level = q.patch_strip_level.count(patch)
+        ? q.patch_strip_level.at(patch) : 1;
 
     for (const auto &file : files) {
-        // Check if file is tracked by the patch
-        std::string backup_path = path_join(pc_patch_dir(q, patch), file);
-        if (!file_exists(backup_path)) {
-            err("File "); err(file); err(" is not in patch ");
-            err_line(patch_path_display(q, patch));
-            return 1;
-        }
-
-        // Build the clean post-patch state by applying patch to backup
-        std::string backup_content = read_file(backup_path);
+        // Build the clean post-patch state by applying patch to backup,
+        // under the name the patch uses for the file
+        std::string backup_content = read_file(revert_backup_path(q, patch, file));
+        std::string name = normalize_relative_path(file);
         std::map<std::string, std::string> memfs;
-        memfs[file] = backup_content;
+        memfs[name] = backup_content;
         PatchOptions opts;
         opts.strip_level = strip_level;
         opts.quiet = true;
         opts.fs = &memfs;
         builtin_patch(patch_text, opts);
 
-        std::string clean_content = memfs.count(file) ? memfs[file] : "";
+        std::string clean_content = memfs.count(name) ? memfs[name] : "";
 
         // Check if current file matches clean state (unchanged)
         std::string target = path_join(q.work_dir, file);
