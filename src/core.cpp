@@ -11,6 +11,17 @@ ptrdiff_t QuiltState::top_index() const {
     return -1;
 }
 
+std::string QuiltState::patch_after_top() const {
+    ptrdiff_t next = 0;
+    if (!applied.empty()) {
+        ptrdiff_t top = top_index();
+        if (top < 0) return {};
+        next = top + 1;
+    }
+    if (next >= std::ssize(series)) return {};
+    return series[checked_cast<size_t>(next)];
+}
+
 bool QuiltState::is_applied(std::string_view patch) const {
     for (const auto &a : applied) {
         if (a == patch) return true;
@@ -250,12 +261,10 @@ std::vector<std::string> shell_split(std::string_view s) {
     return tokens;
 }
 
-std::vector<std::string> read_series(std::string_view path,
-                                     std::map<std::string, int> *strip_levels,
-                                     std::set<std::string> *reversed) {
+static std::vector<std::string> parse_series(std::string_view content,
+                                             std::map<std::string, int> *strip_levels,
+                                             std::set<std::string> *reversed) {
     std::vector<std::string> patches;
-    std::string content = read_file(path);
-    if (content.empty()) return patches;
     auto lines = split_lines(content);
     for (auto &line : lines) {
         std::string trimmed = trim(line);
@@ -294,35 +303,144 @@ std::vector<std::string> read_series(std::string_view path,
     return patches;
 }
 
-bool write_series(std::string_view path, std::span<const std::string> patches,
-                  const std::map<std::string, int> &strip_levels,
-                  const std::set<std::string> &reversed) {
-    std::string content;
-    for (const auto &p : patches) {
-        content += p;
-        auto it = strip_levels.find(p);
-        if (it != strip_levels.end() && it->second != 1) {
-            content += " -p";
-            content += std::to_string(it->second);
-        }
-        if (reversed.contains(p)) {
-            content += " -R";
-        }
-        content += '\n';
-    }
-    return write_file(path, content);
+std::vector<std::string> read_series(std::string_view path,
+                                     std::map<std::string, int> *strip_levels,
+                                     std::set<std::string> *reversed) {
+    return parse_series(read_file(path), strip_levels, reversed);
 }
 
-bool set_series_strip_level(std::string_view path, std::string_view patch,
+// Split series file content into lines, each keeping its line ending, so
+// that edits reproduce untouched lines byte for byte.
+static std::vector<std::string_view> series_lines(std::string_view content) {
+    std::vector<std::string_view> lines;
+    while (!content.empty()) {
+        auto nl = str_find(content, '\n');
+        auto len = nl < 0 ? std::ssize(content) : nl + 1;
+        lines.push_back(content.substr(0, checked_cast<size_t>(len)));
+        content.remove_prefix(checked_cast<size_t>(len));
+    }
+    return lines;
+}
+
+// The patch a series line names, as read_series sees it: the first word of
+// the trimmed line, unless the line is blank or a comment, in which case it
+// is empty.
+static std::string_view series_line_patch(std::string_view line) {
+    auto is_space = [](char c) {
+        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+    };
+    while (!line.empty() && is_space(line.front())) line.remove_prefix(1);
+    while (!line.empty() && is_space(line.back())) line.remove_suffix(1);
+    ptrdiff_t len = 0;
+    while (len < std::ssize(line) && line[checked_cast<size_t>(len)] != ' ' &&
+           line[checked_cast<size_t>(len)] != '\t') {
+        ++len;
+    }
+    std::string_view name = line.substr(0, checked_cast<size_t>(len));
+    return name.starts_with('#') ? std::string_view{} : name;
+}
+
+// Write an edited series file, then reload the in-memory series from it.
+static bool store_series(QuiltState &q, std::string_view path,
+                         std::string_view content) {
+    if (!write_file(path, content)) return false;
+    q.series_file_exists = true;
+    q.patch_strip_level.clear();
+    q.patch_reversed.clear();
+    q.series = parse_series(content, &q.patch_strip_level, &q.patch_reversed);
+    return true;
+}
+
+bool insert_in_series(QuiltState &q, std::string_view patch,
+                      std::string_view opts, std::string_view before) {
+    std::string path = path_join(q.work_dir, q.series_file);
+    std::string content = read_file(path);
+    auto lines = series_lines(content);
+
+    // The new line follows the file's line endings
+    std::string_view eol = !lines.empty() && lines[0].ends_with("\r\n") ? "\r\n" : "\n";
+    std::string entry(patch);
+    if (!opts.empty()) {
+        entry += ' ';
+        entry += opts;
+    }
+    entry += eol;
+
+    std::string result;
+    bool inserted = false;
+    for (auto line : lines) {
+        if (!inserted && !before.empty() && series_line_patch(line) == before) {
+            result += entry;
+            inserted = true;
+        }
+        result += line;
+    }
+    if (!inserted) {
+        if (!result.empty() && !result.ends_with('\n')) result += eol;
+        result += entry;
+    }
+    return store_series(q, path, result);
+}
+
+bool remove_from_series(QuiltState &q, std::string_view patch) {
+    std::string path = path_join(q.work_dir, q.series_file);
+    std::string content = read_file(path);
+    std::string result;
+    for (auto line : series_lines(content)) {
+        auto name = series_line_patch(line);
+        if (name.empty() || name != patch) result += line;
+    }
+    return store_series(q, path, result);
+}
+
+bool rename_in_series(QuiltState &q, std::string_view from, std::string_view to) {
+    std::string path = path_join(q.work_dir, q.series_file);
+    std::string content = read_file(path);
+    std::string result;
+    for (auto line : series_lines(content)) {
+        auto name = series_line_patch(line);
+        if (name.empty() || name != from) {
+            result += line;
+            continue;
+        }
+        // Keep the indentation, options, and comment around the name
+        auto at = name.data() - line.data();
+        result += line.substr(0, checked_cast<size_t>(at));
+        result += to;
+        result += line.substr(checked_cast<size_t>(at + std::ssize(name)));
+    }
+    return store_series(q, path, result);
+}
+
+std::string series_patch_args(const QuiltState &q, std::string_view patch) {
+    std::string content = read_file(path_join(q.work_dir, q.series_file));
+    for (auto line : series_lines(content)) {
+        auto name = series_line_patch(line);
+        if (name.empty() || name != patch) continue;
+        auto end = name.data() - line.data() + std::ssize(name);
+        std::string args;
+        for (const auto &tok : split_on_whitespace(trim(line.substr(checked_cast<size_t>(end))))) {
+            if (tok.starts_with('#')) break;
+            if (!args.empty()) args += ' ';
+            args += tok;
+        }
+        return args;
+    }
+    return {};
+}
+
+bool set_series_strip_level(QuiltState &q, std::string_view patch,
                             int strip_level) {
+    std::string path = path_join(q.work_dir, q.series_file);
     std::string content = read_file(path);
     std::string result;
     bool changed = false;
-    std::string_view rest = content;
-    while (!rest.empty()) {
-        auto nl = str_find(rest, '\n');
-        std::string_view line = rest.substr(0, nl < 0 ? rest.size() : checked_cast<size_t>(nl + 1));
-        rest.remove_prefix(line.size());
+    for (auto line : series_lines(content)) {
+        auto name = series_line_patch(line);
+        if (name.empty() || name != patch) {
+            result += line;
+            continue;
+        }
 
         // Split off the line ending and inline comment as read_series does
         std::string_view body = line;
@@ -336,10 +454,6 @@ bool set_series_strip_level(std::string_view path, std::string_view patch,
             body = body.substr(0, checked_cast<size_t>(hash));
         }
         auto tokens = split_on_whitespace(body);
-        if (tokens.empty() || tokens[0].starts_with('#') || tokens[0] != patch) {
-            result += line;
-            continue;
-        }
 
         // Drop -R and any -p option ("-pN" or "-p N"), then put the new
         // level where the old one was, or right after the name.
@@ -376,7 +490,7 @@ bool set_series_strip_level(std::string_view path, std::string_view patch,
         result += eol;
         changed = true;
     }
-    return !changed || write_file(path, result);
+    return !changed || store_series(q, path, result);
 }
 
 std::vector<std::string> read_applied(std::string_view path) {

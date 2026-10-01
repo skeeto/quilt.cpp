@@ -3,16 +3,6 @@
 #include "platform.hpp"
 
 
-static bool write_series_checked(const QuiltState &q,
-                                 std::span<const std::string> series) {
-    std::string series_abs = path_join(q.work_dir, q.series_file);
-    if (!write_series(series_abs, series, q.patch_strip_level, q.patch_reversed)) {
-        err_line("Failed to write series file.");
-        return false;
-    }
-    return true;
-}
-
 static bool write_applied_checked(const QuiltState &q,
                                   std::span<const std::string> applied) {
     std::string applied_path = path_join(q.work_dir, q.pc_dir, "applied-patches");
@@ -168,13 +158,10 @@ int cmd_delete(QuiltState &q, int argc, char **argv) {
         }
     }
 
-    // Remove from series
-    auto new_series = q.series;
-    new_series.erase(new_series.begin() + *idx);
-    if (!write_series_checked(q, new_series)) {
+    if (!remove_from_series(q, patch)) {
+        err_line("Failed to write series file.");
         return 1;
     }
-    q.series = std::move(new_series);
 
     // Optionally remove the patch file
     if (opt_remove) {
@@ -284,33 +271,8 @@ int cmd_rename(QuiltState &q, int argc, char **argv) {
         }
     }
 
-    // Migrate per-patch metadata before writing series
-    std::string old_key(old_patch);
-    auto sl_it = q.patch_strip_level.find(old_key);
-    int saved_strip = -1;
-    bool saved_reversed = false;
-    if (sl_it != q.patch_strip_level.end()) {
-        saved_strip = sl_it->second;
-        q.patch_strip_level[new_name] = sl_it->second;
-        q.patch_strip_level.erase(sl_it);
-    }
-    if (q.patch_reversed.erase(old_key)) {
-        saved_reversed = true;
-        q.patch_reversed.insert(new_name);
-    }
-
-    auto new_series = q.series;
-    new_series[checked_cast<size_t>(*idx)] = new_name;
-    if (!write_series_checked(q, new_series)) {
-        // Undo metadata migration
-        if (saved_strip >= 0) {
-            q.patch_strip_level[old_key] = saved_strip;
-            q.patch_strip_level.erase(new_name);
-        }
-        if (saved_reversed) {
-            q.patch_reversed.erase(new_name);
-            q.patch_reversed.insert(old_key);
-        }
+    if (!rename_in_series(q, old_patch, new_name)) {
+        err_line("Failed to write series file.");
         if (renamed_pc_dir) {
             rename_path(pc_patch_dir(q, new_name), pc_patch_dir(q, old_patch));
         }
@@ -321,15 +283,7 @@ int cmd_rename(QuiltState &q, int argc, char **argv) {
     }
 
     if (q.is_applied(old_patch) && !write_applied_checked(q, new_applied)) {
-        write_series_checked(q, q.series);
-        if (saved_strip >= 0) {
-            q.patch_strip_level[old_key] = saved_strip;
-            q.patch_strip_level.erase(new_name);
-        }
-        if (saved_reversed) {
-            q.patch_reversed.erase(new_name);
-            q.patch_reversed.insert(old_key);
-        }
+        rename_in_series(q, new_name, old_patch);
         if (renamed_pc_dir) {
             rename_path(pc_patch_dir(q, new_name), pc_patch_dir(q, old_patch));
         }
@@ -339,7 +293,6 @@ int cmd_rename(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    q.series = std::move(new_series);
     if (q.is_applied(old_patch)) {
         q.applied = std::move(new_applied);
     }
@@ -399,6 +352,13 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
             return 1;
         }
     }
+
+    // Like the original quilt, record -p whenever it was given (even -p1),
+    // and insert every patch in front of the same one, keeping their order.
+    std::string patch_args;
+    if (strip_level >= 0) patch_args = "-p" + std::to_string(strip_level);
+    if (reversed) patch_args += patch_args.empty() ? "-R" : " -R";
+    std::string before = q.patch_after_top();
 
     for (const auto &patchfile : patchfiles) {
         // Determine target name
@@ -481,34 +441,12 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
             }
         }
 
-        // Update per-patch metadata. When replacing an existing patch the
-        // original quilt leaves the series entry (and thus its -p/-R args)
-        // untouched.
-        if (!existing) {
-            if (strip_level >= 0 && strip_level != 1) {
-                q.patch_strip_level[name] = strip_level;
-            } else if (strip_level < 0) {
-                q.patch_strip_level.erase(name);
-            }
-            if (reversed) {
-                q.patch_reversed.insert(name);
-            } else {
-                q.patch_reversed.erase(name);
-            }
-
-            // Insert after top applied patch, or at end if none applied
-            ptrdiff_t top_idx = q.top_index();
-            auto new_series = q.series;
-            if (top_idx >= 0 && top_idx + 1 < std::ssize(new_series)) {
-                new_series.insert(new_series.begin() + top_idx + 1, name);
-            } else {
-                new_series.push_back(name);
-            }
-            if (!write_series_checked(q, new_series)) {
-                delete_file(dest);
-                return 1;
-            }
-            q.series = std::move(new_series);
+        // When replacing an existing patch the original quilt leaves the
+        // series entry (and thus its -p/-R args) untouched.
+        if (!existing && !insert_in_series(q, name, patch_args, before)) {
+            err_line("Failed to write series file.");
+            delete_file(dest);
+            return 1;
         }
 
         if (existing && force) {
@@ -1120,31 +1058,8 @@ int cmd_fork(QuiltState &q, int argc, char **argv) {
         renamed_pc_dir = true;
     }
 
-    // Migrate per-patch metadata before writing series
-    auto sl_it = q.patch_strip_level.find(old_name);
-    int saved_strip = -1;
-    bool saved_reversed = false;
-    if (sl_it != q.patch_strip_level.end()) {
-        saved_strip = sl_it->second;
-        q.patch_strip_level[new_name] = sl_it->second;
-        q.patch_strip_level.erase(sl_it);
-    }
-    if (q.patch_reversed.erase(old_name)) {
-        saved_reversed = true;
-        q.patch_reversed.insert(new_name);
-    }
-
-    auto new_series = q.series;
-    new_series[checked_cast<size_t>(*idx)] = new_name;
-    if (!write_series_checked(q, new_series)) {
-        if (saved_strip >= 0) {
-            q.patch_strip_level[old_name] = saved_strip;
-            q.patch_strip_level.erase(new_name);
-        }
-        if (saved_reversed) {
-            q.patch_reversed.erase(new_name);
-            q.patch_reversed.insert(old_name);
-        }
+    if (!rename_in_series(q, old_name, new_name)) {
+        err_line("Failed to write series file.");
         if (renamed_pc_dir) {
             rename_path(new_pc, old_pc);
         }
@@ -1162,15 +1077,7 @@ int cmd_fork(QuiltState &q, int argc, char **argv) {
         }
     }
     if (!write_applied_checked(q, new_applied)) {
-        write_series_checked(q, q.series);
-        if (saved_strip >= 0) {
-            q.patch_strip_level[old_name] = saved_strip;
-            q.patch_strip_level.erase(new_name);
-        }
-        if (saved_reversed) {
-            q.patch_reversed.erase(new_name);
-            q.patch_reversed.insert(old_name);
-        }
+        rename_in_series(q, new_name, old_name);
         if (renamed_pc_dir) {
             rename_path(new_pc, old_pc);
         }
@@ -1180,7 +1087,6 @@ int cmd_fork(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    q.series = std::move(new_series);
     q.applied = std::move(new_applied);
 
     out_line("Fork of patch " + old_name +

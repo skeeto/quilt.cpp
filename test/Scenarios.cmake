@@ -436,6 +436,12 @@ set(QUILT_TEST_SCENARIOS
     refresh_z_pab_on_p0
     refresh_series_comments_kept
     pop_reversed_patch
+    new_preserves_series_comments
+    import_preserves_series_comments
+    delete_preserves_series_comments
+    rename_preserves_series_comments
+    fork_preserves_series_comments
+    refresh_z_preserves_series_comments
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -607,6 +613,8 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     annotate_P_missing_arg
     refresh_z_reversed_fork
     refresh_series_split_p_option
+    refresh_z_fork_series_args
+    series_insert_crlf
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -7906,6 +7914,18 @@ function(qt_run_named_scenario scenario)
         qt_scenario_patches_unapplied_strip_deletion()
     elseif(scenario STREQUAL "pop_reversed_patch")
         qt_scenario_pop_reversed_patch()
+    elseif(scenario STREQUAL "new_preserves_series_comments")
+        qt_scenario_new_preserves_series_comments()
+    elseif(scenario STREQUAL "import_preserves_series_comments")
+        qt_scenario_import_preserves_series_comments()
+    elseif(scenario STREQUAL "delete_preserves_series_comments")
+        qt_scenario_delete_preserves_series_comments()
+    elseif(scenario STREQUAL "rename_preserves_series_comments")
+        qt_scenario_rename_preserves_series_comments()
+    elseif(scenario STREQUAL "fork_preserves_series_comments")
+        qt_scenario_fork_preserves_series_comments()
+    elseif(scenario STREQUAL "refresh_z_preserves_series_comments")
+        qt_scenario_refresh_z_preserves_series_comments()
     elseif(scenario STREQUAL "refresh_z_strip_migration")
         qt_scenario_refresh_z_strip_migration()
     elseif(scenario STREQUAL "annotate_P_missing_arg")
@@ -7926,6 +7946,10 @@ function(qt_run_named_scenario scenario)
         qt_scenario_refresh_z_reversed_fork()
     elseif(scenario STREQUAL "refresh_series_split_p_option")
         qt_scenario_refresh_series_split_p_option()
+    elseif(scenario STREQUAL "refresh_z_fork_series_args")
+        qt_scenario_refresh_z_fork_series_args()
+    elseif(scenario STREQUAL "series_insert_crlf")
+        qt_scenario_series_insert_crlf()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -12045,6 +12069,115 @@ function(qt_scenario_pop_reversed_patch)
     qt_assert_file_text("${QT_WORK_DIR}/m.txt" "new" "pop should restore the original content")
 endfunction()
 
+# Commands that change the series edit only the affected line, like upstream's
+# insert_in_series, remove_from_series, and rename_in_series, so comments,
+# blank lines, and options quilt does not know survive.
+function(qt_scenario_new_preserves_series_comments)
+    qt_begin_test("new_preserves_series_comments")
+    qt_write_file("${QT_WORK_DIR}/patches/series"
+        "# keep\na.patch --fuzz=3 # note\n# mid\n\nc.patch -p1 # c")
+    qt_write_file("${QT_WORK_DIR}/patches/a.patch" "")
+    qt_write_file("${QT_WORK_DIR}/patches/c.patch" "")
+    qt_quilt_ok(ARGS new b.patch MESSAGE "new with nothing applied failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series"
+        "# keep\nb.patch\na.patch --fuzz=3 # note\n# mid\n\nc.patch -p1 # c"
+        "new should go in front of the first patch")
+    # The next patch follows comments, which stay with it
+    qt_quilt_ok(ARGS push MESSAGE "push a.patch failed")
+    qt_quilt_ok(ARGS new -p 0 d.patch MESSAGE "new -p 0 failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series"
+        "# keep\nb.patch\na.patch --fuzz=3 # note\n# mid\n\nd.patch -p0\nc.patch -p1 # c"
+        "new should go right in front of the next patch")
+    # At the end, the unterminated last line gets a newline
+    qt_quilt_ok(ARGS push MESSAGE "push c.patch failed")
+    qt_quilt_ok(ARGS new -p 1 e.patch MESSAGE "new -p 1 failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series"
+        "# keep\nb.patch\na.patch --fuzz=3 # note\n# mid\n\nd.patch -p0\nc.patch -p1 # c\ne.patch"
+        "new should append after the last patch")
+endfunction()
+
+function(qt_scenario_import_preserves_series_comments)
+    qt_begin_test("import_preserves_series_comments")
+    qt_write_file("${QT_WORK_DIR}/patches/series"
+        "# head\na.patch # a\n# mid\nc.patch --fuzz=3 # c\n")
+    qt_write_file("${QT_WORK_DIR}/patches/a.patch" "")
+    qt_write_file("${QT_WORK_DIR}/patches/c.patch" "")
+    qt_write_file("${QT_WORK_DIR}/one.diff" "")
+    qt_write_file("${QT_WORK_DIR}/two.diff" "")
+    qt_write_file("${QT_WORK_DIR}/three.diff" "")
+    qt_write_file("${QT_WORK_DIR}/four.diff" "")
+    # With nothing applied, imports go in front of the first patch, in order
+    qt_quilt_ok(ARGS import -p 0 -R one.diff two.diff MESSAGE "import -p 0 -R failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series"
+        "# head\none.diff -p0 -R\ntwo.diff -p0 -R\na.patch # a\n# mid\nc.patch --fuzz=3 # c"
+        "imports should go in front of the first patch")
+    # In front of the next patch they keep their order too, and an explicit
+    # -p1 is recorded
+    qt_quilt_ok(ARGS push a.patch MESSAGE "push a.patch failed")
+    qt_quilt_ok(ARGS import -p 1 three.diff four.diff MESSAGE "import -p 1 failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series"
+        "# head\none.diff -p0 -R\ntwo.diff -p0 -R\na.patch # a\n# mid\nthree.diff -p1\nfour.diff -p1\nc.patch --fuzz=3 # c"
+        "imports should go right in front of the next patch")
+endfunction()
+
+function(qt_scenario_delete_preserves_series_comments)
+    qt_begin_test("delete_preserves_series_comments")
+    qt_write_file("${QT_WORK_DIR}/patches/series"
+        "# head\na.patch -p0 # a\n\n# mid\nb.patch --fuzz=3 # b\nc.patch\n")
+    qt_write_file("${QT_WORK_DIR}/patches/a.patch" "")
+    qt_write_file("${QT_WORK_DIR}/patches/b.patch" "")
+    qt_write_file("${QT_WORK_DIR}/patches/c.patch" "")
+    qt_quilt_ok(ARGS delete b.patch MESSAGE "delete b.patch failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series"
+        "# head\na.patch -p0 # a\n\n# mid\nc.patch"
+        "delete should remove only the patch's line")
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_quilt_ok(ARGS delete MESSAGE "delete of the top patch failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series"
+        "# head\n\n# mid\nc.patch"
+        "delete of the top patch should remove only its line")
+endfunction()
+
+function(qt_scenario_rename_preserves_series_comments)
+    qt_begin_test("rename_preserves_series_comments")
+    qt_write_file("${QT_WORK_DIR}/patches/series"
+        "# head\na.patch -p0 --fuzz=3 # a\n\nb.patch # b\n")
+    qt_write_file("${QT_WORK_DIR}/patches/a.patch" "")
+    qt_write_file("${QT_WORK_DIR}/patches/b.patch" "")
+    qt_quilt_ok(ARGS rename -P a.patch z.patch MESSAGE "rename failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series"
+        "# head\nz.patch -p0 --fuzz=3 # a\n\nb.patch # b"
+        "rename should change only the patch name")
+endfunction()
+
+function(qt_scenario_fork_preserves_series_comments)
+    qt_begin_test("fork_preserves_series_comments")
+    qt_write_file("${QT_WORK_DIR}/patches/series"
+        "# head\na.patch -p1 --fuzz=3 # a\n# tail\n")
+    qt_write_file("${QT_WORK_DIR}/patches/a.patch" "")
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_quilt_ok(ARGS fork MESSAGE "fork failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series"
+        "# head\na-2.patch -p1 --fuzz=3 # a\n# tail"
+        "fork should change only the patch name")
+endfunction()
+
+function(qt_scenario_refresh_z_preserves_series_comments)
+    qt_begin_test("refresh_z_preserves_series_comments")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series"
+        "# head\na.patch # a\n# mid\nc.patch --fuzz=3 # c\n")
+    qt_write_file("${QT_WORK_DIR}/patches/a.patch"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+y\n")
+    qt_write_file("${QT_WORK_DIR}/patches/c.patch" "")
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "z\n")
+    qt_quilt_ok(ARGS refresh -z MESSAGE "refresh -z failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series"
+        "# head\na.patch # a\n# mid\na-2.patch\nc.patch --fuzz=3 # c"
+        "the fork should go right in front of the next patch")
+endfunction()
+
 # quilt.cpp copies the strip level (and -R) to the fork created by
 # refresh -z. Upstream 0.69 intends to (refresh.in saves old_patch_args)
 # but looks up the strip level under the new name, which is not in the
@@ -12269,4 +12402,37 @@ function(qt_scenario_refresh_series_split_p_option)
     qt_assert_file_text("${QT_WORK_DIR}/sub/f.txt" "a" "pop should restore the file")
     qt_quilt_ok(ARGS push MESSAGE "push failed")
     qt_assert_file_text("${QT_WORK_DIR}/sub/f.txt" "c" "push should reapply the patch")
+endfunction()
+
+# Like upstream's insert_in_series "$patch" "$old_patch_args", the fork gets
+# the original's options. Native only because upstream 0.69 builds an awk
+# program from those options and fails when there is more than one.
+function(qt_scenario_refresh_z_fork_series_args)
+    qt_begin_test("refresh_z_fork_series_args")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "a.patch --fuzz=3 # a\n# tail\n")
+    qt_write_file("${QT_WORK_DIR}/patches/a.patch"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+y\n")
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "z\n")
+    qt_quilt_ok(ARGS refresh -z MESSAGE "refresh -z failed")
+    # With no patch after the original, the fork goes at the end, as upstream
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series"
+        "a.patch --fuzz=3 # a\n# tail\na-2.patch --fuzz=3"
+        "the fork should get the original's options without its comment")
+endfunction()
+
+# Lines inserted into a CRLF series file use CRLF too. Native only because
+# upstream's awk writes them with LF.
+function(qt_scenario_series_insert_crlf)
+    qt_begin_test("series_insert_crlf")
+    qt_write_file("${QT_WORK_DIR}/patches/a.patch" "")
+    qt_write_bytes("${QT_WORK_DIR}/patches/series" "# c\\r\\na.patch\\r\\n")
+    qt_quilt_ok(ARGS new b.patch MESSAGE "new b.patch failed")
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_quilt_ok(ARGS new c.patch MESSAGE "new c.patch failed")
+    # "# c\r\nb.patch\r\na.patch\r\nc.patch\r\n"
+    qt_assert_file_hex("${QT_WORK_DIR}/patches/series"
+        "2320630d0a622e70617463680d0a612e70617463680d0a632e70617463680d0a"
+        "inserted lines should use CRLF")
 endfunction()

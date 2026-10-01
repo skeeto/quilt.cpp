@@ -61,7 +61,7 @@ int cmd_init(QuiltState &q, int argc, char **) {
 
     std::string series_abs = path_join(q.work_dir, q.series_file);
     if (!file_exists(series_abs)) {
-        if (!write_series(series_abs, {}, {}, {})) {
+        if (!write_file(series_abs, "")) {
             err_line("Failed to write series file.");
             return 1;
         }
@@ -129,18 +129,9 @@ int cmd_new(QuiltState &q, int argc, char **argv) {
         }
     }
 
-    // Insert patch name into series (after current top, or at beginning)
-    ptrdiff_t top_idx = q.top_index();
-    if (!q.applied.empty() && top_idx < 0) {
+    if (!q.applied.empty() && q.top_index() < 0) {
         err_line("The series file no longer matches the applied patches. Please run 'quilt pop -a'.");
         return 1;
-    }
-    if (top_idx < 0) {
-        // No applied patches — insert at beginning
-        q.series.insert(q.series.begin(), patch_name);
-    } else {
-        // Insert after the current top
-        q.series.insert(q.series.begin() + top_idx + 1, patch_name);
     }
 
     // Validate strip level
@@ -150,14 +141,9 @@ int cmd_new(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    // Store strip level
-    if (!p_value.empty() && p_value != "1") {
-        q.patch_strip_level[patch_name] = checked_cast<int>(parse_int(p_value));
-    }
-
-    // Write series file
-    std::string series_abs = path_join(q.work_dir, q.series_file);
-    if (!write_series(series_abs, q.series, q.patch_strip_level, q.patch_reversed)) {
+    // Insert into the series after the current top, recording only -p0
+    if (!insert_in_series(q, patch_name, p_value == "0" ? "-p0" : "",
+                          q.patch_after_top())) {
         err_line("Failed to write series file.");
         return 1;
     }
@@ -1203,14 +1189,7 @@ static bool strip_file_trailing_ws(const std::string &path,
 // is dropped too.
 static bool record_strip_level(QuiltState &q, const std::string &patch,
                                int strip_level) {
-    if (strip_level != 1) {
-        q.patch_strip_level[patch] = strip_level;
-    } else {
-        q.patch_strip_level.erase(patch);
-    }
-    q.patch_reversed.erase(patch);
-    std::string series_abs = path_join(q.work_dir, q.series_file);
-    if (!set_series_strip_level(series_abs, patch, strip_level)) {
+    if (!set_series_strip_level(q, patch, strip_level)) {
         err_line("Failed to write series file.");
         return false;
     }
@@ -1491,16 +1470,11 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         // Write .timestamp for the fork
         write_file(path_join(new_pc, ".timestamp"), "");
 
-        // The fork is written forward with the strip level in use, which
-        // defaults to the original's.
-        if (strip_level != 1) {
-            q.patch_strip_level[new_name] = strip_level;
-        }
-
-        // Insert new patch after original in series
-        q.series.insert(q.series.begin() + *idx + 1, new_name);
-        std::string series_abs = path_join(q.work_dir, q.series_file);
-        if (!write_series(series_abs, q.series, q.patch_strip_level, q.patch_reversed)) {
+        // Like upstream, insert the fork after the original (the top) with
+        // the original's options. Refresh then records the strip level the
+        // fork is written with, which defaults to the original's, and drops -R.
+        if (!insert_in_series(q, new_name, series_patch_args(q, old_name),
+                              q.patch_after_top())) {
             err_line("Failed to write series file.");
             return 1;
         }

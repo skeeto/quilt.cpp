@@ -36,7 +36,7 @@ patch3.diff -p2 -R                  # reversed patch, strip level 2
 patch4.diff -p1 # inline comment
 ```
 
-**Rules**: Each non-comment line contains a patch filename (relative to `QUILT_PATCHES`), followed by optional `patch(1)`-style options (`-p0`, `-p2`, `-R`), followed by an optional inline comment (` # text`). The **default strip level is `-p1`** when no `-p` option appears. Quilt updates the series file automatically during `new`, `delete`, `import`, `rename`, `fork`, and `refresh` operations. Users may manually edit the series while patches are applied, provided applied patches retain their original order.
+**Rules**: Each non-comment line contains a patch filename (relative to `QUILT_PATCHES`), followed by optional `patch(1)`-style options (`-p0`, `-p2`, `-R`), followed by an optional inline comment (` # text`). The **default strip level is `-p1`** when no `-p` option appears. Quilt updates the series file automatically during `new`, `delete`, `import`, `rename`, `fork`, and `refresh` operations, changing only the affected patch's line, so comments, blank lines, and other options are kept. New patches go after the topmost applied patch (and any comments following it), or in front of the first patch when none is applied. Users may manually edit the series while patches are applied, provided applied patches retain their original order.
 
 ### The `.pc/` directory structure
 

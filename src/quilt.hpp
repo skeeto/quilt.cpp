@@ -64,6 +64,9 @@ struct QuiltState {
 
     // Computed helpers
     ptrdiff_t top_index() const;     // index of topmost applied in series (-1 if none)
+    // Patch after the topmost applied one (the first patch if none is
+    // applied), which new patches go in front of; empty at the series end.
+    std::string patch_after_top() const;
     bool is_applied(std::string_view patch) const;
     std::optional<ptrdiff_t> find_in_series(std::string_view patch) const;
     int get_strip_level(std::string_view patch) const;  // returns 1 if not set
@@ -174,13 +177,23 @@ bool restore_file(QuiltState &q, std::string_view patch, std::string_view file);
 std::vector<std::string> read_series(std::string_view path,
                                      std::map<std::string, int> *strip_levels,
                                      std::set<std::string> *reversed);
-bool write_series(std::string_view path, std::span<const std::string> patches,
-                  const std::map<std::string, int> &strip_levels,
-                  const std::set<std::string> &reversed);
-// Record strip_level (omitted when 1) and drop -R on patch's series line,
-// leaving comments, other lines, and other options alone.
-bool set_series_strip_level(std::string_view path, std::string_view patch,
+// Line-preserving series edits, like upstream's insert_in_series,
+// remove_from_series, rename_in_series, and change_db_strip_level. Only the
+// patch's own line changes, so comments, blank lines, and options on other
+// lines survive. Each reloads q.series, q.patch_strip_level, and
+// q.patch_reversed from the edited file.
+//
+// insert_in_series adds "patch opts" in front of before's line, or at the
+// end when before is empty. set_series_strip_level records strip_level
+// (omitted when 1) and drops -R on patch's line, keeping its other options.
+bool insert_in_series(QuiltState &q, std::string_view patch,
+                      std::string_view opts, std::string_view before);
+bool remove_from_series(QuiltState &q, std::string_view patch);
+bool rename_in_series(QuiltState &q, std::string_view from, std::string_view to);
+bool set_series_strip_level(QuiltState &q, std::string_view patch,
                             int strip_level);
+// The options on patch's series line, without any comment.
+std::string series_patch_args(const QuiltState &q, std::string_view patch);
 std::vector<std::string> read_applied(std::string_view path);
 bool write_applied(std::string_view path, std::span<const std::string> patches);
 
