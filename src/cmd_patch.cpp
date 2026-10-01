@@ -1183,13 +1183,9 @@ static bool record_strip_level(QuiltState &q, const std::string &patch,
 }
 
 int cmd_refresh(QuiltState &q, int argc, char **argv) {
-    if (q.applied.empty()) {
-        err_line("No patches applied");
-        return 1;
-    }
-
     // Parse options
-    std::string patch;
+    std::optional<std::string_view> patch_arg;
+    int positional_count = 0;
     std::string p_format;
     int i = 1;
     bool no_timestamps = !get_env("QUILT_NO_DIFF_TIMESTAMPS").empty();
@@ -1327,23 +1323,39 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
             i += 2;
             continue;
         }
-        if (arg[0] == '-') {
+        if (arg.starts_with('-')) {
             err("Unrecognized option: "); err_line(arg);
             return 1;
         }
-        // Non-option: patch name
-        if (patch.empty()) {
-            patch = arg;
-        }
+        // Non-option: patch name, given even when empty
+        patch_arg = arg;
+        ++positional_count;
         i += 1;
     }
 
-    if (patch.empty()) {
-        patch = q.applied.back();
-    } else {
-        auto found = find_applied_patch(q, patch);
-        if (!found) return 1;
-        patch = *found;
+    if (positional_count > 1) {
+        err_line("Usage: quilt refresh [-p n|-p ab] [-u|-U num|-c|-C num] "
+                 "[-z[new_name]] [-f] [--no-timestamps] [--no-index] "
+                 "[--diffstat] [--sort] [--backup] "
+                 "[--strip-trailing-whitespace] [patch]");
+        return 1;
+    }
+    if (!q.series_file_exists) {
+        err_line("No series file found");
+        return 1;
+    }
+
+    // Like upstream, look up the patch first, so that an unknown name is
+    // reported as such. No argument, or an empty one, means the top patch.
+    auto found = find_applied_patch(q, patch_arg.value_or(""));
+    if (!found) return 1;
+    std::string patch = *found;
+
+    // Like upstream, -z forks only the top patch, and only when no patch
+    // is named, even if the name is the top patch's or empty
+    if (opt_fork && patch_arg) {
+        err_line("Can only refresh the topmost patch with -z currently");
+        return 1;
     }
 
     // Like the original quilt, validate the effective strip level, which
@@ -1379,10 +1391,6 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     // written, so a fork with nothing in it leaves everything as it was.
     std::string fork_of;
     if (opt_fork) {
-        if (patch != q.applied.back()) {
-            err_line("Can only use -z with the topmost applied patch");
-            return 1;
-        }
         std::string old_name(patch);
 
         std::string new_name = fork_name.empty() ? next_filename(old_name) : fork_name;
@@ -1711,13 +1719,8 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
 }
 
 int cmd_diff(QuiltState &q, int argc, char **argv) {
-    if (q.applied.empty()) {
-        err_line("No patches applied");
-        return 1;
-    }
-
     // Parse options
-    std::string patch;
+    std::string_view patch_arg;
     std::string p_format;
     std::vector<std::string> file_filter;
     bool no_timestamps = !get_env("QUILT_NO_DIFF_TIMESTAMPS").empty();
@@ -1727,7 +1730,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
     bool reverse = false;
     bool sort_files = true;
     std::string diff_utility;
-    std::string combine_patch;
+    std::optional<std::string_view> combine_arg;
     std::string diff_type = "u";
     std::string context_num;
     DiffAlgorithm diff_algorithm = DiffAlgorithm::myers;
@@ -1747,7 +1750,7 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
     while (i < argc) {
         std::string_view arg = argv[i];
         if (arg == "-P" && i + 1 < argc) {
-            patch = argv[i + 1];
+            patch_arg = argv[i + 1];
             i += 2;
             continue;
         }
@@ -1826,12 +1829,12 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
             continue;
         }
         if (arg == "--combine" && i + 1 < argc) {
-            combine_patch = argv[i + 1];
+            combine_arg = argv[i + 1];
             i += 2;
             continue;
         }
         if (arg.starts_with("--combine=")) {
-            combine_patch = std::string(arg.substr(10));
+            combine_arg = arg.substr(10);
             i += 1;
             continue;
         }
@@ -1873,23 +1876,28 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
             i += 1;
             continue;
         }
-        if (arg[0] == '-') {
+        if (arg.starts_with('-')) {
             err("Unrecognized option: "); err_line(arg);
             return 1;
         }
-        // Non-option: file name or patch name
-        if (arg[0] != '-') {
-            file_filter.push_back(subdir_path(q, arg));
-        }
+        // Non-option: file name. Like upstream, an empty name names no
+        // file, unless the subdirectory prefix makes it one.
+        std::string file = subdir_path(q, arg);
+        if (!file.empty()) file_filter.push_back(std::move(file));
         i += 1;
     }
 
-    // Resolve --combine before -P, in the same order as upstream
+    if (!q.series_file_exists) {
+        err_line("No series file found");
+        return 1;
+    }
+
+    // Resolve --combine before -P, in the same order as upstream. Neither
+    // "-" nor an empty name is looked up: "-" means the first applied
+    // patch, and an empty name matches no patch in the range below.
     std::string combine_start;
-    if (combine_patch == "-") {
-        combine_start = q.applied.front();
-    } else if (!combine_patch.empty()) {
-        auto found = find_applied_patch(q, combine_patch);
+    if (combine_arg && !combine_arg->empty() && *combine_arg != "-") {
+        auto found = find_applied_patch(q, *combine_arg);
         if (!found) return 1;
         combine_start = *found;
     }
@@ -1899,29 +1907,31 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
         return 1;
     }
 
-    if (!combine_patch.empty() && since_refresh) {
+    if (combine_arg && since_refresh) {
         err_line("Options `--combine' and `-z' cannot be combined.");
         return 1;
     }
 
-    if (!combine_patch.empty() && against_snapshot) {
+    if (combine_arg && against_snapshot) {
         err_line("Options `--combine' and `--snapshot' cannot be combined.");
         return 1;
     }
 
-    if (patch.empty()) {
-        patch = q.applied.back();
-    } else {
-        auto found = find_applied_patch(q, patch);
-        if (!found) return 1;
-        patch = *found;
-    }
+    // No -P, or an empty one, means the top patch
+    auto found = find_applied_patch(q, patch_arg);
+    if (!found) return 1;
+    std::string patch = *found;
 
-    if (!combine_start.empty() &&
-        std::ranges::find(q.applied, combine_start) > std::ranges::find(q.applied, patch)) {
-        err("Patch "); err(format_patch(q, combine_start));
-        err(" not applied before patch "); err_line(format_patch(q, patch));
-        return 1;
+    if (combine_arg) {
+        if (*combine_arg == "-") {
+            combine_start = q.applied.front();
+        }
+        if (combine_start.empty() ||
+            std::ranges::find(q.applied, combine_start) > std::ranges::find(q.applied, patch)) {
+            err("Patch "); err(format_patch(q, combine_start));
+            err(" not applied before patch "); err_line(format_patch(q, patch));
+            return 1;
+        }
     }
 
     // Like the original quilt, validate the effective strip level, which

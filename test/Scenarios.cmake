@@ -445,6 +445,7 @@ set(QUILT_TEST_SCENARIOS
     prefix_only_patch_arg
     empty_patch_arg
     patch_lookup_errors
+    refresh_diff_patch_lookup
     push_pop_deletion
     push_keeps_emptied_file
     fold_deletion
@@ -8335,6 +8336,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_empty_patch_arg()
     elseif(scenario STREQUAL "patch_lookup_errors")
         qt_scenario_patch_lookup_errors()
+    elseif(scenario STREQUAL "refresh_diff_patch_lookup")
+        qt_scenario_refresh_diff_patch_lookup()
     elseif(scenario STREQUAL "push_pop_deletion")
         qt_scenario_push_pop_deletion()
     elseif(scenario STREQUAL "push_keeps_emptied_file")
@@ -12703,6 +12706,71 @@ function(qt_scenario_patch_lookup_errors)
     qt_combine_output(combined "${out}" "${err}")
     qt_assert_contains("${combined}" "Usage: quilt rename" "rename with two names should print usage")
     qt_assert_file_text("${QT_WORK_DIR}/patches/series" "p1.patch" "series should be unchanged")
+endfunction()
+
+# refresh and diff look up a named patch like upstream's find_applied_patch,
+# before checking that anything is applied. A given name counts even when
+# it is empty: refresh -z refuses any patch argument, and diff --combine ''
+# names no patch in the range.
+function(qt_scenario_refresh_diff_patch_lookup)
+    qt_begin_test("refresh_diff_patch_lookup")
+    qt_setup_three_patch_stack()
+    qt_read_file_strip(series_before "${QT_WORK_DIR}/patches/series")
+    qt_read_file_strip(p1_before "${QT_WORK_DIR}/patches/p1.patch")
+    qt_write_file("${QT_WORK_DIR}/f1.txt" "newer1\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh p1.patch p2.patch)
+    qt_assert_equal("${rc}" "1" "refresh with two patches should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Usage: quilt refresh" "refresh with two patches should print usage")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/p1.patch" "${p1_before}" "refresh usage should change no patch")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh -z p2.patch)
+    qt_assert_equal("${rc}" "1" "refresh -z of a named patch should fail")
+    qt_assert_contains("${err}" "Can only refresh the topmost patch with -z currently"
+                       "refresh -z should refuse a named top patch")
+    qt_quilt_empty_arg(RESULT rc OUTPUT out ERROR err ARGS refresh -z)
+    qt_assert_equal("${rc}" "1" "refresh -z '' should fail")
+    qt_assert_contains("${err}" "Can only refresh the topmost patch with -z currently"
+                       "refresh -z should refuse an empty patch name")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh -z nonexist)
+    qt_assert_equal("${rc}" "1" "refresh -z of an unknown patch should fail")
+    qt_assert_contains("${err}" "Patch nonexist is not in series" "refresh -z should look up the patch first")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "${series_before}" "refresh -z should not fork")
+    qt_assert_not_exists("${QT_WORK_DIR}/patches/p2-2.patch" "refresh -z should not write a fork")
+    qt_quilt_empty_arg(RESULT rc OUTPUT out ERROR err ARGS diff --combine)
+    qt_assert_equal("${rc}" "1" "diff --combine '' should fail")
+    qt_assert_contains("${err}" "Patch  not applied before patch p2.patch"
+                       "diff --combine '' should name no patch in the range")
+    qt_quilt_empty_arg(RESULT rc OUTPUT out ERROR err ARGS diff)
+    qt_assert_success("${rc}" "diff '' should succeed")
+    qt_assert_contains("${out}" "+new2" "diff '' should name no file and show the whole top patch")
+
+    qt_quilt_ok(ARGS pop -a -f MESSAGE "pop -a failed")
+    foreach(cmd "refresh;patches/" "refresh;nonexist" "diff;-P;patches/"
+                "diff;-P;nonexist" "diff;--combine;nonexist")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS ${cmd})
+        qt_assert_equal("${rc}" "1" "'${cmd}' should fail with nothing applied")
+        string(REGEX REPLACE ".*;" "" name "${cmd}")
+        qt_assert_contains("${err}" "Patch ${name} is not in series" "'${cmd}' should look up the patch")
+    endforeach()
+    foreach(cmd "refresh;p1.patch" "diff;-P;p1.patch" "diff;--combine;p1.patch")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS ${cmd})
+        qt_assert_equal("${rc}" "1" "'${cmd}' should fail with nothing applied")
+        qt_assert_contains("${err}" "Patch p1.patch is not applied" "'${cmd}' should look up the patch")
+    endforeach()
+
+    qt_write_file("${QT_WORK_DIR}/patches/series" "")
+    foreach(cmd "refresh;p1.patch" "diff;-P;p1.patch" "diff;--combine;-")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS ${cmd})
+        qt_assert_equal("${rc}" "1" "'${cmd}' should fail with an empty series")
+        qt_assert_contains("${err}" "No patches in series" "'${cmd}' should report the empty series")
+    endforeach()
+
+    file(REMOVE "${QT_WORK_DIR}/patches/series")
+    foreach(cmd "refresh;p1.patch" "diff;-P;p1.patch" "diff;-z;--combine;-")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS ${cmd})
+        qt_assert_equal("${rc}" "1" "'${cmd}' should fail without a series file")
+        qt_assert_contains("${err}" "No series file found" "'${cmd}' should report the missing series file")
+    endforeach()
 endfunction()
 
 # A file deleted by a patch (+++ /dev/null) is named only by its --- line.
