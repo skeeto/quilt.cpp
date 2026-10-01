@@ -92,6 +92,14 @@ std::vector<std::string> split_lines(std::string_view s);
 std::vector<std::string> split_on_whitespace(std::string_view s);
 std::vector<std::string> shell_split(std::string_view s);
 
+// A patch's description and its diff, split as upstream's patch_header and
+// patch_body split them, and a description without its diffstat, as
+// upstream's strip_diffstat. Like those awk scripts, these keep every byte,
+// CRs included, but end a nonempty result with a newline.
+std::string patch_header(std::string_view patch);
+std::string patch_body(std::string_view patch);
+std::string strip_diffstat(std::string_view header);
+
 // Built-in patch engine.  Like GNU patch given the -f that quilt always
 // passes, it never asks questions: it applies what it can and skips
 // missing files the patch does not create.

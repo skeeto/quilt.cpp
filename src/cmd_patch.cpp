@@ -6,24 +6,6 @@
 #include <cstdlib>
 #include <set>
 
-static std::string read_patch_header(std::string_view patch_path) {
-    std::string content = read_file(patch_path);
-    if (content.empty()) return "";
-
-    std::string header;
-    auto lines = split_lines(content);
-    for (const auto &line : lines) {
-        if (line.starts_with("Index:") ||
-            line.starts_with("---") ||
-            line.starts_with("diff ")) {
-            break;
-        }
-        header += line;
-        header += '\n';
-    }
-    return header;
-}
-
 int cmd_init(QuiltState &q, int argc, char **) {
     if (argc != 1) {
         err_line("Usage: quilt init");
@@ -1506,7 +1488,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     std::string header;
     if (file_exists(patch_file)) {
         old_content = read_file(patch_file);
-        header = read_patch_header(patch_file);
+        header = patch_header(old_content);
     }
 
     // Backup old patch file if requested
@@ -1576,7 +1558,11 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         if (opt_strip_whitespace) append_diff(stripped_content, file, stripped);
     }
 
-    if (!fork_of.empty() && patch_content == header) {
+    // Like upstream, there is something in the patch when the diff is not
+    // empty. The header may hold lines that look like a diff.
+    bool has_diff = std::ssize(patch_content) != std::ssize(header);
+
+    if (!fork_of.empty() && !has_diff) {
         err("Nothing in patch "); err_line(patch_path_display(q, patch));
         return fail();
     }
@@ -1639,15 +1625,6 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
                 patch_content += '\n';
                 patch_content += diff_portion;
             }
-        }
-    }
-
-    // Check if patch has no diff hunks
-    bool has_diff = false;
-    for (auto &line : split_lines(patch_content)) {
-        if (line.starts_with("--- ") || line.starts_with("diff ")) {
-            has_diff = true;
-            break;
         }
     }
 

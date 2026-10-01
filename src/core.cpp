@@ -244,6 +244,110 @@ std::vector<std::string> split_lines(std::string_view s) {
     return lines;
 }
 
+// /^<tag>[ \t][^ \t]/ for a tag of "***", "---" or "+++"
+static bool is_file_label(std::string_view line, std::string_view tag) {
+    return std::ssize(line) >= 5 && line.starts_with(tag) &&
+           (line[3] == ' ' || line[3] == '\t') &&
+           line[4] != ' ' && line[4] != '\t';
+}
+
+// /^Index:[ \t][^ \t]|^diff -/
+static bool is_diff_start(std::string_view line) {
+    return line.starts_with("diff -") ||
+           (std::ssize(line) >= 8 && line.starts_with("Index:") &&
+            (line[6] == ' ' || line[6] == '\t') &&
+            line[7] != ' ' && line[7] != '\t');
+}
+
+struct PatchSplit {
+    ptrdiff_t header_end;  // the header is [0, header_end)
+    ptrdiff_t body_start;  // the body is [body_start, end)
+};
+
+// The state machine shared by upstream's patch_header and patch_body awk
+// scripts. A "*** x" or "--- x" line starts the body only when the next
+// line is "--- y" or "+++ y" respectively. When it is not, the held line
+// goes to the header, and the next line cannot be held in turn, though it
+// may still be an "Index: x" or "diff -" line. A line still held at the
+// end of input is in neither part.
+static PatchSplit split_patch(std::string_view s) {
+    std::string_view confirm;  // the label that confirms the held line
+    ptrdiff_t held = 0;
+    ptrdiff_t n = std::ssize(s);
+    for (ptrdiff_t pos = 0, next = 0; pos < n; pos = next) {
+        ptrdiff_t nl = str_find(s, '\n', pos);
+        ptrdiff_t end = nl < 0 ? n : nl;
+        next = nl < 0 ? n : nl + 1;
+        std::string_view line = s.substr(checked_cast<size_t>(pos),
+                                         checked_cast<size_t>(end - pos));
+        if (confirm.empty()) {
+            if (is_file_label(line, "***")) confirm = "---";
+            else if (is_file_label(line, "---")) confirm = "+++";
+            if (!confirm.empty()) {
+                held = pos;
+                continue;
+            }
+        } else if (is_file_label(line, confirm)) {
+            return {held, held};
+        } else {
+            confirm = {};
+        }
+        if (is_diff_start(line)) return {pos, pos};
+    }
+    return {confirm.empty() ? n : held, n};
+}
+
+// Like awk's print, end the last line with a newline
+static std::string awk_lines(std::string_view s) {
+    std::string r(s);
+    if (!r.empty() && r.back() != '\n') r += '\n';
+    return r;
+}
+
+std::string patch_header(std::string_view patch) {
+    auto split = split_patch(patch);
+    return awk_lines(patch.substr(0, checked_cast<size_t>(split.header_end)));
+}
+
+std::string patch_body(std::string_view patch) {
+    auto split = split_patch(patch);
+    return awk_lines(patch.substr(checked_cast<size_t>(split.body_start)));
+}
+
+// Like upstream: lines matching /#? .* \| / are held until a line matching
+// /^#? .* files? changed/ drops them and itself, or any other line puts
+// them back. The awk script has no END rule, so lines still held at the
+// end are lost.
+std::string strip_diffstat(std::string_view header) {
+    std::string result;
+    std::string held;
+    while (!header.empty()) {
+        ptrdiff_t nl = str_find(header, '\n');
+        ptrdiff_t len = nl < 0 ? std::ssize(header) : nl;
+        std::string_view line = header.substr(0, checked_cast<size_t>(len));
+        header.remove_prefix(checked_cast<size_t>(nl < 0 ? len : len + 1));
+
+        ptrdiff_t space = str_find(line, ' ');
+        if (space >= 0 && str_find(line, " | ", space + 1) >= 0) {
+            held += line;
+            held += '\n';
+            continue;
+        }
+        ptrdiff_t p = line.starts_with('#') ? 1 : 0;
+        if (std::ssize(line) > p && line[checked_cast<size_t>(p)] == ' ' &&
+            (str_find(line, " file changed", p + 1) >= 0 ||
+             str_find(line, " files changed", p + 1) >= 0)) {
+            held.clear();
+            continue;
+        }
+        result += held;
+        result += line;
+        result += '\n';
+        held.clear();
+    }
+    return result;
+}
+
 
 std::vector<std::string> split_on_whitespace(std::string_view s) {
     std::vector<std::string> tokens;

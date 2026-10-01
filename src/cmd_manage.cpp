@@ -23,6 +23,8 @@ static std::vector<std::string> unapplied_patch_files(const QuiltState &q,
                               q.patch_reversed.contains(std::string(patch)));
 }
 
+// An older header split, which only import -f still uses. Everything else
+// splits like upstream, with patch_header and patch_body.
 static std::string extract_header(std::string_view content) {
     std::string header;
     auto lines = split_lines(content);
@@ -488,74 +490,19 @@ int cmd_import(QuiltState &q, int argc, char **argv) {
     return 0;
 }
 
-// Remove an existing diffstat section from a header.
-// Detects "---" separator followed by " file | N ++--" lines ending
-// with a "N file(s) changed" summary line.
-static std::string strip_diffstat(std::string_view header) {
-    auto lines = split_lines(header);
-    std::string result;
-    for (ptrdiff_t i = 0; i < std::ssize(lines); ++i) {
-        const auto &line = lines[checked_cast<size_t>(i)];
-
-        // Detect "---" separator followed by diffstat, or bare diffstat
-        ptrdiff_t ds_start = i;
-        if (line == "---" && i + 1 < std::ssize(lines)) {
-            ds_start = i + 1;
-        }
-
-        const auto &first = lines[checked_cast<size_t>(ds_start)];
-        if (!first.empty() && first[0] == ' ' &&
-            str_find(first, '|') >= 0) {
-            bool found_summary = false;
-            ptrdiff_t summary_end = -1;
-            for (ptrdiff_t j = ds_start; j < std::ssize(lines); ++j) {
-                const auto &l = lines[checked_cast<size_t>(j)];
-                if (l.find("changed") != std::string::npos &&
-                    l.find("file") != std::string::npos) {
-                    found_summary = true;
-                    summary_end = j;
-                    break;
-                }
-                if (l.empty() || (l[0] != ' ' && str_find(l, '|') < 0))
-                    break;
-            }
-            if (found_summary) {
-                // Keep the "---" separator if the diffstat followed it
-                if (ds_start != i) {
-                    result += line;
-                    result += '\n';
-                }
-                i = summary_end;
-                if (i + 1 < std::ssize(lines) && lines[checked_cast<size_t>(i + 1)].empty())
-                    i++;
-                continue;
-            }
-        }
-        result += line;
-        result += '\n';
-    }
-    return result;
-}
-
-// Strip trailing whitespace from each line of a header.
+// Strip trailing spaces and tabs from each line of a header. Like upstream's
+// sed -e 's:[ \t]*$::', this leaves a CR, and a missing final newline, alone.
 static std::string strip_header_trailing_ws(std::string_view header) {
     std::string result;
-    auto lines = split_lines(header);
-    for (const auto &line : lines) {
-        if (line.empty()) {
-            result += '\n';
-            continue;
-        }
-        // Strip \r from CRLF before checking for trailing whitespace
-        std::string_view l = line;
-        if (!l.empty() && l.back() == '\r') l.remove_suffix(1);
-        auto end = l.find_last_not_of(" \t");
-        if (end == std::string::npos) {
-            result += '\n';
-        } else {
-            result += l.substr(0, end + 1);
-            result += '\n';
-        }
+    while (!header.empty()) {
+        ptrdiff_t nl = str_find(header, '\n');
+        ptrdiff_t len = nl < 0 ? std::ssize(header) : nl;
+        std::string_view line = header.substr(0, checked_cast<size_t>(len));
+        header.remove_prefix(checked_cast<size_t>(nl < 0 ? len : len + 1));
+        while (!line.empty() && (line.back() == ' ' || line.back() == '\t'))
+            line.remove_suffix(1);
+        result += line;
+        if (nl >= 0) result += '\n';
     }
     return result;
 }
@@ -632,34 +579,32 @@ int cmd_header(QuiltState &q, int argc, char **argv) {
         return h;
     };
 
+    // Like upstream, end the new header with a newline (unless it ends with
+    // a CR) before the strip options apply, then append the patch body.
+    auto write_header = [&](std::string h) {
+        if (!h.empty() && h.back() != '\n' && h.back() != '\r') h += '\n';
+        if (opt_backup) {
+            copy_file(patch_file, patch_file + "~");
+        }
+        write_file(patch_file, apply_strip(std::move(h)) + patch_body(content));
+    };
+
     if (mode == PRINT) {
-        std::string header = apply_strip(extract_header(content));
+        std::string header = apply_strip(patch_header(content));
         out(header);
         return 0;
     }
 
     if (mode == APPEND) {
         std::string stdin_data = read_stdin();
-        std::string old_header = extract_header(content);
-        std::string new_header = apply_strip(old_header + stdin_data);
-        if (opt_backup) {
-            copy_file(patch_file, patch_file + "~");
-        }
-        std::string new_content = replace_header(content, new_header);
-        write_file(patch_file, new_content);
+        write_header(patch_header(content) + stdin_data);
         out_line("Appended text to header of patch " +
                  patch_path_display(q, patch));
         return 0;
     }
 
     if (mode == REPLACE) {
-        std::string stdin_data = read_stdin();
-        std::string new_header = apply_strip(stdin_data);
-        if (opt_backup) {
-            copy_file(patch_file, patch_file + "~");
-        }
-        std::string new_content = replace_header(content, new_header);
-        write_file(patch_file, new_content);
+        write_header(read_stdin());
         out_line("Replaced header of patch " +
                  patch_path_display(q, patch));
         return 0;
@@ -669,7 +614,7 @@ int cmd_header(QuiltState &q, int argc, char **argv) {
         std::string editor = get_env("EDITOR");
         if (editor.empty()) editor = "vi";
 
-        std::string header = extract_header(content);
+        std::string header = patch_header(content);
         // Insert DEP-3 template if header is empty and --dep3 given
         if (opt_dep3 && trim(header).empty()) {
             header = dep3_template;
@@ -684,14 +629,10 @@ int cmd_header(QuiltState &q, int argc, char **argv) {
             return 1;
         }
 
-        std::string new_header = apply_strip(read_file(tmp_file));
+        std::string new_header = read_file(tmp_file);
         delete_file(tmp_file);
 
-        if (opt_backup) {
-            copy_file(patch_file, patch_file + "~");
-        }
-        std::string new_content = replace_header(content, new_header);
-        write_file(patch_file, new_content);
+        write_header(std::move(new_header));
         out_line("Replaced header of patch " + patch_path_display(q, patch));
         return 0;
     }

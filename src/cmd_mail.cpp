@@ -5,43 +5,6 @@
 #include <cstdio>
 
 
-static std::string extract_header(std::string_view content) {
-    std::string header;
-    auto lines = split_lines(content);
-    for (const auto &line : lines) {
-        if (line.starts_with("Index:") ||
-            line.starts_with("--- ") ||
-            line.starts_with("diff ") ||
-            line.starts_with("===")) {
-            break;
-        }
-        header += line;
-        header += '\n';
-    }
-    return header;
-}
-
-static std::string extract_diff(std::string_view content) {
-    auto lines = split_lines(content);
-    std::string diff;
-    bool in_diff = false;
-    for (const auto &line : lines) {
-        if (!in_diff) {
-            if (line.starts_with("Index:") ||
-                line.starts_with("--- ") ||
-                line.starts_with("diff ") ||
-                line.starts_with("===")) {
-                in_diff = true;
-            }
-        }
-        if (in_diff) {
-            diff += line;
-            diff += '\n';
-        }
-    }
-    return diff;
-}
-
 static bool has_non_ascii(std::string_view s) {
     for (char ch : s) {
         if (static_cast<unsigned char>(ch) > 127) return true;
@@ -278,8 +241,8 @@ int cmd_mail(QuiltState &q, int argc, char **argv) {
         }
 
         // Extract header and diff
-        std::string header = extract_header(content);
-        std::string diff = extract_diff(content);
+        std::string header = patch_header(content);
+        std::string diff = patch_body(content);
 
         // Split header into subject (first line) and body (rest)
         std::string subject_text;

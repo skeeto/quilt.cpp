@@ -279,6 +279,12 @@ set(QUILT_TEST_SCENARIOS
     header_strip_diffstat_false_positive
     header_edit_backup
     header_replace_no_newline
+    header_desc_lookalike_lines
+    header_context_diff_no_index
+    header_crlf_preserved
+    header_strip_diffstat_upstream
+    header_lookahead_edges
+    refresh_keeps_lookalike_header
     color_option_accepted
     color_option_invalid
     trace_option_accepted
@@ -528,6 +534,7 @@ set(QUILT_TEST_SCENARIOS
 # Skipped when testing an external quilt binary.
 set(QUILT_TEST_SCENARIOS_NATIVE
     mail_basic
+    mail_subject_lookalike
     mail_single_patch
     mail_patch_range
     mail_dash_range
@@ -8037,6 +8044,20 @@ function(qt_run_named_scenario scenario)
         qt_scenario_series_leading_space_no_newline()
     elseif(scenario STREQUAL "header_replace_no_newline")
         qt_scenario_header_replace_no_newline()
+    elseif(scenario STREQUAL "header_desc_lookalike_lines")
+        qt_scenario_header_desc_lookalike_lines()
+    elseif(scenario STREQUAL "header_context_diff_no_index")
+        qt_scenario_header_context_diff_no_index()
+    elseif(scenario STREQUAL "header_crlf_preserved")
+        qt_scenario_header_crlf_preserved()
+    elseif(scenario STREQUAL "header_strip_diffstat_upstream")
+        qt_scenario_header_strip_diffstat_upstream()
+    elseif(scenario STREQUAL "header_lookahead_edges")
+        qt_scenario_header_lookahead_edges()
+    elseif(scenario STREQUAL "refresh_keeps_lookalike_header")
+        qt_scenario_refresh_keeps_lookalike_header()
+    elseif(scenario STREQUAL "mail_subject_lookalike")
+        qt_scenario_mail_subject_lookalike()
     elseif(scenario STREQUAL "annotate_no_series_file")
         qt_scenario_annotate_no_series_file()
     elseif(scenario STREQUAL "push_reject_no_newline")
@@ -8864,9 +8885,8 @@ function(qt_scenario_header_edit_backup)
     qt_assert_exists("${QT_WORK_DIR}/patches/p.patch~" "backup patch file should exist")
 endfunction()
 
-# header_strip_diffstat_false_positive: header --strip-diffstat on header with pipe line
-# followed by empty line (not a real diffstat): triggers the break at line 518 in
-# strip_diffstat() when the lookahead exits early (found_summary stays false)
+# header_strip_diffstat_false_positive: header --strip-diffstat keeps a line
+# that looks like a diffstat line when no summary line follows it
 function(qt_scenario_header_strip_diffstat_false_positive)
     qt_begin_test("header_strip_diffstat_false_positive")
     qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
@@ -9621,9 +9641,8 @@ function(qt_scenario_series_leading_space_no_newline)
     qt_assert_contains("${series_out}" "p.patch" "series should list p.patch (trim leading space)")
 endfunction()
 
-# header_replace_no_newline: cmd_manage.cpp line 97
-# replace_header() adds a trailing '\n' when new_header doesn't end with one.
-# Triggered by "quilt header -r" with stdin that lacks a trailing newline.
+# header_replace_no_newline: "quilt header -r" adds a trailing '\n' when
+# stdin lacks one, like upstream ensure_trailing_newline.
 function(qt_scenario_header_replace_no_newline)
     qt_begin_test("header_replace_no_newline")
     qt_write_file("${QT_WORK_DIR}/f.txt" "original\n")
@@ -9632,8 +9651,6 @@ function(qt_scenario_header_replace_no_newline)
     qt_write_file("${QT_WORK_DIR}/f.txt" "changed\n")
     qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
     # Replace the header with a string that does NOT end with a newline.
-    # replace_header() checks: if (!result.empty() && result.back() != '\n')
-    #   result += '\n';    (line 97 in cmd_manage.cpp)
     qt_quilt_ok(ARGS header -r INPUT "my description without newline"
         MESSAGE "header -r failed")
     qt_quilt_ok(OUTPUT hdr_out ARGS header MESSAGE "header read failed")
@@ -15169,4 +15186,133 @@ function(qt_scenario_revert_reversed_patch)
     qt_assert_success("${rc}" "second revert failed")
     qt_assert_equal("${out}" "File a.txt is unchanged\n"
                     "a reverted file should be unchanged")
+endfunction()
+
+# Like upstream patch_header and patch_body, only "Index: x", "diff -",
+# "--- x" followed by "+++ y", and "*** x" followed by "--- y" start the
+# diff, so a description may hold lines that merely look like those.
+function(qt_scenario_header_desc_lookalike_lines)
+    qt_begin_test("header_desc_lookalike_lines")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    set(desc "Title\n=====\n--- note\ndiff between v1 and v2\nIndex:\nIndex:foo\n*** NOTE ***\n---  two spaces\n\n")
+    qt_quilt_ok(ARGS header -r INPUT "${desc}" MESSAGE "header -r failed")
+    qt_quilt_ok(OUTPUT out ARGS header MESSAGE "header failed")
+    qt_assert_equal("${out}" "${desc}" "header should print the whole description")
+    qt_quilt_ok(OUTPUT out ENV "EDITOR=cat" ARGS header -e MESSAGE "header -e failed")
+    qt_assert_equal("${out}" "${desc}Replaced header of patch p.patch\n"
+                    "the editor should get the whole description")
+    qt_quilt_ok(ARGS header -a INPUT "Appended\n" MESSAGE "header -a failed")
+    qt_quilt_ok(OUTPUT out ARGS header MESSAGE "header failed")
+    qt_assert_equal("${out}" "${desc}Appended\n" "header -a should append after the description")
+    qt_quilt_ok(ARGS header -r INPUT "New\n" MESSAGE "header -r failed")
+    qt_read_file_raw(patch "${QT_WORK_DIR}/patches/p.patch")
+    qt_assert_matches("${patch}" "^New\nIndex: " "header -r should replace the whole description")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+endfunction()
+
+# A context diff without Index: lines starts at its "*** x" line.
+function(qt_scenario_header_context_diff_no_index)
+    qt_begin_test("header_context_diff_no_index")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh -c --no-index --no-timestamps MESSAGE "refresh failed")
+    qt_quilt_ok(OUTPUT out ARGS header MESSAGE "header failed")
+    qt_assert_equal("${out}" "" "context diff should have no header")
+    qt_quilt_ok(ARGS header -a INPUT "Note\n" MESSAGE "header -a failed")
+    qt_read_file_raw(patch "${QT_WORK_DIR}/patches/p.patch")
+    qt_assert_matches("${patch}" "^Note\n\\*\\*\\* [^\n]*\n--- " "header -a should go above the *** line")
+    qt_quilt_ok(ARGS pop MESSAGE "pop of context patch failed")
+    qt_quilt_ok(ARGS push MESSAGE "push of context patch failed")
+endfunction()
+
+# Header edits keep the patch's bytes, CRs included. As in upstream, the
+# trailing whitespace strip leaves a CR alone, and a new header ending in
+# a CR gets no newline (ensure_trailing_newline).
+function(qt_scenario_header_crlf_preserved)
+    qt_begin_test("header_crlf_preserved")
+    set(body "Index: f.txt\\r\\n--- f.txt.orig\\r\\n+++ f.txt\\r\\n@@ -1 +1 @@\\r\\n-a\\r\\n+b\\r\\n")
+    set(body_hex "496e6465783a20662e7478740d0a2d2d2d20662e7478742e6f7269670d0a2b2b2b20662e7478740d0a4040202d31202b312040400d0a2d610d0a2b620d0a")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.patch\n")
+    qt_write_bytes("${QT_WORK_DIR}/patches/p.patch" "Desc \\r\\n\\r\\n${body}")
+    qt_quilt_ok(ARGS header -a --strip-trailing-whitespace p.patch INPUT "Note \n"
+                MESSAGE "header -a failed")
+    qt_assert_file_hex("${QT_WORK_DIR}/patches/p.patch" "44657363200d0a0d0a4e6f74650a${body_hex}"
+                       "header -a should keep CRs")
+    qt_quilt_ok(ARGS header -r p.patch INPUT "New\r" MESSAGE "header -r failed")
+    qt_assert_file_hex("${QT_WORK_DIR}/patches/p.patch" "4e65770d${body_hex}"
+                       "header -r should add no newline after a CR")
+endfunction()
+
+# strip_diffstat, as upstream: stat lines (a " | " after some space) go
+# only when a summary line follows, the summary line always goes, "#"
+# prefixes included, and the blank line after a diffstat stays. Stat lines
+# still pending at the end of the header are lost.
+function(qt_scenario_header_strip_diffstat_upstream)
+    qt_begin_test("header_strip_diffstat_upstream")
+    set(diff "Index: f.txt\n--- f.txt.orig\n+++ f.txt\n@@ -1 +1 @@\n-a\n+b\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.patch\nq.patch\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch"
+        "Subject: s\n---\n f.txt |    2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n\nTrailer\n 2 files changed\n# g.txt |    2 +-\n# 1 file changed\nA table x | y\n\n${diff}")
+    qt_quilt_ok(OUTPUT out ARGS header --strip-diffstat p.patch MESSAGE "header failed")
+    qt_assert_equal("${out}" "Subject: s\n---\n\nTrailer\nA table x | y\n\n" "wrong stripped header")
+    qt_write_file("${QT_WORK_DIR}/patches/q.patch" "Intro\nlast a | b\n${diff}")
+    qt_quilt_ok(OUTPUT out ARGS header --strip-diffstat q.patch MESSAGE "header failed")
+    qt_assert_equal("${out}" "Intro\n" "a pending stat line at the end should be lost")
+endfunction()
+
+# The header ends where a held "--- x" line meets end of input, and a line
+# after a failed lookahead is not reconsidered, as in upstream.
+function(qt_scenario_header_lookahead_edges)
+    qt_begin_test("header_lookahead_edges")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.patch\nq.patch\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch" "Intro\n--- trailing\n")
+    qt_quilt_ok(OUTPUT out ARGS header p.patch MESSAGE "header failed")
+    qt_assert_equal("${out}" "Intro\n" "held line at end of input")
+    qt_write_file("${QT_WORK_DIR}/patches/q.patch" "Intro\n--- x\n--- f.txt.orig\n+++ f.txt\n")
+    qt_quilt_ok(OUTPUT out ARGS header q.patch MESSAGE "header failed")
+    qt_assert_equal("${out}" "Intro\n--- x\n--- f.txt.orig\n+++ f.txt\n" "no rescan after failed lookahead")
+endfunction()
+
+# Refresh keeps the whole header, including lines that look like diff
+# starts and a "---" diffstat block. Whatever the header holds, an empty
+# diff is "Nothing in patch".
+function(qt_scenario_refresh_keeps_lookalike_header)
+    qt_begin_test("refresh_keeps_lookalike_header")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    set(desc "Subject: x\n\n=====\ndiff between\n--- note\n---\n f.txt |    2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n\n")
+    qt_quilt_ok(ARGS header -r INPUT "${desc}" MESSAGE "header -r failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "c\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(OUTPUT out ARGS header MESSAGE "header failed")
+    qt_assert_equal("${out}" "${desc}" "refresh should keep the header")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(OUTPUT out ARGS refresh MESSAGE "refresh failed")
+    qt_assert_equal("${out}" "Nothing in patch p.patch\n" "an empty diff should be nothing")
+endfunction()
+
+# The mail subject and body come from the whole description.
+function(qt_scenario_mail_subject_lookalike)
+    qt_begin_test("mail_subject_lookalike")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS header -r INPUT "diff between v1 and v2 breaks it\n\n=====\nBody\n"
+                MESSAGE "header -r failed")
+    qt_quilt_ok(ARGS mail --mbox "${QT_TEST_BASE}/out.mbox" --from "t@e.com" MESSAGE "mail failed")
+    qt_read_file_raw(mbox "${QT_TEST_BASE}/out.mbox")
+    qt_assert_contains("${mbox}" "Subject: [PATCH] diff between v1 and v2 breaks it\n" "wrong subject")
+    qt_assert_contains("${mbox}" "\n=====\nBody\n\nIndex: " "body should hold the rest of the description")
 endfunction()

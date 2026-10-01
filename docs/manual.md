@@ -60,7 +60,7 @@ patch4.diff -p1 # inline comment
 
 ### Patch file format
 
-Patch files are standard unified diffs with an optional header. All text before the first diff hunk is the "header" — quilt preserves this during `refresh`. The header can contain DEP-3 metadata, diffstat output, or freeform description text. The diff section uses configurable path styles: `-p1` default (`dir.orig/file` vs `dir/file`), `-p0` (bare paths), or `-p ab` (`a/file` vs `b/file`, matching `git diff` output).
+Patch files are standard unified diffs with an optional header. All text before the first diff is the "header" — quilt preserves this during `refresh`. The diff starts at the first `Index: file` line, `diff -` line, or pair of file name lines (`--- old` then `+++ new`, or `*** old` then `--- new` for a context diff), so the header may hold lines such as a bare `---` separator, `=====`, or `diff between versions`. The header can contain DEP-3 metadata, diffstat output, or freeform description text. The diff section uses configurable path styles: `-p1` default (`dir.orig/file` vs `dir/file`), `-p0` (bare paths), or `-p ab` (`a/file` vs `b/file`, matching `git diff` output).
 
 ---
 
@@ -211,7 +211,7 @@ quilt diff --combine -         # Combined diff of all applied patches
 
 #### `quilt header [-a|-r|-e] [--backup] [--dep3] [--strip-diffstat] [--strip-trailing-whitespace] [patch]`
 
-Prints or modifies the descriptive header of the topmost or specified patch. The header is all text preceding the first diff hunk in the patch file.
+Prints or modifies the descriptive header of the topmost or specified patch. The header is all text preceding the first diff in the patch file (see "Patch file format" above).
 
 **Modes**: Without `-a`/`-r`/`-e`, prints the header (read-only). `-e` opens the header in `$EDITOR`. `-a` appends stdin to the header. `-r` replaces the header with stdin. `--dep3` inserts a DEP-3 template when editing (Debian standard for patch metadata with fields like `Description`, `Author`, `Origin`, `Bug`, `Forwarded`, `Last-Update`). `--strip-diffstat` removes diffstat output from the header. `--backup` saves old patch as `patch~`.
 
