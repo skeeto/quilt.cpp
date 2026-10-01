@@ -343,6 +343,7 @@ set(QUILT_TEST_SCENARIOS
     refresh_subdir_patch
     refresh_unchanged_message
     refresh_empty_message
+    refresh_empty_unchanged
     diff_combine_equals
     refresh_sorted_default
     diff_P_shadowed
@@ -7705,6 +7706,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_refresh_unchanged_message()
     elseif(scenario STREQUAL "refresh_empty_message")
         qt_scenario_refresh_empty_message()
+    elseif(scenario STREQUAL "refresh_empty_unchanged")
+        qt_scenario_refresh_empty_unchanged()
     elseif(scenario STREQUAL "diff_combine_equals")
         qt_scenario_diff_combine_equals()
     elseif(scenario STREQUAL "refresh_sorted_default")
@@ -9939,6 +9942,30 @@ function(qt_scenario_refresh_empty_message)
     qt_quilt_ok(ARGS new empty.patch MESSAGE "new failed")
     qt_quilt_ok(OUTPUT out ARGS refresh MESSAGE "refresh failed")
     qt_assert_contains("${out}" "Nothing in patch" "empty refresh should say Nothing")
+endfunction()
+
+# refresh_empty_unchanged: an existing zero-byte patch file with nothing to
+# refresh is unchanged; "Nothing in patch" is only for a newly written file
+function(qt_scenario_refresh_empty_unchanged)
+    qt_begin_test("refresh_empty_unchanged")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "a.patch\n")
+    qt_write_file("${QT_WORK_DIR}/patches/a.patch" "")
+    qt_quilt_ok(ARGS push -q MESSAGE "push failed")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS refresh MESSAGE "refresh failed")
+    qt_assert_contains("${out}" "Patch a.patch is unchanged"
+        "refresh of an existing empty patch should say unchanged")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_not_contains("${combined}" "Nothing in patch"
+        "refresh of an existing empty patch should not say Nothing")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/a.patch" ""
+        "empty patch file should stay empty")
+    qt_quilt_ok(ARGS pop -q MESSAGE "pop failed")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS push --refresh MESSAGE "push --refresh failed")
+    qt_assert_contains("${out}" "Patch a.patch is unchanged"
+        "push --refresh of an existing empty patch should say unchanged")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_not_contains("${combined}" "Nothing in patch"
+        "push --refresh of an existing empty patch should not say Nothing")
 endfunction()
 
 # diff_combine_equals: diff --combine=patch should work with = syntax

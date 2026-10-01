@@ -1664,14 +1664,12 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         }
     }
 
-    // Check if patch content is unchanged (only skip write if file exists)
+    // Leave an existing patch file alone if its content is unchanged, even
+    // when there is nothing in it. Like upstream, "Nothing in patch" is only
+    // for a patch file that gets written.
     if (patch_content == old_content && file_exists(patch_file)) {
-        if (!has_diff) {
-            out("Nothing in patch "); out_line(patch_path_display(q, patch));
-        } else {
-            out("Patch "); out(patch_path_display(q, patch));
-            out_line(" is unchanged");
-        }
+        out("Patch "); out(patch_path_display(q, patch));
+        out_line(" is unchanged");
         return record_strip_level(q, patch, strip_level) ? 0 : 1;
     }
 
