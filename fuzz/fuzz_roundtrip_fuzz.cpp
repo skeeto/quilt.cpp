@@ -1,9 +1,9 @@
 // This is free and unencumbered software released into the public domain.
 //
 // libFuzzer harness for fuzz-matching code paths in builtin_patch.
-// Generates a valid unified diff between two strings, mutates the
-// "old" content to simulate source drift, then applies the patch with
-// fuzz > 0.  No correctness assertion — just checking for crashes in
+// Generates a valid unified diff between two strings with each diff
+// algorithm, mutates the "old" content to simulate source drift, then
+// applies each patch with fuzz > 0.  No correctness assertion — just checking for crashes in
 // the offset-search and context-trimming logic.
 
 #include "quilt.hpp"
@@ -52,15 +52,6 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     // Cap size to avoid Myers OOM
     if (old_content.size() + new_content.size() > 1024) return 0;
 
-    // Generate diff from original old → new
-    std::map<std::string, std::string> fs;
-    fs["old"] = old_content;
-    fs["new"] = new_content;
-
-    DiffResult dr = builtin_diff("old", "new", 3, {}, {},
-                                 DiffFormat::unified, &fs);
-    if (dr.exit_code == 0) return 0;
-
     // Mutate old content to simulate source drift.  Each mutation byte
     // selects a position in old to XOR, spreading changes across the file.
     std::string mutated = old_content;
@@ -73,20 +64,39 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         for (char &c : mutated) if (c == '\r') c = 'X';
     }
 
-    // Apply patch to mutated old with fuzz matching
-    fs["old"] = mutated;
-    PatchOptions opts;
-    opts.strip_level  = 0;
-    opts.fuzz         = fuzz_level;
-    opts.reverse      = false;
-    opts.force        = true;   // keep going even if hunks fail
-    opts.remove_empty = false;
-    opts.merge        = false;
-    opts.dry_run      = false;
-    opts.quiet        = true;
-    opts.fs           = &fs;
+    // Each algorithm shapes hunks differently, giving the fuzz matcher
+    // different context to trim.
+    for (DiffAlgorithm algorithm : {DiffAlgorithm::myers,
+                                    DiffAlgorithm::minimal,
+                                    DiffAlgorithm::patience,
+                                    DiffAlgorithm::histogram}) {
+        // Generate diff from original old → new.  Label both sides with
+        // the same name so the patch engine targets the mutated file
+        // regardless of its old/new name heuristic.
+        std::map<std::string, std::string> fs;
+        fs["old"] = old_content;
+        fs["new"] = new_content;
 
-    builtin_patch(dr.output, opts);
+        DiffResult dr = builtin_diff("old", "new", 3, "a/file", "b/file",
+                                     DiffFormat::unified, algorithm, &fs);
+        if (dr.exit_code == 0) return 0;
+
+        // Apply patch to mutated old with fuzz matching
+        fs.clear();
+        fs["file"] = mutated;
+        PatchOptions opts;
+        opts.strip_level  = 1;
+        opts.fuzz         = fuzz_level;
+        opts.reverse      = false;
+        opts.force        = true;   // keep going even if hunks fail
+        opts.remove_empty = false;
+        opts.merge        = false;
+        opts.dry_run      = false;
+        opts.quiet        = true;
+        opts.fs           = &fs;
+
+        builtin_patch(dr.output, opts);
+    }
 
     // No assertion — the value is exercising fuzz matching, offset search,
     // and context trimming on well-formed patches without crashing.

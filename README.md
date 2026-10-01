@@ -115,15 +115,19 @@ filesystem despite arbitrary filenames in fuzz-generated patches.
 `QUILT_*_ARGS` environment variables, covering single/double quoting,
 backslash escapes, and `$VAR`/`${VAR}` expansion.
 
-`fuzz_roundtrip` generates a diff between two fuzzed strings, applies
-the resulting patch to the first string, and asserts the result matches
-the second. This catches semantic correctness bugs that crash-only
-fuzzing misses.
+`fuzz_roundtrip` generates a diff between two fuzzed strings with each
+diff algorithm (myers, minimal, patience, histogram) in both unified
+and context format, applies each resulting patch to the first string,
+and asserts the result matches the second. This catches semantic
+correctness bugs that crash-only fuzzing misses.
 
-`fuzz_roundtrip_fuzz` generates a valid diff, then mutates the "old"
-content to simulate source drift before applying the patch with fuzz
-matching (fuzz 1–3). This exercises the offset-search and
-context-trimming logic on well-formed patches without crashing.
+`fuzz_roundtrip_fuzz` generates a valid diff with each algorithm, then
+mutates the "old" content to simulate source drift before applying the
+patch with fuzz matching (fuzz 1–3). This exercises the offset-search
+and context-trimming logic on well-formed patches without crashing.
+
+The normal build compiles these four harnesses without linking them, so
+an API change that would break them fails there too.
 
 `fuzz_differential` is a standalone differential tester (not
 libFuzzer). It generates random sequences of quilt operations and runs

@@ -154,6 +154,20 @@ if(ENABLE_FUZZ)
     # Compares quilt.cpp against system quilt via fork/exec.
     add_executable(fuzz_differential fuzz/fuzz_differential.cpp)
     target_compile_features(fuzz_differential PRIVATE cxx_std_20)
+else()
+    # Compile the libFuzzer harnesses in every build so an API change that
+    # breaks them fails here, not only under ENABLE_FUZZ. Linking them
+    # needs libFuzzer, so the objects go unused.
+    add_library(fuzz_harnesses OBJECT
+        fuzz/fuzz_patch.cpp
+        fuzz/fuzz_shell_split.cpp
+        fuzz/fuzz_roundtrip.cpp
+        fuzz/fuzz_roundtrip_fuzz.cpp
+    )
+    target_include_directories(fuzz_harnesses PRIVATE src)
+    target_compile_options(fuzz_harnesses PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wconversion>
+    )
 endif()
 
 enable_testing()

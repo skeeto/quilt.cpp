@@ -1,12 +1,15 @@
 // This is free and unencumbered software released into the public domain.
 //
 // libFuzzer harness for round-trip diff->patch correctness.
-// Generates a diff between two fuzzed strings, applies the patch to
-// the first, and asserts the result matches the second.
+// Generates a diff between two fuzzed strings with every diff algorithm
+// in both unified and context format, applies each patch to the first
+// string, and asserts the result matches the second.
 
 #include "quilt.hpp"
 #include <cstdint>
 #include <cstddef>
+#include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <string>
 #include <string_view>
@@ -38,39 +41,56 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     // Myers is O(N*M) in the worst case; 1024 bytes keeps peak memory in check.
     if (old_content.size() + new_content.size() > 1024) return 0;
 
-    // Populate in-memory filesystem
-    std::map<std::string, std::string> fs;
-    fs["old"] = old_content;
-    fs["new"] = new_content;
+    static constexpr struct { DiffAlgorithm algorithm; const char *name; }
+    algorithms[] = {
+        {DiffAlgorithm::myers,     "myers"},
+        {DiffAlgorithm::minimal,   "minimal"},
+        {DiffAlgorithm::patience,  "patience"},
+        {DiffAlgorithm::histogram, "histogram"},
+    };
+    static constexpr struct { DiffFormat format; const char *name; }
+    formats[] = {
+        {DiffFormat::unified, "unified"},
+        {DiffFormat::context, "context"},
+    };
 
-    // Generate diff
-    DiffResult dr = builtin_diff("old", "new", 3, {}, {},
-                                 DiffFormat::unified, &fs);
+    for (auto [algorithm, algorithm_name] : algorithms) {
+        for (auto [format, format_name] : formats) {
+            std::map<std::string, std::string> fs;
+            fs["old"] = old_content;
+            fs["new"] = new_content;
 
-    // If identical, nothing to test
-    if (dr.exit_code == 0) return 0;
+            // Label both sides with the same name so the patch engine
+            // targets one file regardless of its old/new name heuristic.
+            DiffResult dr = builtin_diff("old", "new", 3, "a/file", "b/file",
+                                         format, algorithm, &fs);
 
-    // Apply patch to old_content
-    fs["old"] = old_content;  // restore in case diff touched it
-    PatchOptions opts;
-    opts.strip_level = 0;
-    opts.fuzz        = 0;
-    opts.reverse     = false;
-    opts.force       = false;
-    opts.remove_empty = false;
-    opts.merge       = false;
-    opts.dry_run     = false;
-    opts.quiet       = true;
-    opts.fs          = &fs;
+            // If identical, nothing to test
+            if (dr.exit_code == 0) return 0;
 
-    builtin_patch(dr.output, opts);
+            fs.clear();
+            fs["file"] = old_content;
+            PatchOptions opts;
+            opts.strip_level = 1;
+            opts.fuzz        = 0;
+            opts.quiet       = true;
+            opts.fs          = &fs;
 
-    // Assert round-trip: patched old must equal new
-    auto it = fs.find("old");
-    std::string_view result = (it != fs.end()) ? std::string_view(it->second)
-                                               : std::string_view{};
-    if (result != new_content) {
-        __builtin_trap();
+            PatchResult pr = builtin_patch(dr.output, opts);
+
+            // Assert round-trip: patched old must equal new
+            auto it = fs.find("file");
+            if (pr.exit_code != 0 || it == fs.end() ||
+                it->second != new_content) {
+                std::fprintf(stderr,
+                             "round-trip failed: algorithm=%s format=%s "
+                             "patch exit=%d\n%s%s%s",
+                             algorithm_name, format_name, pr.exit_code,
+                             dr.output.c_str(), pr.out.c_str(),
+                             pr.err.c_str());
+                std::abort();
+            }
+        }
     }
 
     return 0;

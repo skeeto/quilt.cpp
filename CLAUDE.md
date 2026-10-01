@@ -37,7 +37,13 @@ cmake --build build
 # Windows cross-compile (mingw-w64, produces static .exe)
 cmake -B build-win32 -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64.cmake
 cmake --build build-win32
+
+# libFuzzer targets (fuzz/); on macOS use Homebrew LLVM's clang++
+cmake -B build-fuzz -G Ninja -DENABLE_FUZZ=ON -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++
+cmake --build build-fuzz
 ```
+
+The normal build compiles the libFuzzer harnesses (`fuzz_harnesses` object library, never linked), so a change to `builtin_diff`, `builtin_patch`, or `shell_split` that breaks them fails `cmake --build build`. Update the harnesses alongside such API changes. See README.md "Fuzz Testing" for running them.
 
 ## Amalgamation
 
