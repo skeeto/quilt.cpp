@@ -155,6 +155,7 @@ set(QUILT_TEST_SCENARIOS
     delete_applied
     new_no_name
     new_already_exists
+    new_strips_patches_prefix
     next_unknown_target
     previous_unknown_target
     add_no_patches_applied
@@ -6522,8 +6523,20 @@ function(qt_scenario_new_already_exists)
     # Try to create the same patch name again
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS new existing.patch)
     qt_assert_failure("${rc}" "new with duplicate name should fail")
-    qt_combine_output(combined "${out}" "${err}")
-    qt_assert_contains("${combined}" "exist" "error should mention already exists")
+    qt_assert_equal("${err}" "Patch existing.patch exists already\n" "duplicate new error")
+endfunction()
+
+function(qt_scenario_new_strips_patches_prefix)
+    qt_begin_test("new_strips_patches_prefix")
+    qt_quilt_ok(ARGS new patches/x.patch MESSAGE "new patches/x.patch failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "x.patch" "series should name x.patch")
+    qt_assert_exists("${QT_WORK_DIR}/.pc/x.patch" "backup directory should be .pc/x.patch")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS new patches/x.patch)
+    qt_assert_failure("${rc}" "new of an existing patch should fail")
+    qt_assert_equal("${err}" "Patch x.patch exists already\n" "duplicate new error")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ENV "QUILT_PATCHES_PREFIX=1" ARGS new x.patch)
+    qt_assert_failure("${rc}" "new of an existing patch should fail")
+    qt_assert_equal("${err}" "Patch patches/x.patch exists already\n" "duplicate new error with prefix")
 endfunction()
 
 function(qt_scenario_new_combined_p_flag)
@@ -7772,6 +7785,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_new_no_name()
     elseif(scenario STREQUAL "new_already_exists")
         qt_scenario_new_already_exists()
+    elseif(scenario STREQUAL "new_strips_patches_prefix")
+        qt_scenario_new_strips_patches_prefix()
     elseif(scenario STREQUAL "new_combined_p_flag")
         qt_scenario_new_combined_p_flag()
     elseif(scenario STREQUAL "next_with_target")

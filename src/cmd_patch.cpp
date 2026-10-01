@@ -80,11 +80,10 @@ int cmd_new(QuiltState &q, int argc, char **argv) {
     if (std::ssize(args->operands) != 1 || args->operands[0].empty()) {
         return usage_error(argv[0]);
     }
-    std::string patch_name(args->operands[0]);
+    std::string patch_name(strip_patches_prefix(q, args->operands[0]));
 
-    // Verify patch doesn't already exist in series
     if (q.find_in_series(patch_name).has_value()) {
-        err("Patch "); err(patch_name); err_line(" already exists in series.");
+        err_line("Patch " + patch_path_display(q, patch_name) + " exists already");
         return 1;
     }
 
