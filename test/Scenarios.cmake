@@ -456,6 +456,10 @@ set(QUILT_TEST_SCENARIOS
     push_malformed_hunk
     push_zero_context_insert
     push_missing_patch_file
+    push_garbage_patch
+    push_force_garbage_patch
+    push_header_only_section
+    fold_garbage_input
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -8074,6 +8078,14 @@ function(qt_run_named_scenario scenario)
         qt_scenario_fork_preserves_series_comments()
     elseif(scenario STREQUAL "refresh_z_preserves_series_comments")
         qt_scenario_refresh_z_preserves_series_comments()
+    elseif(scenario STREQUAL "push_garbage_patch")
+        qt_scenario_push_garbage_patch()
+    elseif(scenario STREQUAL "push_force_garbage_patch")
+        qt_scenario_push_force_garbage_patch()
+    elseif(scenario STREQUAL "push_header_only_section")
+        qt_scenario_push_header_only_section()
+    elseif(scenario STREQUAL "fold_garbage_input")
+        qt_scenario_fold_garbage_input()
     elseif(scenario STREQUAL "refresh_z_strip_migration")
         qt_scenario_refresh_z_strip_migration()
     elseif(scenario STREQUAL "annotate_P_missing_arg")
@@ -12774,4 +12786,93 @@ function(qt_scenario_push_missing_patch_file)
     qt_assert_equal("${out}"
         "Applying patch a.patch\nPatch a.patch does not exist; applied empty patch\nNothing in patch a.patch\n\nNow at patch a.patch\n"
         "push --refresh should note the missing patch before refreshing it")
+endfunction()
+
+# Input with no hunk at all is garbage to GNU patch, so push refuses a patch
+# file holding only a description, a blank line, or file headers. A zero-byte
+# patch file is not run through patch, so it is different.
+function(qt_scenario_push_garbage_patch)
+    qt_begin_test("push_garbage_patch")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "a.patch\n")
+    foreach(content "Just a description\n" "\n" "--- a/f.txt\n+++ b/f.txt\n")
+        qt_write_file("${QT_WORK_DIR}/patches/a.patch" "${content}")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+        qt_assert_failure("${rc}" "push of a patch with no hunk should fail")
+        qt_combine_output(combined "${out}" "${err}")
+        qt_assert_equal("${combined}"
+            "Applying patch a.patch\npatch: **** Only garbage was found in the patch input.\nPatch a.patch does not apply (enforce with -f)\n"
+            "push should report garbage and refuse the patch")
+        qt_assert_not_exists("${QT_WORK_DIR}/.pc/applied-patches"
+                             "the patch should not be recorded as applied")
+        qt_assert_not_exists("${QT_WORK_DIR}/.pc/a.patch"
+                             "push should leave no backup directory")
+        qt_assert_file_text("${QT_WORK_DIR}/f.txt" "x" "f.txt should be untouched")
+    endforeach()
+endfunction()
+
+# push -f records a patch with no hunk as applied but needing a refresh,
+# reports it as empty because it backed up no files, and stops there
+function(qt_scenario_push_force_garbage_patch)
+    qt_begin_test("push_force_garbage_patch")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "a.patch\nb.patch\n")
+    qt_write_file("${QT_WORK_DIR}/patches/a.patch" "Just a description\n")
+    qt_write_file("${QT_WORK_DIR}/patches/b.patch" "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+y\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -f -a)
+    qt_assert_failure("${rc}" "forced push of a patch with no hunk should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "patch: **** Only garbage was found in the patch input.\n"
+                       "push -f should report garbage")
+    qt_assert_contains("${out}" "Patch a.patch appears to be empty; applied\n"
+                       "push -f should report the patch as empty")
+    qt_assert_not_contains("${combined}" "forced; needs refresh"
+                           "an empty patch is not reported as forced")
+    qt_assert_not_contains("${combined}" "b.patch" "push -f should stop at the forced patch")
+    qt_quilt_ok(OUTPUT out ARGS applied MESSAGE "applied failed")
+    qt_assert_equal("${out}" "a.patch\n" "the forced patch should be applied")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_failure("${rc}" "push should refuse until the forced patch is refreshed")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "The topmost patch a.patch needs to be refreshed first."
+                       "push should ask for a refresh")
+    qt_quilt_ok(OUTPUT out ARGS refresh MESSAGE "refresh failed")
+    qt_assert_equal("${out}" "Patch a.patch is unchanged\n" "refresh should leave the patch unchanged")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/a.patch" "Just a description"
+                        "refresh should keep the description")
+    qt_quilt_ok(ARGS push MESSAGE "push after refresh failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "y" "b.patch should be applied")
+endfunction()
+
+# Like GNU patch, push ignores file headers with no hunk after them, so it
+# neither needs nor backs up the file they name
+function(qt_scenario_push_header_only_section)
+    qt_begin_test("push_header_only_section")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "a.patch\n")
+    qt_write_file("${QT_WORK_DIR}/patches/a.patch"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+y\n--- a/g.txt\n+++ b/g.txt\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_success("${rc}" "push should ignore the header-only section")
+    qt_assert_equal("${out}" "Applying patch a.patch\npatching file f.txt\n\nNow at patch a.patch\n"
+                    "push should patch only f.txt")
+    qt_assert_equal("${err}" "" "push should print nothing on stderr")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "y" "f.txt should be patched")
+    qt_assert_not_exists("${QT_WORK_DIR}/g.txt" "g.txt should not be created")
+    qt_quilt_ok(OUTPUT out ARGS files MESSAGE "files failed")
+    qt_assert_equal("${out}" "f.txt\n" "only f.txt should be backed up")
+endfunction()
+
+# fold fails on input with no hunk, as GNU patch does, unless forced
+function(qt_scenario_fold_garbage_input)
+    qt_begin_test("fold_garbage_input")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS fold INPUT "Just a description\n")
+    qt_assert_failure("${rc}" "fold of input with no hunk should fail")
+    qt_assert_equal("${err}" "patch: **** Only garbage was found in the patch input.\n"
+                    "fold should report garbage")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS fold -f INPUT "Just a description\n")
+    qt_assert_success("${rc}" "fold -f should ignore the failure")
+    qt_assert_equal("${err}" "patch: **** Only garbage was found in the patch input.\n"
+                    "fold -f should still report garbage")
 endfunction()

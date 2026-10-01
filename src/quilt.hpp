@@ -110,7 +110,7 @@ struct PatchOptions {
 };
 
 struct PatchResult {
-    int exit_code;             // 0=success, 1=rejects
+    int exit_code;             // 0=success, 1=rejects, 2=fatal
     std::string out;           // stdout-equivalent messages
     std::string err;           // stderr-equivalent messages
 };

@@ -434,7 +434,8 @@ static std::vector<PatchFile> parse_patch(std::string_view text, int strip_level
             pf.hunks.push_back(std::move(hunk));
         }
 
-        files.push_back(std::move(pf));
+        // Like GNU patch, ignore file headers with no hunk after them
+        if (!pf.hunks.empty()) files.push_back(std::move(pf));
     }
 
     return files;
@@ -984,7 +985,13 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
         return result;
     }
 
+    // Like GNU patch, empty input applies nothing, but input with no hunk
+    // at all is fatal, even with -f or -s
     if (files.empty()) {
+        if (!patch_text.empty()) {
+            result.exit_code = 2;
+            result.err = "patch: **** Only garbage was found in the patch input.\n";
+        }
         return result;
     }
 

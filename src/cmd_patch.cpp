@@ -1662,10 +1662,17 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         }
     }
 
+    // Like upstream, refreshing clears the .needs_refresh marker left by a
+    // forced push, even when the patch file does not change
+    std::string nr = path_join(pc_patch_dir(q, patch), ".needs_refresh");
+
     // Leave an existing patch file alone if its content is unchanged, even
     // when there is nothing in it. Like upstream, "Nothing in patch" is only
     // for a patch file that gets written.
     if (patch_content == old_content && file_exists(patch_file)) {
+        if (file_exists(nr)) {
+            delete_file(nr);
+        }
         out("Patch "); out(patch_path_display(q, patch));
         out_line(" is unchanged");
         return record_strip_level(q, patch, strip_level) ? 0 : 1;
@@ -1708,7 +1715,6 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     write_file(path_join(pc_patch_dir(q, patch), ".timestamp"), "");
 
     // Clear .needs_refresh marker if present
-    std::string nr = path_join(pc_patch_dir(q, patch), ".needs_refresh");
     if (file_exists(nr)) {
         delete_file(nr);
     }
