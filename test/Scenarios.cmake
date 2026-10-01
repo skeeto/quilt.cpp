@@ -410,6 +410,7 @@ set(QUILT_TEST_SCENARIOS
     fork_pc_migration
     prefixed_args_delete
     push_pop_deletion
+    push_keeps_emptied_file
     fold_deletion
     files_unapplied_strip_deletion
     patches_unapplied_strip_deletion
@@ -7698,6 +7699,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_prefixed_args_delete()
     elseif(scenario STREQUAL "push_pop_deletion")
         qt_scenario_push_pop_deletion()
+    elseif(scenario STREQUAL "push_keeps_emptied_file")
+        qt_scenario_push_keeps_emptied_file()
     elseif(scenario STREQUAL "fold_deletion")
         qt_scenario_fold_deletion()
     elseif(scenario STREQUAL "files_unapplied_strip_deletion")
@@ -11496,6 +11499,34 @@ function(qt_scenario_push_pop_deletion)
     qt_assert_contains("${out}" "Restoring f.txt" "pop should restore f.txt")
     qt_assert_file_text("${QT_WORK_DIR}/f.txt" "precious" "pop should restore f.txt contents")
     qt_assert_file_text("${QT_WORK_DIR}/sub/g.txt" "also precious" "pop should restore sub/g.txt contents")
+endfunction()
+
+# push does not pass -E to patch, so a file that a patch empties without
+# deleting it (+++ is not /dev/null) is kept as an empty file.
+function(qt_scenario_push_keeps_emptied_file)
+    qt_begin_test("push_keeps_emptied_file")
+    qt_write_file("${QT_WORK_DIR}/sub/deep/x" "z\n")
+    qt_write_file("${QT_WORK_DIR}/patches/e.patch" [=[--- a/sub/deep/x
++++ b/sub/deep/x
+@@ -1 +0,0 @@
+-z
+]=])
+    qt_write_file("${QT_WORK_DIR}/patches/series" "e.patch\n")
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_assert_exists("${QT_WORK_DIR}/sub/deep/x" "push should keep the emptied file")
+    qt_read_file_raw(emptied "${QT_WORK_DIR}/sub/deep/x")
+    qt_assert_equal("${emptied}" "" "push should leave the file empty")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/e.patch" "-z" "refresh should keep the removed line")
+    qt_assert_file_not_contains("${QT_WORK_DIR}/patches/e.patch" "/dev/null" "refresh should not turn the patch into a deletion")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/deep/x" "z" "pop should restore the file")
+
+    # -E from QUILT_PATCH_OPTS still removes the file and its empty parents
+    qt_quilt_ok(ENV "QUILT_PATCH_OPTS=-E" ARGS push MESSAGE "push with -E failed")
+    qt_assert_not_exists("${QT_WORK_DIR}/sub" "push with -E should remove the file and empty directories")
+    qt_quilt_ok(ARGS pop MESSAGE "pop after -E failed")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/deep/x" "z" "pop should restore the file removed by -E")
 endfunction()
 
 function(qt_scenario_fold_deletion)

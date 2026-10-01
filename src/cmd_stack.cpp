@@ -424,7 +424,6 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
         // Apply the patch using built-in patch engine
         PatchOptions patch_opts;
         patch_opts.strip_level = q.get_strip_level(name);
-        patch_opts.remove_empty = true;
         patch_opts.force = force;
         if (q.patch_reversed.contains(name)) patch_opts.reverse = true;
         if (fuzz >= 0) patch_opts.fuzz = fuzz;
