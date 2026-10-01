@@ -3,6 +3,7 @@
 #include "platform.hpp"
 #include <cmath>
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <optional>
 #include <regex>
@@ -348,66 +349,65 @@ int cmd_graph(QuiltState &q, int argc, char **argv) {
     bool opt_reduce = false;
     bool opt_edge_labels = false;
     std::optional<int> opt_lines;
-    std::optional<std::string_view> patch_arg;
+    bool opt_postscript = false;
 
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
-        if (arg == "--all") {
-            opt_all = true;
-        } else if (arg == "--reduce") {
-            opt_reduce = true;
-        } else if (arg == "--lines") {
-            opt_lines = 2;
-            if (i + 1 < argc && is_number(argv[i + 1])) {
-                opt_lines = checked_cast<int>(parse_int(argv[++i]));
+    enum { ALL = 256, REDUCE, LINES, EDGE_LABELS };
+    static constexpr LongOpt longopts[] = {
+        {"all", OptArg::none, ALL},
+        {"reduce", OptArg::none, REDUCE},
+        {"lines", OptArg::optional, LINES},
+        {"edge-labels", OptArg::required, EDGE_LABELS},
+    };
+    auto args = parse_options(argc, argv, "T:h", longopts);
+    if (!args) return 1;
+    for (const auto &opt : args->options) {
+        switch (opt.key) {
+        case 'T':
+            if (opt.value != "ps") return usage_error(argv[0]);
+            opt_postscript = true;
+            break;
+        case ALL: opt_all = true; break;
+        case REDUCE: opt_reduce = true; break;
+        case LINES:
+            // Like upstream, --lines alone means 2, and the number only
+            // goes after "=", so "--lines 3" names patch 3
+            if (opt.value.empty()) {
+                opt_lines = 2;
+            } else if (is_number(opt.value)) {
+                // Saturate, since no patch has more lines than that
+                int lines = 0;
+                auto [ptr, ec] = std::from_chars(opt.value.data(),
+                                                 opt.value.data() + opt.value.size(), lines);
+                if (ec == std::errc::result_out_of_range) {
+                    lines = std::numeric_limits<int>::max();
+                }
+                opt_lines = lines;
+            } else {
+                return usage_error(argv[0]);
             }
-        } else if (arg.starts_with("--lines=")) {
-            std::string value(arg.substr(8));
-            if (!is_number(value)) {
-                err_line("Usage: quilt graph [--all] [--reduce] [--lines[=num]] [--edge-labels=files] [-T ps] [patch]");
-                return 1;
-            }
-            opt_lines = checked_cast<int>(parse_int(value));
-        } else if (arg == "--edge-labels") {
-            if (i + 1 >= argc || std::string_view(argv[i + 1]) != "files") {
-                err_line("Usage: quilt graph [--all] [--reduce] [--lines[=num]] [--edge-labels=files] [-T ps] [patch]");
-                return 1;
-            }
+            break;
+        case EDGE_LABELS:
+            if (opt.value != "files") return usage_error(argv[0]);
             opt_edge_labels = true;
-            ++i;
-        } else if (arg == "--edge-labels=files") {
-            opt_edge_labels = true;
-        } else if (arg == "-T") {
-            if (i + 1 >= argc || std::string_view(argv[i + 1]) != "ps") {
-                err_line("Usage: quilt graph [--all] [--reduce] [--lines[=num]] [--edge-labels=files] [-T ps] [patch]");
-                return 1;
-            }
-            ++i;
-            err_line("quilt graph -T ps: not implemented");
-            return 1;
-        } else if (arg == "-Tps") {
-            err_line("quilt graph -T ps: not implemented");
-            return 1;
-        } else if (!arg.empty() && arg[0] == '-') {
-            err_line("Usage: quilt graph [--all] [--reduce] [--lines[=num]] [--edge-labels=files] [-T ps] [patch]");
-            return 1;
-        } else if (patch_arg) {
-            err_line("Usage: quilt graph [--all] [--reduce] [--lines[=num]] [--edge-labels=files] [-T ps] [patch]");
-            return 1;
-        } else {
-            patch_arg = arg;
+            break;
+        case 'h': return command_help(argv[0]);
         }
     }
-
-    if (patch_arg && opt_all) {
-        err_line("Usage: quilt graph [--all] [--reduce] [--lines[=num]] [--edge-labels=files] [-T ps] [patch]");
+    const auto &operands = args->operands;
+    if (std::ssize(operands) > 1 || (opt_all && !operands.empty())) {
+        return usage_error(argv[0]);
+    }
+    if (opt_postscript) {
+        err_line("quilt graph -T ps: not implemented");
         return 1;
     }
+    std::string_view patch_arg;
+    if (!operands.empty()) patch_arg = operands[0];
 
     std::string selected_patch;
     if (!opt_all) {
         // No argument, or an empty one, means the top patch
-        auto found = find_applied_patch(q, patch_arg.value_or(""));
+        auto found = find_applied_patch(q, patch_arg);
         if (!found) return 1;
         selected_patch = *found;
     } else if (q.applied.empty()) {

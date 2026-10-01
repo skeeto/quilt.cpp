@@ -542,6 +542,8 @@ set(QUILT_TEST_SCENARIOS
     import_no_files
     getopt_header
     getopt_files_patches_fold
+    getopt_graph
+    getopt_help_operand
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -721,6 +723,8 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     import_force_mode_per_patch
     push_fuzz_value_forms
     getopt_long_prefixes
+    getopt_mail
+    getopt_help_value
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -1871,9 +1875,9 @@ function(qt_scenario_graph_lines_with_num)
     qt_quilt_ok(ARGS add f.txt MESSAGE "add second failed")
     qt_write_file("${QT_WORK_DIR}/f.txt" "1\n2a\n3\n4\n5\n6\n7\n8\n9b\n10\n")
     qt_quilt_ok(ARGS refresh MESSAGE "refresh second failed")
-    # --lines followed by a number (covers the `opt_lines = stoi(argv[++i])` branch)
-    qt_quilt_ok(OUTPUT graph_out ERROR graph_err ARGS graph --lines 3 MESSAGE "graph --lines 3 failed")
-    qt_assert_contains("${graph_out}" "digraph dependencies {" "graph --lines N should emit DOT")
+    # --lines with a number, which only goes after "="
+    qt_quilt_ok(OUTPUT graph_out ERROR graph_err ARGS graph --lines=3 MESSAGE "graph --lines=3 failed")
+    qt_assert_contains("${graph_out}" "digraph dependencies {" "graph --lines=N should emit DOT")
 endfunction()
 
 function(qt_scenario_graph_lines_nan)
@@ -3875,7 +3879,7 @@ function(qt_scenario_mail_bad_option)
     qt_begin_test("mail_bad_option")
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS mail --no-such-option)
     qt_assert_failure("${rc}" "bad option should fail")
-    qt_assert_contains("${err}" "unknown option" "bad option should mention unknown option")
+    qt_assert_contains("${err}" "unrecognized option '--no-such-option'" "bad option should be named")
 endfunction()
 
 function(qt_scenario_mail_no_from)
@@ -8587,6 +8591,14 @@ function(qt_run_named_scenario scenario)
         qt_scenario_getopt_files_patches_fold()
     elseif(scenario STREQUAL "getopt_long_prefixes")
         qt_scenario_getopt_long_prefixes()
+    elseif(scenario STREQUAL "getopt_graph")
+        qt_scenario_getopt_graph()
+    elseif(scenario STREQUAL "getopt_help_operand")
+        qt_scenario_getopt_help_operand()
+    elseif(scenario STREQUAL "getopt_mail")
+        qt_scenario_getopt_mail()
+    elseif(scenario STREQUAL "getopt_help_value")
+        qt_scenario_getopt_help_value()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -9508,7 +9520,7 @@ function(qt_scenario_graph_lines_identical_content)
     # graph --lines: calls compute_ranges for both patches.
     # patchA's backup = "original\n", patchB's backup (next node) = "original\n" (patchA didn't change it).
     # builtin_diff("original\n", "original\n") returns exit_code=0 → line 133: return early.
-    qt_quilt_ok(OUTPUT graph_out ARGS graph --lines 2 MESSAGE "graph --lines failed")
+    qt_quilt_ok(OUTPUT graph_out ARGS graph --lines=2 MESSAGE "graph --lines failed")
     qt_assert_contains("${graph_out}" "digraph" "should produce dot output")
 endfunction()
 
@@ -16161,4 +16173,80 @@ function(qt_scenario_getopt_long_prefixes)
     qt_assert_file_contains("${QT_WORK_DIR}/patches/p2.patch" "1 file changed" "refresh --diff should add a diffstat")
     qt_quilt_ok(OUTPUT out ARGS diff --diff-a minimal -P p1.patch MESSAGE "diff --diff-a failed")
     qt_assert_contains("${out}" "+A2" "diff --diff-a minimal should diff p1")
+endfunction()
+
+# graph takes a --lines number only after "=", so "--lines 3" names patch
+# 3, and refuses a patch with --all, or more than one
+function(qt_scenario_getopt_graph)
+    qt_begin_test("getopt_graph")
+    qt_setup_getopt_stack()
+
+    qt_assert_usage_error(graph graph --all p1.patch)
+    qt_assert_usage_error(graph graph p1.patch p2.patch)
+    qt_assert_usage_error(graph graph -T pdf)
+    qt_assert_usage_error(graph graph --edge-labels=nodes)
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS graph --lines 3)
+    qt_assert_equal("${rc}" "1" "graph --lines 3 should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Patch 3 is not in series" "graph --lines 3 should name patch 3")
+
+    qt_quilt_ok(OUTPUT out ARGS graph -- p1.patch MESSAGE "graph -- p1.patch failed")
+    qt_assert_contains("${out}" "label=\"p1.patch\"" "graph -- p1.patch should graph p1")
+    qt_quilt_ok(OUTPUT out ARGS graph p1.patch --lines= --edge-labels files MESSAGE "graph p1.patch --lines= failed")
+    qt_assert_contains("${out}" "label=\"p1.patch\"" "graph p1.patch --lines= should graph p1")
+endfunction()
+
+# Only getopt finds -h, so after "--" it names a file
+function(qt_scenario_getopt_help_operand)
+    qt_begin_test("getopt_help_operand")
+    qt_setup_getopt_stack()
+
+    qt_quilt_ok(OUTPUT out ARGS diff -- -h MESSAGE "diff -- -h failed")
+    qt_assert_equal("${out}" "" "diff -- -h should diff no file")
+    qt_quilt_ok(OUTPUT out ARGS patches -- -h MESSAGE "patches -- -h failed")
+    qt_assert_equal("${out}" "" "patches -- -h should find no patch")
+    qt_quilt_ok(OUTPUT out ENV "QUILT_SERIES_ARGS=-h" ARGS series MESSAGE "series with QUILT_SERIES_ARGS=-h failed")
+    qt_assert_contains("${out}" "Usage: quilt series" "QUILT_SERIES_ARGS=-h should print the help")
+endfunction()
+
+# mail takes its long options with "=" or the value in the next word,
+# -m with the value attached, and "--", and at most two patches
+function(qt_scenario_getopt_mail)
+    qt_begin_test("getopt_mail")
+    qt_setup_getopt_stack()
+    qt_quilt_ok(ARGS header -r p1.patch INPUT "First patch\n" MESSAGE "header p1 failed")
+    qt_quilt_ok(ARGS header -r p2.patch INPUT "Second patch\n" MESSAGE "header p2 failed")
+    set(mbox "${QT_TEST_BASE}/out.mbox")
+
+    qt_assert_usage_error(mail mail --mbox "${mbox}" --from a@b.c p1.patch p2.patch p3.patch)
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS mail --mbox "${mbox}" --to)
+    qt_assert_equal("${rc}" "1" "mail --to without a value should fail")
+    qt_assert_contains("${err}" "option '--to' requires an argument" "mail --to")
+    qt_assert_not_exists("${mbox}" "usage errors should write no mbox")
+
+    qt_quilt_ok(ARGS mail "--mbox=${mbox}" --from=a@b.c -mintro --prefix RFC -- p1.patch p2.patch
+                MESSAGE "mail with getopt forms failed")
+    qt_assert_file_contains("${mbox}" "Subject: [RFC 1/2] First patch" "mail should take --prefix RFC")
+    qt_assert_file_contains("${mbox}" "Subject: [RFC 2/2] Second patch" "mail should mail p1 to p2")
+    qt_assert_file_contains("${mbox}" "From: a@b.c" "mail should take --from=a@b.c")
+endfunction()
+
+# Without the dispatcher's own scan for -h, a file or a value may be "-h",
+# and the stubs still print their help
+function(qt_scenario_getopt_help_value)
+    qt_begin_test("getopt_help_value")
+    qt_setup_getopt_stack()
+
+    qt_quilt_ok(OUTPUT out ARGS add -- -h MESSAGE "add -- -h failed")
+    qt_assert_contains("${out}" "File -h added to patch p2.patch" "add -- -h should add the file -h")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS files --combine -h)
+    qt_assert_equal("${rc}" "1" "files --combine -h should fail")
+    qt_assert_contains("${err}" "Patch -h is not in series" "files --combine -h should look up patch -h")
+
+    qt_quilt_ok(OUTPUT out ARGS grep -h MESSAGE "grep -h failed")
+    qt_assert_contains("${out}" "Usage: quilt grep" "grep -h should print the help")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS grep -- -h)
+    qt_assert_equal("${rc}" "1" "grep -- -h should fail")
+    qt_assert_contains("${err}" "not implemented" "grep -- -h should not print the help")
 endfunction()

@@ -103,52 +103,45 @@ int cmd_mail(QuiltState &q, int argc, char **argv) {
     std::vector<std::string> to_addrs;
     std::vector<std::string> cc_addrs;
     std::vector<std::string> bcc_addrs;
-    std::vector<std::string> positional;
 
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
-        if (arg == "--mbox" && i + 1 < argc) {
-            mbox_file = argv[++i];
-        } else if (arg == "--send") {
+    enum { FROM = 256, TO, CC, BCC, SUBJECT, SEND, MBOX, CHARSET, SENDER, PREFIX,
+           REPLY_TO, SIGNATURE };
+    static constexpr LongOpt longopts[] = {
+        {"from", OptArg::required, FROM},
+        {"to", OptArg::required, TO},
+        {"cc", OptArg::required, CC},
+        {"bcc", OptArg::required, BCC},
+        {"subject", OptArg::required, SUBJECT},
+        {"send", OptArg::none, SEND},
+        {"mbox", OptArg::required, MBOX},
+        {"charset", OptArg::required, CHARSET},
+        {"sender", OptArg::required, SENDER},
+        {"prefix", OptArg::required, PREFIX},
+        {"reply-to", OptArg::required, REPLY_TO},
+        {"signature", OptArg::required, SIGNATURE},
+    };
+    auto args = parse_options(argc, argv, "m:M:h", longopts);
+    if (!args) return 1;
+    for (const auto &opt : args->options) {
+        switch (opt.key) {
+        case MBOX: mbox_file = opt.value; break;
+        case SEND:
             err_line("quilt mail: send mode is not supported; use --mbox");
             return 1;
-        } else if (arg == "--sender" && i + 1 < argc) {
-            sender_addr = argv[++i];
-        } else if (arg == "--from" && i + 1 < argc) {
-            from_addr = argv[++i];
-        } else if (arg == "--prefix" && i + 1 < argc) {
-            prefix = argv[++i];
-        } else if (arg == "--to" && i + 1 < argc) {
-            to_addrs.emplace_back(argv[++i]);
-        } else if (arg == "--cc" && i + 1 < argc) {
-            cc_addrs.emplace_back(argv[++i]);
-        } else if (arg == "--bcc" && i + 1 < argc) {
-            bcc_addrs.emplace_back(argv[++i]);
-        } else if (arg == "--subject" && i + 1 < argc) {
-            ++i; // consume and ignore (cover letter not generated)
-        } else if (arg == "-m" && i + 1 < argc) {
-            ++i; // consume and ignore (cover letter not generated)
-        } else if (arg == "-M" && i + 1 < argc) {
-            ++i; // consume and ignore (cover letter not generated)
-        } else if (arg == "--reply-to" && i + 1 < argc) {
-            ++i; // consume and ignore (cover letter not generated)
-        } else if (arg == "--charset" && i + 1 < argc) {
-            ++i; // consume and ignore
-        } else if (arg == "--signature" && i + 1 < argc) {
-            ++i; // consume and ignore
-        } else if (arg == "-h" || arg == "--help") {
-            out_line("Usage: quilt mail {--mbox file} [--prefix prefix] "
-                     "[--sender ...] [--from ...] [--to ...] [--cc ...] "
-                     "[--bcc ...] [first_patch [last_patch]]");
-            return 0;
-        } else if (arg[0] != '-' || arg == "-") {
-            positional.emplace_back(arg);
-        } else {
-            err("quilt mail: unknown option: ");
-            err_line(arg);
-            return 1;
+        case SENDER: sender_addr = opt.value; break;
+        case FROM: from_addr = opt.value; break;
+        case PREFIX: prefix = opt.value; break;
+        case TO: to_addrs.emplace_back(opt.value); break;
+        case CC: cc_addrs.emplace_back(opt.value); break;
+        case BCC: bcc_addrs.emplace_back(opt.value); break;
+        // No cover letter, so its options do nothing
+        case 'm': case 'M': case SUBJECT: case REPLY_TO: break;
+        case CHARSET: case SIGNATURE: break;
+        case 'h': return command_help(argv[0]);
         }
     }
+    const auto &positional = args->operands;
+    if (std::ssize(positional) > 2) return usage_error(argv[0]);
 
     if (mbox_file.empty()) {
         err_line("quilt mail: --mbox is required");
@@ -176,7 +169,7 @@ int cmd_mail(QuiltState &q, int argc, char **argv) {
 
     if (std::ssize(positional) == 1) {
         // Single patch
-        std::string name = positional[0];
+        std::string name(positional[0]);
         if (name == "-") {
             // "-" as single arg means all patches
         } else {
@@ -189,8 +182,8 @@ int cmd_mail(QuiltState &q, int argc, char **argv) {
             last_idx = *idx;
         }
     } else if (std::ssize(positional) == 2) {
-        std::string first_name = positional[0];
-        std::string last_name = positional[1];
+        std::string first_name(positional[0]);
+        std::string last_name(positional[1]);
 
         if (first_name == "-") {
             first_idx = 0;
@@ -218,9 +211,6 @@ int cmd_mail(QuiltState &q, int argc, char **argv) {
             err_line("quilt mail: first patch must come before last patch in series");
             return 1;
         }
-    } else if (std::ssize(positional) > 2) {
-        err_line("Usage: quilt mail {--mbox file} [options] [first_patch [last_patch]]");
-        return 1;
     }
 
     ptrdiff_t total = last_idx - first_idx + 1;

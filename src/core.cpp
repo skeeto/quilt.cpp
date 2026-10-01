@@ -1783,15 +1783,6 @@ int quilt_main(int argc, char **argv) {
         return 1;
     }
 
-    // Handle per-command -h/--help before dispatching
-    for (int i = 2; i < clean_argc; ++i) {
-        std::string_view a = clean_argv[checked_cast<size_t>(i)];
-        if (a == "-h" || a == "--help") {
-            out_line(found->usage);
-            return 0;
-        }
-    }
-
     // --- Phase 4: Load state ---
     std::string original_cwd = get_cwd();
     QuiltState q = load_state();
@@ -1813,6 +1804,8 @@ int quilt_main(int argc, char **argv) {
     auto extra_args = shell_split(cmd_args);
 
     // Build the final argv for the command: [cmd_name, extra_args..., user_args...]
+    // Like upstream, the command parses the variable's words and the command
+    // line in one pass, so a "--" in the variable ends the options for both.
     // Command argv starts at clean_argv+1
     std::vector<std::string> final_argv_storage;
     std::vector<char *> final_argv;
