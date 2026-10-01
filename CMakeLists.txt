@@ -199,3 +199,7 @@ foreach(scenario IN LISTS all_scenarios)
         )
     endif()
 endforeach()
+
+# A hunk search that walks every line up to the header's line number
+# takes minutes here instead of milliseconds.
+set_tests_properties(quilt_push_hunk_past_eof PROPERTIES TIMEOUT 30)

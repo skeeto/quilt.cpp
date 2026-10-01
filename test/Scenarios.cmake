@@ -321,6 +321,7 @@ set(QUILT_TEST_SCENARIOS
     push_missing_file
     push_fuzz_offset
     push_backward_offset
+    push_hunk_past_eof
     push_new_file_subdir
     push_crlf_patch
     push_fuzz_preserves_lines
@@ -7710,6 +7711,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_header_edit_fail()
     elseif(scenario STREQUAL "push_backward_offset")
         qt_scenario_push_backward_offset()
+    elseif(scenario STREQUAL "push_hunk_past_eof")
+        qt_scenario_push_hunk_past_eof()
     elseif(scenario STREQUAL "push_new_file_subdir")
         qt_scenario_push_new_file_subdir()
     elseif(scenario STREQUAL "builtin_patch_empty_file_content")
@@ -8613,6 +8616,29 @@ function(qt_scenario_push_backward_offset)
     qt_assert_file_text("${QT_WORK_DIR}/f.txt" "line2\nMODIFIED\nline4" "push should apply modification")
     qt_combine_output(combined "${push_out}" "${push_err}")
     qt_assert_contains("${combined}" "offset" "should report offset")
+endfunction()
+
+# push_hunk_past_eof: a hunk header naming a line far past the end of the
+# file applies at its real position with the matching offset, quickly
+# (the TIMEOUT on this test in CMakeLists.txt catches a slow search)
+function(qt_scenario_push_hunk_past_eof)
+    qt_begin_test("push_hunk_past_eof")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nb\nc\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.patch\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch" [=[
+--- a/f.txt
++++ b/f.txt
+@@ -99999999999,3 +99999999999,3 @@
+ a
+-b
++B
+ c
+]=])
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_success("${rc}" "push should apply the hunk at line 1")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Hunk #1 succeeded at 1 (offset -99999999998 lines)." "should report the offset")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "a\nB\nc" "push should apply the change")
 endfunction()
 
 # push_new_file_subdir: push a creation patch for a file in a new subdirectory

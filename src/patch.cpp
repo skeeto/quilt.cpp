@@ -728,13 +728,19 @@ static ptrdiff_t locate_hunk(std::span<const std::string> file_lines,
             }
         }
 
-        // Spiral outward
+        // Spiral outward.  Start at the first offset that reaches a
+        // position the checks below accept, so a guess far past the end
+        // of the file, from a hunk header with a huge line number, doesn't
+        // step through every line in between.
         ptrdiff_t max_offset_forward = max_search - first_guess;
         ptrdiff_t max_offset_backward = first_guess - last_frozen_line;
         ptrdiff_t max_range = std::max(max_offset_forward, max_offset_backward);
         if (max_range < 0) max_range = 0;
+        ptrdiff_t min_range = std::max({ptrdiff_t{1},
+                                        last_frozen_line - first_guess,
+                                        first_guess - max_search});
 
-        for (ptrdiff_t delta = 1; delta <= max_range; ++delta) {
+        for (ptrdiff_t delta = min_range; delta <= max_range; ++delta) {
             // Try forward
             ptrdiff_t pos = first_guess + delta;
             if (pos >= 0 && pos <= max_search && pos > last_frozen_line - 1) {
