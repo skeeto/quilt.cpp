@@ -1142,8 +1142,16 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
             }
             result.err += "The text leading up to this was:\n"
                           "--------------------------\n";
-            for (ptrdiff_t k = pf.text_line; k < pf.hunk_line; ++k) {
-                result.err += "|" + lines[checked_cast<size_t>(k - 1)] + "\n";
+            // Quote the lines as given, carriage returns and all
+            std::string_view text = patch_text;
+            for (ptrdiff_t k = 1; k < pf.hunk_line; ++k) {
+                // Every line before a hunk header ends with a newline
+                ptrdiff_t len = str_find(text, '\n') + 1;
+                if (k >= pf.text_line) {
+                    result.err += '|';
+                    result.err += text.substr(0, checked_cast<size_t>(len));
+                }
+                text.remove_prefix(checked_cast<size_t>(len));
             }
             ptrdiff_t nhunks = std::ssize(pf.hunks);
             result.err += std::format(

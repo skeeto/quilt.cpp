@@ -199,7 +199,7 @@ endfunction()
 
 function(qt_quilt)
     set(options DEFAULT_QUILTRC)
-    set(one_value_args RESULT OUTPUT ERROR WORKING_DIRECTORY INPUT)
+    set(one_value_args RESULT OUTPUT ERROR WORKING_DIRECTORY INPUT RAW_OUTPUT_FILE)
     set(multi_value_args ARGS ENV)
     cmake_parse_arguments(PARSE_ARGV 0 QT "${options}" "${one_value_args}" "${multi_value_args}")
 
@@ -258,16 +258,29 @@ function(qt_quilt)
             set(input_file "/dev/null")
         endif()
     endif()
-    execute_process(
-        COMMAND ${wrapped_command}
-        RESULT_VARIABLE result
-        OUTPUT_VARIABLE output
-        ERROR_VARIABLE error
-        INPUT_FILE "${input_file}"
-    )
-
-    string(REGEX REPLACE "\r\n" "\n" output "${output}")
-    string(REGEX REPLACE "\r\n" "\n" error "${error}")
+    if(DEFINED QT_RAW_OUTPUT_FILE AND NOT QT_RAW_OUTPUT_FILE STREQUAL "")
+        # Write stdout and stderr together, as exact bytes, for the hex
+        # helpers, leaving OUTPUT and ERROR empty
+        execute_process(
+            COMMAND ${wrapped_command}
+            RESULT_VARIABLE result
+            OUTPUT_FILE "${QT_RAW_OUTPUT_FILE}"
+            ERROR_FILE "${QT_RAW_OUTPUT_FILE}"
+            INPUT_FILE "${input_file}"
+        )
+        set(output "")
+        set(error "")
+    else()
+        execute_process(
+            COMMAND ${wrapped_command}
+            RESULT_VARIABLE result
+            OUTPUT_VARIABLE output
+            ERROR_VARIABLE error
+            INPUT_FILE "${input_file}"
+        )
+        string(REGEX REPLACE "\r\n" "\n" output "${output}")
+        string(REGEX REPLACE "\r\n" "\n" error "${error}")
+    endif()
     set(${QT_RESULT} "${result}" PARENT_SCOPE)
     set(${QT_OUTPUT} "${output}" PARENT_SCOPE)
     set(${QT_ERROR} "${error}" PARENT_SCOPE)

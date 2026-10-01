@@ -481,6 +481,7 @@ set(QUILT_TEST_SCENARIOS
     push_quiet_patch_output
     push_verbose_patch_output
     fold_quiet_patch_output
+    push_missing_file_crlf_text
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -8188,6 +8189,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_push_verbose_patch_output()
     elseif(scenario STREQUAL "fold_quiet_patch_output")
         qt_scenario_fold_quiet_patch_output()
+    elseif(scenario STREQUAL "push_missing_file_crlf_text")
+        qt_scenario_push_missing_file_crlf_text()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -13628,4 +13631,21 @@ function(qt_scenario_fold_quiet_patch_output)
     qt_assert_file_text("${QT_WORK_DIR}/f.txt" "one\ntwo\nthree" "fold -q should leave f.txt alone")
     qt_quilt_ok(OUTPUT out ARGS files MESSAGE "files failed")
     qt_assert_equal("${out}" "f.txt\n" "fold -q should add no files to the top patch")
+endfunction()
+
+# push_missing_file_crlf_text: the text leading up to the hunks of a file
+# that cannot be found is quoted as given, carriage returns and all
+function(qt_scenario_push_missing_file_crlf_text)
+    qt_begin_test("push_missing_file_crlf_text")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\n")
+    qt_write_bytes("${QT_WORK_DIR}/patches/p.diff"
+        "junk\\r\\n--- a/new.txt\\r\\n+++ b/new.txt\\r\\n@@ -1 +1 @@\\r\\n-a\\r\\n+b\\r\\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -q
+        RAW_OUTPUT_FILE "${QT_WORK_DIR}/push.out")
+    qt_assert_failure("${rc}" "push -q of a patch for a missing file should fail")
+    # "--------------------------\n|junk\r\n|--- a/new.txt\r\n|+++ b/new.txt\r\n"
+    # "--------------------------\n"
+    qt_assert_file_contains_hex("${QT_WORK_DIR}/push.out"
+        "2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d0a7c6a756e6b0d0a7c2d2d2d20612f6e65772e7478740d0a7c2b2b2b20622f6e65772e7478740d0a2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d0a"
+        "push -q should quote the CRLF lines as given")
 endfunction()
