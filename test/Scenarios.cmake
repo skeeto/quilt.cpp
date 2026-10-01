@@ -460,6 +460,10 @@ set(QUILT_TEST_SCENARIOS
     push_force_garbage_patch
     push_header_only_section
     fold_garbage_input
+    push_create_without_dev_null
+    push_create_existing_file
+    push_reverse_create_missing_file
+    push_delete_epoch_timestamp
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -8118,6 +8122,14 @@ function(qt_run_named_scenario scenario)
         qt_scenario_push_malformed_hunk()
     elseif(scenario STREQUAL "push_zero_context_insert")
         qt_scenario_push_zero_context_insert()
+    elseif(scenario STREQUAL "push_create_without_dev_null")
+        qt_scenario_push_create_without_dev_null()
+    elseif(scenario STREQUAL "push_create_existing_file")
+        qt_scenario_push_create_existing_file()
+    elseif(scenario STREQUAL "push_reverse_create_missing_file")
+        qt_scenario_push_reverse_create_missing_file()
+    elseif(scenario STREQUAL "push_delete_epoch_timestamp")
+        qt_scenario_push_delete_epoch_timestamp()
     elseif(scenario STREQUAL "push_context_diff_zero_context")
         qt_scenario_push_context_diff_zero_context()
     elseif(scenario STREQUAL "push_missing_patch_file")
@@ -12743,6 +12755,93 @@ function(qt_scenario_push_zero_context_insert)
         "*** a/f.txt\n--- b/f.txt\n***************\n*** 2 ****\n--- 3 ----\n+ X\n")
     qt_quilt_ok(ARGS push MESSAGE "push of -C0 patch failed")
     qt_assert_file_text("${QT_WORK_DIR}/f.txt" "a\nb\nX\nc" "push should insert X after b (-C0)")
+endfunction()
+
+# push_create_without_dev_null: a patch that names a missing file with
+# ordinary headers creates it when its first hunk's old range starts at
+# line 0, as GNU patch decides, and pop removes the file again.
+function(qt_scenario_push_create_without_dev_null)
+    qt_begin_test("push_create_without_dev_null")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "--- a/new.txt\n+++ b/new.txt\n@@ -0,0 +1 @@\n+hello\n")
+    qt_quilt_ok(ARGS push MESSAGE "push of unified creation patch failed")
+    qt_assert_file_text("${QT_WORK_DIR}/new.txt" "hello" "push should create new.txt")
+    qt_quilt_ok(ARGS pop MESSAGE "pop of unified creation patch failed")
+    qt_assert_not_exists("${QT_WORK_DIR}/new.txt" "pop should remove new.txt")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "*** a/new.txt\n--- b/new.txt\n***************\n*** 0 ****\n--- 1 ----\n+ hello\n")
+    qt_quilt_ok(ARGS push MESSAGE "push of context creation patch failed")
+    qt_assert_file_text("${QT_WORK_DIR}/new.txt" "hello" "push should create new.txt (context)")
+    qt_quilt_ok(ARGS pop MESSAGE "pop of context creation patch failed")
+    qt_assert_not_exists("${QT_WORK_DIR}/new.txt" "pop should remove new.txt (context)")
+    # An empty range after line 1 does not create the file
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "--- a/new.txt\n+++ b/new.txt\n@@ -1,0 +2 @@\n+hello\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_failure("${rc}" "push should fail when the hunk does not start at line 0")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "can't find file to patch at input line 3"
+        "should name the hunk's line in the patch")
+    qt_assert_not_exists("${QT_WORK_DIR}/new.txt" "failed push should not create new.txt")
+endfunction()
+
+# push_create_existing_file: a hunk whose old range starts at line 0 inserts
+# at the top of an existing file, unless the header names /dev/null, which
+# says for certain that the file is new, so the push fails.
+function(qt_scenario_push_create_existing_file)
+    qt_begin_test("push_create_existing_file")
+    qt_write_file("${QT_WORK_DIR}/new.txt" "world\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "--- a/new.txt\n+++ b/new.txt\n@@ -0,0 +1 @@\n+hello\n")
+    qt_quilt_ok(ARGS push MESSAGE "push of line-0 hunk onto existing file failed")
+    qt_assert_file_text("${QT_WORK_DIR}/new.txt" "hello\nworld" "push should insert at the top")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_assert_file_text("${QT_WORK_DIR}/new.txt" "world" "pop should restore new.txt")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+hello\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_failure("${rc}" "push creating an existing file should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "which already exists!" "should warn that the file exists")
+    qt_assert_file_text("${QT_WORK_DIR}/new.txt" "world" "failed push should leave new.txt")
+endfunction()
+
+# push_reverse_create_missing_file: a reversed creation patch deletes its
+# file, so it fails when the file is missing rather than creating it.
+function(qt_scenario_push_reverse_create_missing_file)
+    qt_begin_test("push_reverse_create_missing_file")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff -R\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "--- a/new.txt\n+++ b/new.txt\n@@ -0,0 +1 @@\n+hello\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_failure("${rc}" "reversed creation of a missing file should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "when reversed, would delete the file new.txt"
+        "should warn that the file does not exist")
+    qt_assert_not_exists("${QT_WORK_DIR}/new.txt" "failed push should not create new.txt")
+endfunction()
+
+# push_delete_epoch_timestamp: diff -N marks a deleted file with the epoch
+# as its timestamp, in any time zone, which removes the emptied file just as
+# /dev/null does.
+function(qt_scenario_push_delete_epoch_timestamp)
+    qt_begin_test("push_delete_epoch_timestamp")
+    qt_write_file("${QT_WORK_DIR}/old.txt" "hello\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "--- a/old.txt\t2020-01-01 00:00:00.000000000 +0000\n+++ b/old.txt\t1970-01-01 01:00:00.000000000 +0100\n@@ -1 +0,0 @@\n-hello\n")
+    qt_quilt_ok(ARGS push MESSAGE "push of unified deletion failed")
+    qt_assert_not_exists("${QT_WORK_DIR}/old.txt" "push should remove old.txt")
+    qt_quilt_ok(ARGS pop MESSAGE "pop of unified deletion failed")
+    qt_assert_file_text("${QT_WORK_DIR}/old.txt" "hello" "pop should restore old.txt")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "*** a/old.txt\tWed Jan  1 00:00:00 2020\n--- b/old.txt\tThu Jan  1 00:00:00 1970\n***************\n*** 1 ****\n- hello\n--- 0 ----\n")
+    qt_quilt_ok(ARGS push MESSAGE "push of context deletion failed")
+    qt_assert_not_exists("${QT_WORK_DIR}/old.txt" "push should remove old.txt (context)")
+    qt_quilt_ok(ARGS pop MESSAGE "pop of context deletion failed")
+    qt_assert_file_text("${QT_WORK_DIR}/old.txt" "hello" "pop should restore old.txt (context)")
 endfunction()
 
 # push_context_diff_zero_context: a context diff from refresh -C 0, whose

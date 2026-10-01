@@ -27,8 +27,13 @@ struct PatchFile {
     std::string old_path;
     std::string new_path;
     std::string target_path;   // after strip-level
-    bool is_creation = false;  // old = /dev/null
-    bool is_deletion = false;  // new = /dev/null
+    // How surely the patch says the file is absent before (old) and after
+    // (new) it, as GNU patch judges: 0 not at all, 1 when the first hunk's
+    // range on that side starts at line 0, 2 when the header also names
+    // /dev/null or gives the epoch as the file's timestamp, as diff -N does
+    int old_absent = 0;
+    int new_absent = 0;
+    ptrdiff_t hunk_line = 0;   // 1-based line of the first hunk header
     std::vector<PatchHunk> hunks;
 };
 
@@ -89,6 +94,78 @@ static bool take_number(std::string_view &s, ptrdiff_t &n)
     if (ec != std::errc{}) return false;
     s.remove_prefix(checked_cast<size_t>(end - s.data()));
     return true;
+}
+
+// Whether a diff header's timestamp is the epoch, which diff -N gives a
+// missing file.  Like GNU patch, match any time within the range of local
+// time offsets of it, -25:00 to +26:00.  Reads the forms diff writes for -u,
+// "1970-01-01 00:00:00.000000000 +0000", and -c, "Thu Jan  1 00:00:00 1970".
+static bool is_epoch_timestamp(std::string_view s)
+{
+    ptrdiff_t year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
+    auto skip_spaces = [&] { while (take(s, " ")) {} };
+    auto take_time = [&] {
+        return take_number(s, hour) && take(s, ":") && take_number(s, minute) &&
+               take(s, ":") && take_number(s, second);
+    };
+
+    skip_spaces();
+    if (take_number(s, year)) {
+        if (!take(s, "-") || !take_number(s, month) || !take(s, "-") ||
+            !take_number(s, day) || !take(s, " ") || !take_time()) {
+            return false;
+        }
+        if (take(s, ".")) {
+            while (!s.empty() && s[0] >= '0' && s[0] <= '9') s.remove_prefix(1);
+        }
+    } else {
+        // Skip the weekday
+        ptrdiff_t space = str_find(s, ' ');
+        if (space < 0) return false;
+        s.remove_prefix(checked_cast<size_t>(space));
+        skip_spaces();
+        static constexpr std::string_view months = "JanFebMarAprMayJunJulAugSepOctNovDec";
+        if (std::ssize(s) < 3) return false;
+        ptrdiff_t m = str_find(months, s.substr(0, 3));
+        if (m < 0 || m % 3 != 0) return false;
+        month = m / 3 + 1;
+        s.remove_prefix(3);
+        skip_spaces();
+        if (!take_number(s, day) || !take(s, " ") || !take_time()) return false;
+        skip_spaces();
+        if (!take_number(s, year)) return false;
+    }
+
+    ptrdiff_t zone = 0;
+    skip_spaces();
+    bool west = take(s, "-");
+    if (west || take(s, "+")) {
+        ptrdiff_t hhmm = 0;
+        if (!take_number(s, hhmm) || hhmm > 2459) return false;
+        zone = (hhmm / 100 * 60 + hhmm % 100) * 60 * (west ? -1 : 1);
+    }
+
+    if (day > 31 || hour > 23 || minute > 59 || second > 60) return false;
+    ptrdiff_t days;
+    if (year == 1969 && month == 12) days = day - 32;
+    else if (year == 1970 && month == 1) days = day - 1;
+    else return false;  // too far from the epoch in any time zone
+    ptrdiff_t t = ((days * 24 + hour) * 60 + minute) * 60 + second - zone;
+    return -25 * 60 * 60 < t && t < 26 * 60 * 60;
+}
+
+// How surely a file header and the start of the first hunk's range on the
+// same side say that the file is absent; see PatchFile.  A /dev/null name
+// counts even without hunks, so such a header still creates or deletes.
+static int absence(std::string_view header, ptrdiff_t first_start)
+{
+    if (extract_path(header) == "/dev/null") return 2;
+    if (first_start != 0) return 0;
+    ptrdiff_t tab = str_find(header, '\t');
+    if (tab >= 0 && is_epoch_timestamp(header.substr(checked_cast<size_t>(tab) + 1))) {
+        return 2;
+    }
+    return 1;
 }
 
 static bool is_no_newline_marker(std::string_view line)
@@ -389,24 +466,24 @@ static std::vector<PatchFile> parse_patch(std::string_view text, int strip_level
         }
 
         PatchFile pf;
-        std::string raw_old = extract_path(at(i).substr(4));
-        std::string raw_new = extract_path(at(i + 1).substr(4));
+        std::string_view old_header = at(i).substr(4);
+        std::string_view new_header = at(i + 1).substr(4);
 
         if (reverse) {
-            std::swap(raw_old, raw_new);
+            std::swap(old_header, new_header);
         }
 
+        std::string raw_old = extract_path(old_header);
+        std::string raw_new = extract_path(new_header);
         pf.old_path = raw_old;
         pf.new_path = raw_new;
-        pf.is_creation = (raw_old == "/dev/null");
-        pf.is_deletion = (raw_new == "/dev/null");
 
         // Determine target path
         // Prefer new path like GNU patch does for the common -p0 case
         // where old has a .orig suffix (e.g., "--- f.txt.orig" / "+++ f.txt")
-        if (pf.is_creation) {
+        if (raw_old == "/dev/null") {
             pf.target_path = strip_path(raw_new, strip_level);
-        } else if (pf.is_deletion) {
+        } else if (raw_new == "/dev/null") {
             pf.target_path = strip_path(raw_old, strip_level);
         } else {
             std::string stripped_old = strip_path(raw_old, strip_level);
@@ -423,6 +500,7 @@ static std::vector<PatchFile> parse_patch(std::string_view text, int strip_level
         }
 
         i += 2;  // skip the file header lines
+        pf.hunk_line = i + 1;
 
         std::string_view hunk_start = unified ? "@@ " : "***************";
         while (i < n && at(i).starts_with(hunk_start)) {
@@ -433,6 +511,11 @@ static std::vector<PatchFile> parse_patch(std::string_view text, int strip_level
             if (reverse) reverse_hunk(hunk);
             pf.hunks.push_back(std::move(hunk));
         }
+
+        // GNU patch judges from the first hunk alone
+        const PatchHunk *first = pf.hunks.empty() ? nullptr : &pf.hunks[0];
+        pf.old_absent = absence(old_header, first ? first->old_start : -1);
+        pf.new_absent = absence(new_header, first ? first->new_start : -1);
 
         // Like GNU patch, ignore file headers with no hunk after them
         if (!pf.hunks.empty()) files.push_back(std::move(pf));
@@ -1000,23 +1083,29 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
     for (const auto &pf : files) {
         if (pf.target_path.empty()) continue;
 
-        if (!opts.quiet) {
-            result.out += "patching file " + pf.target_path + "\n";
-        }
-
-        // Load current file contents
-        FileContent fc;
         bool file_existed = fs_exists(pf.target_path);
+        std::string original = file_existed ? fs_read(pf.target_path) : std::string{};
+        bool is_empty = original.empty();
 
-        if (pf.is_creation && file_existed) {
-            // File exists but patch says it should be new — still try to apply
+        // Like GNU patch given -f, as quilt always does, warn about a
+        // patch that creates a file with contents, or deletes or empties
+        // one that is missing or empty, then apply it anyway
+        bool looks_reversed = is_empty ? pf.new_absent > 0 : pf.old_absent == 2;
+        if (looks_reversed && !opts.quiet) {
+            result.out += std::format(
+                "The next patch{} would {} the file {},\nwhich {}!  Applying it anyway.\n",
+                opts.reverse ? ", when reversed," : "",
+                !file_existed ? "delete" : is_empty ? "empty out" : "create",
+                pf.target_path,
+                !file_existed ? "does not exist" : is_empty ? "is already empty"
+                                                            : "already exists");
         }
 
-        if (file_existed) {
-            fc = load_file_lines(fs_read(pf.target_path));
-        } else if (!pf.is_creation) {
-            // File doesn't exist and this isn't a creation patch
-            result.err += "can't find file to patch at input line 0\n";
+        // A missing file is patched as empty when the patch creates it, or
+        // when GNU patch would have warned above
+        if (!file_existed && !pf.old_absent && !looks_reversed) {
+            result.err += std::format("can't find file to patch at input line {}\n",
+                                      pf.hunk_line);
             if (!opts.force) {
                 result.exit_code = 1;
                 if (!opts.dry_run) {
@@ -1031,6 +1120,11 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                 continue;
             }
         }
+
+        if (!opts.quiet) {
+            result.out += "patching file " + pf.target_path + "\n";
+        }
+        FileContent fc = load_file_lines(original);
 
         // Try to match each hunk
         std::vector<ptrdiff_t> hunk_positions(checked_cast<size_t>(std::ssize(pf.hunks)), -1);
@@ -1048,7 +1142,11 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                                          last_frozen_line, cumulative_offset,
                                          opts.fuzz);
 
-            if (pos >= 0) {
+            // Like GNU patch, outside merge mode refuse a hunk at the top
+            // of a file with contents when the patch surely creates it
+            bool refused = !opts.merge && pos == 0 && pf.old_absent == 2 && !is_empty;
+
+            if (pos >= 0 && !refused) {
                 hunk_positions[checked_cast<size_t>(h)] = pos;
                 ptrdiff_t pat_len = std::ssize(pattern);
                 ptrdiff_t actual_offset = pos - old_range_pos(hunk);
@@ -1101,7 +1199,7 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                                                   h + 1, hunk.old_start);
                     } else {
                         result.err += std::format("Hunk #{} FAILED at {}.\n",
-                                                  h + 1, hunk.old_start);
+                                                  h + 1, refused ? pos + 1 : hunk.old_start);
                     }
                 }
             }
@@ -1119,7 +1217,8 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                 if (hunk_positions[checked_cast<size_t>(h)] >= 0) { any_applied = true; break; }
             }
 
-            if (any_applied || pf.is_creation || (opts.merge && file_has_rejects)) {
+            bool creating = !file_existed && pf.old_absent;
+            if (any_applied || creating || (opts.merge && file_has_rejects)) {
                 std::string new_content;
 
                 if (opts.merge && file_has_rejects) {
@@ -1154,13 +1253,21 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                 }
 
                 // Remove a file left empty when -E is given or the patch
-                // deletes it, like GNU patch outside POSIX mode
-                if ((opts.remove_empty || pf.is_deletion) &&
-                    new_content.empty() && !pf.is_creation) {
+                // surely deletes it, like GNU patch outside POSIX mode
+                if ((opts.remove_empty || pf.new_absent == 2) &&
+                    new_content.empty() && !pf.old_absent) {
                     if (file_existed && fs_delete(pf.target_path) && !opts.fs) {
                         remove_empty_parents(pf.target_path);
                     }
                 } else {
+                    if (pf.new_absent == 2 && !new_content.empty() &&
+                        !(opts.merge && file_has_rejects)) {
+                        result.exit_code = 1;
+                        if (!opts.quiet) {
+                            result.err += "Not deleting file " + pf.target_path +
+                                          " as content differs from patch\n";
+                        }
+                    }
                     fs_write(pf.target_path, new_content);
                 }
             }
