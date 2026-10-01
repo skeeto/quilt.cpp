@@ -369,6 +369,8 @@ set(QUILT_TEST_SCENARIOS
     refresh_named_not_in_series
     diff_P_unapplied
     diff_combine_wrong_order
+    push_merge_short
+    push_quilt_patch_opts_reverse
     push_quiet_all
     pop_quiet_all
     pop_count_clamp
@@ -386,14 +388,26 @@ set(QUILT_TEST_SCENARIOS
     diff_z_shadowed
     diff_z_shadowed_unrefreshed
     diff_z_shadowed_deleted
+    diff_snapshot_reverse
+    revert_multiple_files
+    revert_P_unapplied
     snapshot_no_series
+    series_empty_and_comments
+    series_color_always
     files_all_no_applied
     delete_n_explicit
+    delete_backup_without_r
     header_mode_conflict
     header_empty_stdin
     import_preserves_series_args
+    import_multiple_files
+    import_P_subdir
     graph_lines_nonadjacent
     graph_grey_only_when_isolated
+    quiltrc_dash_disables
+    annotate_delete_only
+    rename_pc_migration
+    fork_pc_migration
     prefixed_args_delete
 )
 
@@ -563,6 +577,8 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     diff_algorithm_env_override
     diff_algorithm_env_invalid
     diff_algorithm_env_diff_cmd
+    refresh_z_strip_migration
+    annotate_P_missing_arg
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -7596,6 +7612,10 @@ function(qt_run_named_scenario scenario)
         qt_scenario_diff_algorithm_env_invalid()
     elseif(scenario STREQUAL "diff_algorithm_env_diff_cmd")
         qt_scenario_diff_algorithm_env_diff_cmd()
+    elseif(scenario STREQUAL "push_merge_short")
+        qt_scenario_push_merge_short()
+    elseif(scenario STREQUAL "push_quilt_patch_opts_reverse")
+        qt_scenario_push_quilt_patch_opts_reverse()
     elseif(scenario STREQUAL "push_quiet_all")
         qt_scenario_push_quiet_all()
     elseif(scenario STREQUAL "pop_quiet_all")
@@ -7630,24 +7650,52 @@ function(qt_run_named_scenario scenario)
         qt_scenario_diff_z_shadowed_unrefreshed()
     elseif(scenario STREQUAL "diff_z_shadowed_deleted")
         qt_scenario_diff_z_shadowed_deleted()
+    elseif(scenario STREQUAL "diff_snapshot_reverse")
+        qt_scenario_diff_snapshot_reverse()
+    elseif(scenario STREQUAL "revert_multiple_files")
+        qt_scenario_revert_multiple_files()
+    elseif(scenario STREQUAL "revert_P_unapplied")
+        qt_scenario_revert_P_unapplied()
     elseif(scenario STREQUAL "snapshot_no_series")
         qt_scenario_snapshot_no_series()
+    elseif(scenario STREQUAL "series_empty_and_comments")
+        qt_scenario_series_empty_and_comments()
+    elseif(scenario STREQUAL "series_color_always")
+        qt_scenario_series_color_always()
     elseif(scenario STREQUAL "files_all_no_applied")
         qt_scenario_files_all_no_applied()
     elseif(scenario STREQUAL "delete_n_explicit")
         qt_scenario_delete_n_explicit()
+    elseif(scenario STREQUAL "delete_backup_without_r")
+        qt_scenario_delete_backup_without_r()
     elseif(scenario STREQUAL "header_mode_conflict")
         qt_scenario_header_mode_conflict()
     elseif(scenario STREQUAL "header_empty_stdin")
         qt_scenario_header_empty_stdin()
     elseif(scenario STREQUAL "import_preserves_series_args")
         qt_scenario_import_preserves_series_args()
+    elseif(scenario STREQUAL "import_multiple_files")
+        qt_scenario_import_multiple_files()
+    elseif(scenario STREQUAL "import_P_subdir")
+        qt_scenario_import_P_subdir()
     elseif(scenario STREQUAL "graph_lines_nonadjacent")
         qt_scenario_graph_lines_nonadjacent()
     elseif(scenario STREQUAL "graph_grey_only_when_isolated")
         qt_scenario_graph_grey_only_when_isolated()
+    elseif(scenario STREQUAL "quiltrc_dash_disables")
+        qt_scenario_quiltrc_dash_disables()
+    elseif(scenario STREQUAL "annotate_delete_only")
+        qt_scenario_annotate_delete_only()
+    elseif(scenario STREQUAL "rename_pc_migration")
+        qt_scenario_rename_pc_migration()
+    elseif(scenario STREQUAL "fork_pc_migration")
+        qt_scenario_fork_pc_migration()
     elseif(scenario STREQUAL "prefixed_args_delete")
         qt_scenario_prefixed_args_delete()
+    elseif(scenario STREQUAL "refresh_z_strip_migration")
+        qt_scenario_refresh_z_strip_migration()
+    elseif(scenario STREQUAL "annotate_P_missing_arg")
+        qt_scenario_annotate_P_missing_arg()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -10686,6 +10734,41 @@ endfunction()
 # Scenarios added from the coverage audit.
 # ---------------------------------------------------------------------------
 
+function(qt_scenario_push_merge_short)
+    qt_begin_test("push_merge_short")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "one\ntwo\nthree\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "one\nTWO\nthree\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "one\n2\nthree\n")
+    # -m is the short form of --merge; -f allows the merged apply
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -m -f)
+    qt_assert_failure("${rc}" "push -m -f on a conflict should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Applying patch p.patch" "push should announce the patch")
+    qt_assert_contains("${combined}" "needs refresh" "forced apply should be reported")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" "<<<<<<<" "merge markers should be written")
+    qt_assert_file_contains("${QT_WORK_DIR}/f.txt" ">>>>>>>" "merge markers should be written")
+endfunction()
+
+function(qt_scenario_push_quilt_patch_opts_reverse)
+    qt_begin_test("push_quilt_patch_opts_reverse")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    # The patch is x -> y. With the file already at y, QUILT_PATCH_OPTS=-R
+    # makes push reverse-apply it, turning y back into x.
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ENV "QUILT_PATCH_OPTS=-R" ARGS push
+                MESSAGE "push with QUILT_PATCH_OPTS=-R failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "x" "patch should be reverse-applied")
+endfunction()
+
 function(qt_scenario_push_quiet_all)
     qt_begin_test("push_quiet_all")
     qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
@@ -11021,6 +11104,55 @@ function(qt_scenario_diff_z_shadowed_deleted)
     qt_assert_contains("${err}" "more recent patches modify files in patch p1.patch" "shadowing should be warned about")
 endfunction()
 
+function(qt_scenario_diff_snapshot_reverse)
+    qt_begin_test("diff_snapshot_reverse")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS snapshot MESSAGE "snapshot failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "z\n")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS diff --snapshot -R MESSAGE "diff --snapshot -R failed")
+    qt_assert_contains("${out}" "-z" "reverse snapshot diff should show current content as removed")
+    qt_assert_contains("${out}" "+y" "reverse snapshot diff should show snapshotted content as added")
+endfunction()
+
+function(qt_scenario_revert_multiple_files)
+    qt_begin_test("revert_multiple_files")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "x\n")
+    qt_write_file("${QT_WORK_DIR}/b.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add a.txt b.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "y\n")
+    qt_write_file("${QT_WORK_DIR}/b.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_write_file("${QT_WORK_DIR}/a.txt" "z\n")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS revert a.txt b.txt MESSAGE "revert failed")
+    qt_assert_contains("${out}" "Changes to a.txt in patch p.patch reverted" "changed file should be reverted")
+    qt_assert_contains("${out}" "File b.txt is unchanged" "unchanged file should be reported")
+    qt_assert_file_text("${QT_WORK_DIR}/a.txt" "y" "a.txt should be restored")
+    qt_assert_file_text("${QT_WORK_DIR}/b.txt" "y" "b.txt should be unchanged")
+endfunction()
+
+function(qt_scenario_revert_P_unapplied)
+    qt_begin_test("revert_P_unapplied")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p1.patch MESSAGE "new p1 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p1 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
+    qt_quilt_ok(ARGS new p2.patch MESSAGE "new p2 failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add p2 failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "z\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh p2 failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS revert -P p2.patch f.txt)
+    qt_assert_failure("${rc}" "revert -P with an unapplied patch should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "is not applied" "failure should mention the patch state")
+endfunction()
+
 function(qt_scenario_snapshot_no_series)
     qt_begin_test("snapshot_no_series")
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS snapshot)
@@ -11034,6 +11166,38 @@ function(qt_scenario_snapshot_no_series)
     qt_assert_equal("${rc2}" "1" "snapshot -d without a series file should exit 1")
     qt_assert_contains("${err2}" "No series file found" "missing series file should be reported")
     qt_assert_exists("${QT_WORK_DIR}/.pc/.snap/f.txt" "snapshot -d must keep the snapshot")
+endfunction()
+
+function(qt_scenario_series_empty_and_comments)
+    qt_begin_test("series_empty_and_comments")
+    file(MAKE_DIRECTORY "${QT_WORK_DIR}/patches")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS series MESSAGE "series on an empty file failed")
+    qt_assert_equal("${out}" "" "empty series should produce no output")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "# comment\n\na.patch\n# another\n")
+    qt_quilt_ok(OUTPUT out2 ERROR err2 ARGS series MESSAGE "series with comments failed")
+    qt_assert_equal("${out2}" "a.patch\n" "comments and blank lines should be skipped")
+endfunction()
+
+function(qt_scenario_series_color_always)
+    qt_begin_test("series_color_always")
+    string(ASCII 27 esc)
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new a.patch MESSAGE "new a failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add a failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh a failed")
+    qt_quilt_ok(ARGS new b.patch MESSAGE "new b failed")
+    qt_quilt_ok(ARGS new c.patch MESSAGE "new c failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop c failed")
+    # Clear QUILT_COLORS so the default colors apply
+    qt_quilt_ok(ENV "QUILT_COLORS=" OUTPUT out ERROR err ARGS series --color=always
+                MESSAGE "series --color=always failed")
+    qt_assert_equal("${out}"
+        "${esc}[32ma.patch${esc}[00m\n${esc}[33mb.patch${esc}[00m\n${esc}[00mc.patch${esc}[00m\n"
+        "applied, top, and unapplied patches should be colored")
+    qt_quilt_ok(OUTPUT out2 ERROR err2 ARGS series --color=never MESSAGE "series --color=never failed")
+    qt_assert_equal("${out2}" "a.patch\nb.patch\nc.patch\n" "color=never should not emit escape sequences")
 endfunction()
 
 function(qt_scenario_files_all_no_applied)
@@ -11082,6 +11246,21 @@ function(qt_scenario_delete_n_explicit)
     qt_assert_contains("${combined2}" "Usage: quilt delete" "usage should be printed")
     qt_assert_file_text("${QT_WORK_DIR}/patches/series" "p.patch\nq.patch" "series should be unchanged")
     qt_assert_exists("${QT_WORK_DIR}/patches/p.patch" "patch file should be kept")
+endfunction()
+
+function(qt_scenario_delete_backup_without_r)
+    qt_begin_test("delete_backup_without_r")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS delete --backup p.patch MESSAGE "delete --backup failed")
+    qt_assert_contains("${out}" "Removed patch p.patch" "removal should be reported")
+    # --backup without -r leaves the patch file in place
+    qt_assert_exists("${QT_WORK_DIR}/patches/p.patch" "patch file should be kept")
+    qt_assert_file_not_contains("${QT_WORK_DIR}/patches/series" "p.patch" "patch should be removed from series")
 endfunction()
 
 function(qt_scenario_header_mode_conflict)
@@ -11137,6 +11316,24 @@ function(qt_scenario_import_preserves_series_args)
     qt_quilt_ok(ARGS import -f -p 0 p.patch MESSAGE "re-import with -p 0 failed")
     qt_assert_file_text("${QT_WORK_DIR}/patches/series" "p.patch -p2 -R\n# keep me"
                         "re-import options should be ignored")
+endfunction()
+
+function(qt_scenario_import_multiple_files)
+    qt_begin_test("import_multiple_files")
+    qt_write_file("${QT_WORK_DIR}/a.patch" "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+y\n")
+    qt_write_file("${QT_WORK_DIR}/b.patch" "--- a/g.txt\n+++ b/g.txt\n@@ -1 +1 @@\n-x\n+z\n")
+    qt_quilt_ok(ARGS import a.patch b.patch MESSAGE "multi-file import failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "a.patch\nb.patch" "both patches should be imported in order")
+    qt_assert_exists("${QT_WORK_DIR}/patches/a.patch" "a.patch should be stored")
+    qt_assert_exists("${QT_WORK_DIR}/patches/b.patch" "b.patch should be stored")
+endfunction()
+
+function(qt_scenario_import_P_subdir)
+    qt_begin_test("import_P_subdir")
+    qt_write_file("${QT_WORK_DIR}/ext.patch" "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+y\n")
+    qt_quilt_ok(ARGS import -P sub/renamed.patch ext.patch MESSAGE "import -P subdir failed")
+    qt_assert_exists("${QT_WORK_DIR}/patches/sub/renamed.patch" "patch should be stored in the subdirectory")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/series" "sub/renamed.patch" "series should reference the subdirectory patch")
 endfunction()
 
 function(qt_scenario_graph_lines_nonadjacent)
@@ -11196,6 +11393,59 @@ function(qt_scenario_graph_grey_only_when_isolated)
     qt_assert_not_contains("${out2}" "color=grey" "no node has zero edges")
 endfunction()
 
+# --quiltrc - must keep ~/.quiltrc from being read.
+function(qt_scenario_quiltrc_dash_disables)
+    qt_begin_test("quiltrc_dash_disables")
+    qt_write_file("${QT_TEST_BASE}/.quiltrc" "QUILT_PATCHES_PREFIX=1\n")
+    qt_quilt_ok(DEFAULT_QUILTRC OUTPUT out ERROR err ARGS new a.patch
+                MESSAGE "new with ~/.quiltrc failed")
+    qt_assert_contains("${out}" "patches/a.patch" "~/.quiltrc should enable the prefix")
+    qt_quilt_ok(OUTPUT out2 ERROR err2 ARGS --quiltrc - new b.patch MESSAGE "new with --quiltrc - failed")
+    qt_assert_contains("${out2}" "Patch b.patch is now on top" "--quiltrc - should ignore ~/.quiltrc")
+    qt_assert_not_contains("${out2}" "patches/b.patch" "--quiltrc - should ignore ~/.quiltrc")
+endfunction()
+
+function(qt_scenario_annotate_delete_only)
+    qt_begin_test("annotate_delete_only")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nb\nc\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nc\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS annotate f.txt MESSAGE "annotate failed")
+    qt_assert_equal("${out}" "\ta\n\tc\n\n1\tp.patch\n" "deleted line leaves no annotation")
+endfunction()
+
+function(qt_scenario_rename_pc_migration)
+    qt_begin_test("rename_pc_migration")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new old.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS rename new.patch MESSAGE "rename failed")
+    qt_assert_exists("${QT_WORK_DIR}/.pc/new.patch" "backup directory should be renamed")
+    qt_assert_not_exists("${QT_WORK_DIR}/.pc/old.patch" "old backup directory should be gone")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "x" "pop should restore the original content")
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "y" "push should reapply the renamed patch")
+endfunction()
+
+function(qt_scenario_fork_pc_migration)
+    qt_begin_test("fork_pc_migration")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new orig.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt_ok(ARGS fork forked.patch MESSAGE "fork failed")
+    qt_assert_exists("${QT_WORK_DIR}/.pc/forked.patch" "forked backup directory should exist")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "x" "pop should restore the original content")
+    qt_assert_not_exists("${QT_WORK_DIR}/.pc/forked.patch" "forked backup directory should be removed")
+endfunction()
+
 function(qt_scenario_prefixed_args_delete)
     qt_begin_test("prefixed_args_delete")
     qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
@@ -11208,4 +11458,37 @@ function(qt_scenario_prefixed_args_delete)
                     "applied top patch should be popped and removed")
     qt_assert_file_not_contains("${QT_WORK_DIR}/patches/series" "p.patch" "patch should be removed from series")
     qt_assert_file_text("${QT_WORK_DIR}/f.txt" "x" "patch should be popped")
+endfunction()
+
+# quilt.cpp copies the strip level (and -R) to the fork created by
+# refresh -z. Upstream 0.69 intends to (refresh.in saves old_patch_args)
+# but looks up the strip level under the new name, which is not in the
+# series yet, so its fork falls back to -p1.
+function(qt_scenario_refresh_z_strip_migration)
+    qt_begin_test("refresh_z_strip_migration")
+    qt_write_file("${QT_WORK_DIR}/a/b/f.txt" "x\n")
+    qt_quilt_ok(ARGS new -p 0 p.patch MESSAGE "new -p 0 failed")
+    qt_quilt_ok(ARGS add a/b/f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/a/b/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_write_file("${QT_WORK_DIR}/a/b/f.txt" "z\n")
+    qt_quilt_ok(ARGS refresh -zfork.patch MESSAGE "refresh -zfork.patch failed")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/series" "fork.patch -p0" "fork should inherit the strip level")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/fork.patch" "+++ a/b/f.txt" "fork should use -p0 file names")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/fork.patch" "+z" "fork should contain the pending change")
+endfunction()
+
+# Native only because Homebrew's quilt uses a compat getopt that does not
+# report the missing argument, which makes upstream loop forever.
+function(qt_scenario_annotate_P_missing_arg)
+    qt_begin_test("annotate_P_missing_arg")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "x\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS annotate -P)
+    qt_assert_failure("${rc}" "annotate -P without a value should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Usage: quilt annotate" "usage should be printed")
 endfunction()
