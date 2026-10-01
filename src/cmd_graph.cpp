@@ -281,10 +281,23 @@ static std::string render_dot(const std::vector<GraphNode> &nodes,
     }
 
     std::string dot = "digraph dependencies {\n";
+
+    // Nodes without any edge are de-emphasized, matching the original
+    // dependency-graph script's close_node_style.
+    std::set<int> connected;
+    for (const auto &[key, value] : edges) {
+        (void)value;
+        connected.insert(key.first);
+        connected.insert(key.second);
+    }
+
     for (const auto &node : nodes) {
         if (!used_nodes.contains(node.number)) continue;
 
         std::vector<std::string> attrs = node.attrs;
+        if (!connected.contains(node.number)) {
+            attrs.push_back("color=grey");
+        }
         attrs.push_back("label=\"" + dot_escape(node.name) + "\"");
 
         dot += "\tn" + std::to_string(node.number);
@@ -446,7 +459,6 @@ int cmd_graph(QuiltState &q, int argc, char **argv) {
         }
 
         selected->attrs.push_back("style=bold");
-        selected->attrs.push_back("color=grey");
 
         std::set<std::string> selected_files;
         for (const auto &[file, ranges] : selected->files) {
