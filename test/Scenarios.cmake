@@ -2133,11 +2133,11 @@ function(qt_scenario_annotate_empty_series)
     qt_begin_test("annotate_empty_series")
     # Create a series file with no patches
     file(MAKE_DIRECTORY "${QT_WORK_DIR}/patches")
-    file(WRITE "${QT_WORK_DIR}/patches/series" "")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "")
     file(MAKE_DIRECTORY "${QT_WORK_DIR}/.pc")
-    file(WRITE "${QT_WORK_DIR}/.pc/.version" "2\n")
-    file(WRITE "${QT_WORK_DIR}/.pc/.quilt_patches" "patches\n")
-    file(WRITE "${QT_WORK_DIR}/.pc/.quilt_series" "series\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/.version" "2\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/.quilt_patches" "patches\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/.quilt_series" "series\n")
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS annotate f.txt)
     qt_assert_failure("${rc}" "annotate with empty series should fail")
     qt_assert_contains("${err}" "patches" "should mention patches")
@@ -4067,8 +4067,8 @@ function(qt_scenario_mail_empty_patch)
     qt_quilt_ok(ARGS refresh MESSAGE "refresh p1 failed")
     qt_quilt_ok(ARGS header -r INPUT "Good patch\n" MESSAGE "header failed")
     # Create an empty p2
-    file(APPEND "${QT_WORK_DIR}/patches/series" "p2.patch\n")
-    file(WRITE "${QT_WORK_DIR}/patches/p2.patch" "")
+    qt_append_file("${QT_WORK_DIR}/patches/series" "p2.patch\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p2.patch" "")
     # Mail should skip p2 with a warning but still output mbox with p1
     qt_quilt_ok(
         OUTPUT out ERROR err
@@ -4154,7 +4154,7 @@ function(qt_scenario_mail_leading_blank_header)
     qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
     # Write a patch file with blank lines before the subject
     qt_read_file_raw(patch_content "${QT_WORK_DIR}/patches/p.patch")
-    file(WRITE "${QT_WORK_DIR}/patches/p.patch" "\n\nReal Subject\n\n${patch_content}")
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch" "\n\nReal Subject\n\n${patch_content}")
     qt_quilt_ok(
         OUTPUT out ERROR err
         ARGS mail --mbox "${QT_TEST_BASE}/out.mbox" --from "t@e.com"
@@ -4376,10 +4376,10 @@ endfunction()
 function(qt_scenario_builtin_diff_no_trailing_newline)
     qt_begin_test("builtin_diff_no_trailing_newline")
     # Write file without trailing newline using NEWLINE_STYLE
-    file(WRITE "${QT_WORK_DIR}/f.txt" "line1\nline2")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "line1\nline2")
     qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
     qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
-    file(WRITE "${QT_WORK_DIR}/f.txt" "line1\nmodified")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "line1\nmodified")
     qt_quilt_ok(OUTPUT diff_out ERROR diff_err ARGS diff MESSAGE "diff failed")
     qt_assert_contains("${diff_out}" "\\ No newline at end of file" "should note missing newline")
     qt_assert_contains("${diff_out}" "-line2" "should show removed line")
@@ -4651,10 +4651,10 @@ endfunction()
 
 function(qt_scenario_builtin_patch_no_newline)
     qt_begin_test("builtin_patch_no_newline")
-    file(WRITE "${QT_WORK_DIR}/f.txt" "line1\nline2")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "line1\nline2")
     qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
     qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
-    file(WRITE "${QT_WORK_DIR}/f.txt" "line1\nmodified")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "line1\nmodified")
     qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
     qt_quilt_ok(ARGS pop MESSAGE "pop failed")
     # Read raw to check no trailing newline is preserved
@@ -5789,7 +5789,7 @@ endfunction()
 function(qt_scenario_fold_reverse_no_newline)
     qt_begin_test("fold_reverse_no_newline")
     # Start with file "modified" (no trailing newline) — this is the patched state
-    file(WRITE "${QT_WORK_DIR}/f.txt" "modified")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "modified")
     qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
     qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
     # fold -R the forward patch (which changes original→modified with no newline)
@@ -8866,11 +8866,11 @@ function(qt_scenario_builtin_patch_no_newline_context)
     qt_begin_test("builtin_patch_no_newline_context")
     # Write file without trailing newline so diff produces "\ No newline" after
     # the final context line (covers patch.cpp:181)
-    file(WRITE "${QT_WORK_DIR}/f.txt" "line1\nline2")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "line1\nline2")
     qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
     qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
     # Change first line; keep no trailing newline; last context line is "line2"
-    file(WRITE "${QT_WORK_DIR}/f.txt" "LINE1\nline2")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "LINE1\nline2")
     qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
     qt_quilt_ok(ARGS pop MESSAGE "pop failed")
     qt_quilt_ok(ARGS push MESSAGE "push with no-newline context patch should succeed")
@@ -9399,16 +9399,19 @@ endfunction()
 # covers cmd_patch.cpp line 556 (appending QUILT_DIFF_OPTS to cmd_argv in external diff path)
 function(qt_scenario_diff_external_quilt_diff_opts)
     qt_begin_test("diff_external_quilt_diff_opts")
-    qt_write_file("${QT_WORK_DIR}/f.txt" "old\n")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nold\nc\n")
     qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
     qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
-    qt_write_file("${QT_WORK_DIR}/f.txt" "new\n")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nnew\nc\n")
     qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
     # Like upstream, a --diff utility gets only the two files, not
-    # QUILT_DIFF_OPTS, so diff gives its default format
-    qt_quilt_ok(OUTPUT diff_out ERROR diff_err ENV "QUILT_DIFF_OPTS=-u"
+    # QUILT_DIFF_OPTS, so diff gives its default format, whatever that is
+    # (GNU diff's is normal, BusyBox diff's unified with 3 context lines)
+    qt_quilt_ok(OUTPUT diff_out ERROR diff_err ENV "QUILT_DIFF_OPTS=-U0"
         ARGS diff "--diff=diff" MESSAGE "diff with QUILT_DIFF_OPTS failed")
-    qt_assert_equal("${diff_out}" "1c1\n< old\n---\n> new\n" "diff output")
+    qt_assert_contains("${diff_out}" "old" "diff output has the old line")
+    qt_assert_contains("${diff_out}" "new" "diff output has the new line")
+    qt_assert_not_contains("${diff_out}" "@@ -2 +2 @@" "QUILT_DIFF_OPTS not passed")
 endfunction()
 
 # revert_subdir: revert a file in a subdirectory when the directory doesn't exist
@@ -9848,10 +9851,10 @@ function(qt_scenario_series_leading_space_no_newline)
     file(MAKE_DIRECTORY "${QT_WORK_DIR}/patches")
     file(MAKE_DIRECTORY "${QT_WORK_DIR}/.pc")
     # Write "  p.patch" with no trailing newline (FILE() appends nothing)
-    file(WRITE "${QT_WORK_DIR}/patches/series" "  p.patch")
-    file(WRITE "${QT_WORK_DIR}/.pc/applied-patches" "")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "  p.patch")
+    qt_write_file("${QT_WORK_DIR}/.pc/applied-patches" "")
     # Create a dummy patch file so series command can find it
-    file(WRITE "${QT_WORK_DIR}/patches/p.patch" "")
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch" "")
     # Run series — it reads the series file which has leading-space + no-newline
     qt_quilt_ok(OUTPUT series_out ARGS series MESSAGE "series failed")
     qt_assert_contains("${series_out}" "p.patch" "series should list p.patch (trim leading space)")
@@ -9893,19 +9896,19 @@ endfunction()
 function(qt_scenario_push_reject_no_newline)
     qt_begin_test("push_reject_no_newline")
     # Create a file without trailing newline
-    file(WRITE "${QT_WORK_DIR}/f.txt" "original")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "original")
     file(MAKE_DIRECTORY "${QT_WORK_DIR}/patches")
     file(MAKE_DIRECTORY "${QT_WORK_DIR}/.pc")
     # Create a patch that tries to remove "wrong" (not "original"), so it fails.
     # The patch includes "\ No newline at end of file" after the '-' line,
     # which sets old_no_newline=true on the hunk.
-    file(WRITE "${QT_WORK_DIR}/patches/bad.patch"
+    qt_write_file("${QT_WORK_DIR}/patches/bad.patch"
 "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-wrong\n\\ No newline at end of file\n+patched\n")
-    file(WRITE "${QT_WORK_DIR}/patches/series" "bad.patch\n")
-    file(WRITE "${QT_WORK_DIR}/.pc/applied-patches" "")
-    file(WRITE "${QT_WORK_DIR}/.pc/.version" "2\n")
-    file(WRITE "${QT_WORK_DIR}/.pc/.quilt_patches" "patches\n")
-    file(WRITE "${QT_WORK_DIR}/.pc/.quilt_series" "series\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "bad.patch\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/applied-patches" "")
+    qt_write_file("${QT_WORK_DIR}/.pc/.version" "2\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/.quilt_patches" "patches\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/.quilt_series" "series\n")
     # Push with --leave-rejects to keep the .rej file
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --leave-rejects)
     qt_assert_failure("${rc}" "push should fail when patch doesn't apply")
@@ -9917,7 +9920,7 @@ function(qt_scenario_push_reject_no_newline)
         "rej file should mark the line without a newline")
 
     # Both sides of a context diff, and a context line that ends both
-    file(WRITE "${QT_WORK_DIR}/patches/bad.patch"
+    qt_write_file("${QT_WORK_DIR}/patches/bad.patch"
 "*** a/f.txt\n--- b/f.txt\n***************\n*** 1,2 ****\n! a\n  b\n\\ No newline at end of file\n--- 1,2 ----\n! c\n  b\n\\ No newline at end of file\n")
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --leave-rejects)
     qt_assert_failure("${rc}" "push should fail when patch doesn't apply")
@@ -9925,7 +9928,7 @@ function(qt_scenario_push_reject_no_newline)
     qt_assert_equal("${rej_content}"
         "*** f.txt\n--- f.txt\n***************\n*** 1,2 ****\n! a\n  b\n\\ No newline at end of file\n--- 1,2 ----\n! c\n  b\n\\ No newline at end of file\n"
         "context rej file should mark the lines without a newline")
-    file(WRITE "${QT_WORK_DIR}/patches/bad.patch"
+    qt_write_file("${QT_WORK_DIR}/patches/bad.patch"
 "--- a/f.txt\n+++ b/f.txt\n@@ -1,2 +1,2 @@\n-a\n+c\n b\n\\ No newline at end of file\n")
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --leave-rejects)
     qt_assert_failure("${rc}" "push should fail when patch doesn't apply")
@@ -9944,11 +9947,11 @@ function(qt_scenario_fork_applied_not_in_series)
     file(MAKE_DIRECTORY "${QT_WORK_DIR}/patches")
     file(MAKE_DIRECTORY "${QT_WORK_DIR}/.pc")
     # Series has "other.patch" only; applied-patches has "ghost.patch" (not in series)
-    file(WRITE "${QT_WORK_DIR}/patches/series" "other.patch\n")
-    file(WRITE "${QT_WORK_DIR}/.pc/applied-patches" "ghost.patch\n")
-    file(WRITE "${QT_WORK_DIR}/.pc/.version" "2\n")
-    file(WRITE "${QT_WORK_DIR}/.pc/.quilt_patches" "patches\n")
-    file(WRITE "${QT_WORK_DIR}/.pc/.quilt_series" "series\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "other.patch\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/applied-patches" "ghost.patch\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/.version" "2\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/.quilt_patches" "patches\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/.quilt_series" "series\n")
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS fork)
     qt_assert_failure("${rc}" "fork should fail when applied patch not in series")
     qt_assert_contains("${err}" "The series file no longer matches the applied patches"
@@ -9984,18 +9987,18 @@ endfunction()
 function(qt_scenario_refresh_creates_patches_dir)
     qt_begin_test("refresh_creates_patches_dir")
     # Create the working file (current state)
-    file(WRITE "${QT_WORK_DIR}/f.txt" "hello\n")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "hello\n")
     # Set up .pc/ structure manually (no patches/ directory)
     file(MAKE_DIRECTORY "${QT_WORK_DIR}/.pc")
     file(MAKE_DIRECTORY "${QT_WORK_DIR}/.pc/p.patch")
     # Backup shows the "before" state
-    file(WRITE "${QT_WORK_DIR}/.pc/p.patch/f.txt" "original\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/p.patch/f.txt" "original\n")
     # Metadata: version, patches dir, applied list
-    file(WRITE "${QT_WORK_DIR}/.pc/.version" "2\n")
-    file(WRITE "${QT_WORK_DIR}/.pc/.quilt_patches" "patches\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/.version" "2\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/.quilt_patches" "patches\n")
     # No .pc/.quilt_series → fallback search finds .pc/series
-    file(WRITE "${QT_WORK_DIR}/.pc/series" "p.patch\n")
-    file(WRITE "${QT_WORK_DIR}/.pc/applied-patches" "p.patch\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/series" "p.patch\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/applied-patches" "p.patch\n")
     # patches/ directory intentionally absent
     qt_assert_not_exists("${QT_WORK_DIR}/patches" "patches/ must not exist before refresh")
     # refresh should create patches/ and write patches/p.patch
@@ -10032,11 +10035,11 @@ function(qt_scenario_top_index_applied_not_in_series)
     file(MAKE_DIRECTORY "${QT_WORK_DIR}/patches")
     file(MAKE_DIRECTORY "${QT_WORK_DIR}/.pc")
     # Series: "other.patch" only. Applied: "ghost.patch" (not in series).
-    file(WRITE "${QT_WORK_DIR}/patches/series" "other.patch\n")
-    file(WRITE "${QT_WORK_DIR}/.pc/applied-patches" "ghost.patch\n")
-    file(WRITE "${QT_WORK_DIR}/.pc/.version" "2\n")
-    file(WRITE "${QT_WORK_DIR}/.pc/.quilt_patches" "patches\n")
-    file(WRITE "${QT_WORK_DIR}/.pc/.quilt_series" "series\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "other.patch\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/applied-patches" "ghost.patch\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/.version" "2\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/.quilt_patches" "patches\n")
+    qt_write_file("${QT_WORK_DIR}/.pc/.quilt_series" "series\n")
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS new fresh.patch)
     qt_assert_failure("${rc}" "new should fail when applied-patches disagrees with the series")
     qt_combine_output(combined "${out}" "${err}")
@@ -10062,7 +10065,7 @@ function(qt_scenario_refresh_diffstat_bare_header)
     # The " f.txt | 2 +-" line is held, and the summary line after it
     # replaces both with the new diffstat. The blank line after it stays.
     file(READ "${QT_WORK_DIR}/patches/p.patch" existing_patch)
-    file(WRITE "${QT_WORK_DIR}/patches/p.patch"
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch"
         "Description\n\n f.txt | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n\n${existing_patch}")
     qt_quilt_ok(ENV "QUILT_NO_DIFF_TIMESTAMPS=1" ARGS refresh --diffstat
         MESSAGE "refresh --diffstat with bare diffstat header failed")
@@ -10090,7 +10093,7 @@ function(qt_scenario_refresh_diffstat_bare_false_positive)
     # Prepend a "false positive" diffstat: two diffstat-looking lines followed
     # by an EMPTY LINE before any summary, so the lines are not replaced
     file(READ "${QT_WORK_DIR}/patches/p.patch" existing_patch)
-    file(WRITE "${QT_WORK_DIR}/patches/p.patch"
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch"
         "Description\n\n f.txt | 2 +-\n g.txt | 3 +++\n\n${existing_patch}")
     qt_quilt_ok(ENV "QUILT_NO_DIFF_TIMESTAMPS=1" ARGS refresh --diffstat
         MESSAGE "refresh --diffstat with false-positive diffstat header failed")
@@ -10499,7 +10502,7 @@ function(qt_scenario_series_v_markers)
     qt_quilt_ok(ARGS refresh MESSAGE "refresh p2")
     # p1 and p2 both applied. Top is p2. Add unapplied p3 to series directly.
     qt_write_file("${QT_WORK_DIR}/patches/p3.patch" "")
-    file(APPEND "${QT_WORK_DIR}/patches/series" "p3.patch\n")
+    qt_append_file("${QT_WORK_DIR}/patches/series" "p3.patch\n")
     qt_quilt_ok(OUTPUT sv_out ARGS series -v MESSAGE "series -v failed")
     qt_assert_matches("${sv_out}" "\\+ .*p1\\.patch" "non-top applied should have + prefix")
     qt_assert_matches("${sv_out}" "= .*p2\\.patch" "top applied should have = prefix")
@@ -10971,14 +10974,16 @@ function(qt_scenario_diff_utility_files)
     qt_assert_success("${rc}" "diff --diff should ignore the utility's status")
     qt_assert_not_contains("${out}" "Index:" "no Index lines")
     qt_assert_not_contains("${out}" "same" "identical files are skipped")
-    qt_assert_contains("${out}" "--- .pc/p.patch/a\t" "old side is the backup")
-    qt_assert_contains("${out}" "+++ a\t" "new side is the file")
-    qt_assert_contains("${out}" "--- /dev/null\t" "an empty backup is /dev/null")
-    qt_assert_contains("${out}" "+++ n\t" "a new file is named as is")
+    # GNU diff follows each name with a tab and timestamp, BusyBox diff
+    # with nothing
+    qt_assert_matches("${out}" "--- \\.pc/p\\.patch/a[\t\n]" "old side is the backup")
+    qt_assert_matches("${out}" "\\+\\+\\+ a[\t\n]" "new side is the file")
+    qt_assert_matches("${out}" "--- /dev/null[\t\n]" "an empty backup is /dev/null")
+    qt_assert_matches("${out}" "\\+\\+\\+ n[\t\n]" "a new file is named as is")
     qt_quilt_ok(OUTPUT out ERROR err ARGS diff -R "--diff=diff -u" MESSAGE "diff -R failed")
-    qt_assert_contains("${out}" "--- a\t" "-R swaps the files")
-    qt_assert_contains("${out}" "+++ .pc/p.patch/a\t" "-R swaps the files")
-    qt_assert_contains("${out}" "+++ /dev/null\t" "-R swaps /dev/null")
+    qt_assert_matches("${out}" "--- a[\t\n]" "-R swaps the files")
+    qt_assert_matches("${out}" "\\+\\+\\+ \\.pc/p\\.patch/a[\t\n]" "-R swaps the files")
+    qt_assert_matches("${out}" "\\+\\+\\+ /dev/null[\t\n]" "-R swaps /dev/null")
 endfunction()
 
 function(qt_scenario_refresh_sorted_default)
@@ -14508,9 +14513,9 @@ function(qt_check_diff_round_trip file old new format expected)
         qt_assert_equal("${out}" "${expected}" "diff ${format} of ${file} (${algo})")
     endforeach()
     qt_quilt_ok(ARGS refresh ${format} MESSAGE "refresh ${format} of ${file} failed")
-    file(WRITE "${QT_TEST_BASE}/expected" "${old}")
+    qt_write_file("${QT_TEST_BASE}/expected" "${old}")
     file(READ "${QT_TEST_BASE}/expected" old_hex HEX)
-    file(WRITE "${QT_TEST_BASE}/expected" "${new}")
+    qt_write_file("${QT_TEST_BASE}/expected" "${new}")
     file(READ "${QT_TEST_BASE}/expected" new_hex HEX)
     qt_quilt_ok(ARGS pop MESSAGE "pop of ${file}${format} failed")
     qt_assert_file_hex("${QT_WORK_DIR}/${file}" "${old_hex}" "pop should restore ${file}")

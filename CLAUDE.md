@@ -226,6 +226,8 @@ endfunction()
 **Patterns:**
 - **Environment variables**: `qt_quilt_ok(ENV "QUILT_PATCHES=/abs/path" ARGS series)`
 - **Stdin data**: `qt_quilt_ok(ARGS fold -f INPUT "--- a/f.txt\n+++ b/f.txt\n...")` — for multi-line patches use CMake bracket syntax: `INPUT [=[ ... ]=]`
+- **Writing files**: Use `qt_write_file`/`qt_append_file`, never raw `file(WRITE)`/`file(APPEND)`. On Windows those write in text mode, turning every LF into CRLF, and tests then fail there only (e.g. push prints "Stripping trailing CRs from patch").
+- **Diff utilities**: Scenarios that run an external `diff` (e.g. `--diff=diff`) must not depend on GNU diff's output. On Windows (w64devkit) `diff` is BusyBox: unified-only and without timestamps.
 - **Binary data**: CMake can't handle null bytes in strings. Use `qt_write_bytes(path "\\0\\001")` to write binary files.
 - **Exact bytes / CRLF**: `file(READ)` (and so `qt_read_file_raw`) folds CRLF into LF. To assert exact bytes, use `qt_assert_file_hex` or `qt_assert_file_contains_hex`.
 - **Combined output checking**: `qt_combine_output(combined "${out}" "${err}")` then `qt_assert_contains("${combined}" "error text" "msg")` — use this when you don't know if output goes to stdout or stderr.
