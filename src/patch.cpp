@@ -1071,7 +1071,7 @@ static std::string build_merge_output(std::span<const std::string> file_lines,
 // ── Reject file generation ─────────────────────────────────────────────
 
 // A unified diff range as GNU patch writes it, with no count for one line.
-static std::string unified_range(ptrdiff_t start, ptrdiff_t count)
+static std::string reject_unified_range(ptrdiff_t start, ptrdiff_t count)
 {
     if (count == 1) return std::format("{}", start);
     return std::format("{},{}", start, count);
@@ -1079,7 +1079,7 @@ static std::string unified_range(ptrdiff_t start, ptrdiff_t count)
 
 // A context diff range as GNU patch writes it, from first to last line,
 // either alone for one line, or 0 for none.
-static std::string context_range(ptrdiff_t start, ptrdiff_t count)
+static std::string reject_context_range(ptrdiff_t start, ptrdiff_t count)
 {
     if (count == 0) return "0";
     if (count == 1) return std::format("{}", start);
@@ -1115,16 +1115,16 @@ static std::string format_rejects(const PatchFile &pf,
                 if (no_nl && !section.empty()) result += no_newline;
             };
             result += "***************" + hunk.function + "\n";
-            result += "*** " + context_range(hunk.old_start + offset, hunk.old_count) + " ****\n";
+            result += "*** " + reject_context_range(hunk.old_start + offset, hunk.old_count) + " ****\n";
             add_section(hunk.old_section, hunk.old_no_newline);
-            result += "--- " + context_range(hunk.new_start + offset, hunk.new_count) + " ----\n";
+            result += "--- " + reject_context_range(hunk.new_start + offset, hunk.new_count) + " ----\n";
             add_section(hunk.new_section, hunk.new_no_newline);
             continue;
         }
 
         result += std::format("@@ -{} +{} @@{}\n",
-                              unified_range(hunk.old_start + offset, hunk.old_count),
-                              unified_range(hunk.new_start + offset, hunk.new_count),
+                              reject_unified_range(hunk.old_start + offset, hunk.old_count),
+                              reject_unified_range(hunk.new_start + offset, hunk.new_count),
                               hunk.function);
 
         // The last line on each side, which alone may lack a newline

@@ -10,8 +10,23 @@ version=$1; shift
 files=""
 for f; do files="$files $f"; done
 awk -v src_dir="$src_dir" -v file_list="$files" -v version="$version" '
+# Several files define the same static helper, which in one translation
+# unit would be a redefinition, so drop a static definition when it
+# matches, apart from whitespace, one already written.  Keep any other,
+# so that overloads survive, and so that two different functions with
+# the same signature fail to compile rather than one replacing the other.
+function emit(def,    key) {
+    key = def
+    gsub(/[ \t\r\n]+/, " ", key)
+    if (!(key in seen)) {
+        seen[key] = 1
+        printf "%s", def
+    }
+}
+
 BEGIN {
     nf = split(file_list, files)
+    sq = sprintf("%c", 39)
 
     printf "// quilt.cpp \342\200\224 single-file amalgamation (Windows platform)\n"
     printf "// $ c++ -std=c++20 -o quilt.exe quilt.cpp -lshell32\n"
@@ -22,49 +37,39 @@ BEGIN {
     for (fi = 1; fi <= nf; fi++) {
         path = src_dir "/" files[fi]
         printf "// === %s ===\n\n", files[fi]
-        skip = 0; depth = 0; brace_open = 0
+        in_def = 0
 
         while ((getline line < path) > 0) {
             if (line ~ /^#pragma once/)                   continue
             if (line ~ /^#include[ \t]+"quilt\.hpp"/)    continue
             if (line ~ /^#include[ \t]+"platform\.hpp"/) continue
 
-            if (skip) {
-                for (ci = 1; ci <= length(line); ci++) {
-                    c = substr(line, ci, 1)
-                    if (c == "{") { depth++; brace_open = 1 }
-                    else if (c == "}") depth--
-                }
-                if (brace_open && depth <= 0) { skip=0; depth=0; brace_open=0 }
+            if (!in_def && line ~ /^static / && index(line, "(") > 0) {
+                in_def = 1; def = ""; depth = 0; brace_open = 0
+            }
+            if (!in_def) {
+                print line
                 continue
             }
 
-            if (line ~ /^static /) {
-                tmp = line
-                sub(/^static[ \t]+/, "", tmp)
-                paren = index(tmp, "(")
-                if (paren > 0) {
-                    before = substr(tmp, 1, paren - 1)
-                    gsub(/[^a-zA-Z0-9_]/, " ", before)
-                    nw = split(before, wds)
-                    if (nw > 0) {
-                        fname = wds[nw]
-                        if (fname in seen) {
-                            skip=1; depth=0; brace_open=0
-                            for (ci = 1; ci <= length(line); ci++) {
-                                c = substr(line, ci, 1)
-                                if (c == "{") { depth++; brace_open=1 }
-                                else if (c == "}") depth--
-                            }
-                            if (brace_open && depth <= 0) skip = 0
-                            continue
-                        }
-                        seen[fname] = 1
-                    }
-                }
+            # A definition ends at the brace closing its body, and a
+            # declaration at its semicolon.  Braces in literals and
+            # comments do not count.
+            def = def line "\n"
+            code = line
+            gsub(/\\./, "", code)
+            gsub(sq "[^" sq "]*" sq, "", code)
+            gsub(/"[^"]*"/, "", code)
+            sub(/\/\/.*/, "", code)
+            opens = gsub(/[{]/, "", code)
+            depth += opens - gsub(/[}]/, "", code)
+            if (opens > 0) brace_open = 1
+            if ((brace_open && depth <= 0) || (!brace_open && code ~ /;[ \t]*$/)) {
+                emit(def)
+                in_def = 0
             }
-            print line
         }
+        if (in_def) emit(def)
         close(path)
         print ""
     }

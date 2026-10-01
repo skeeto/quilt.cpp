@@ -61,6 +61,8 @@ g++ -std=c++20 -o quilt.exe quilt.cpp -lshell32
 Regenerate: `cmake --build build --target amalgam` (not built by default).
 Do not edit `quilt.cpp` directly.
 
+`make_amalgam.sh` drops a top-level `static` definition only when it matches one already emitted, ignoring whitespace, so a helper copied into several files survives once and overloads survive. Two `static` functions with the same signature but different bodies in different files are a redefinition in the amalgamation: give one a distinct name. When `x86_64-w64-mingw32-g++` is installed, the `amalgam_check` target compiles the amalgamation, and CTest runs it as `quilt_amalgam`; the release workflow builds it too.
+
 ## Test
 
 ```bash

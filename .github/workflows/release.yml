@@ -23,7 +23,7 @@ jobs:
       - name: Build amalgamation
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --target amalgam
+          cmake --build build --target amalgam_check
           cp build/quilt.cpp quilt.cpp
 
       - name: Build Windows binary

@@ -89,6 +89,24 @@ add_custom_command(
 )
 add_custom_target(amalgam DEPENDS ${CMAKE_BINARY_DIR}/quilt.cpp)
 
+# Compile the amalgamation, since merging the sources can break it, with
+# mingw-w64 when it is installed. The test suite runs this too.
+# $ cmake --build <dir> --target amalgam_check
+find_program(QUILT_AMALGAM_CXX x86_64-w64-mingw32-g++)
+if(QUILT_AMALGAM_CXX)
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/quilt-amalgam.exe
+        COMMAND ${QUILT_AMALGAM_CXX} -std=c++20 -o quilt-amalgam.exe quilt.cpp
+                -static -lshell32
+        DEPENDS ${CMAKE_BINARY_DIR}/quilt.cpp
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        COMMENT "Compiling quilt.cpp amalgamation"
+        VERBATIM
+    )
+    add_custom_target(amalgam_check DEPENDS ${CMAKE_BINARY_DIR}/quilt-amalgam.exe)
+    add_dependencies(amalgam_check amalgam)
+endif()
+
 # Fuzz targets (requires clang with libFuzzer support)
 option(ENABLE_FUZZ "Build fuzz testing targets" OFF)
 if(ENABLE_FUZZ)
@@ -186,6 +204,17 @@ if(QUILT_TEST_EXECUTABLE STREQUAL "")
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     )
     set_tests_properties(quilt_build PROPERTIES FIXTURES_SETUP quilt_binary)
+    if(QUILT_AMALGAM_CXX)
+        add_test(
+            NAME quilt_amalgam
+            COMMAND ${CMAKE_COMMAND} --build . --target amalgam_check
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        )
+        # Build after quilt_build rather than in the same tree beside it
+        set_tests_properties(
+            quilt_amalgam PROPERTIES FIXTURES_REQUIRED quilt_binary
+        )
+    endif()
 else()
     set(quilt_test_command "${QUILT_TEST_EXECUTABLE}")
     set(quilt_test_requires_fixture FALSE)
