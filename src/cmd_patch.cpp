@@ -1194,6 +1194,25 @@ static bool strip_file_trailing_ws(const std::string &path,
     return write_file(path, result);
 }
 
+// Like upstream change_db_strip_level, record in the series the strip level
+// a refreshed patch was written with. Refresh always writes forward, so -R
+// is dropped too.
+static bool record_strip_level(QuiltState &q, const std::string &patch,
+                               int strip_level) {
+    if (strip_level != 1) {
+        q.patch_strip_level[patch] = strip_level;
+    } else {
+        q.patch_strip_level.erase(patch);
+    }
+    q.patch_reversed.erase(patch);
+    std::string series_abs = path_join(q.work_dir, q.series_file);
+    if (!set_series_strip_level(series_abs, patch, strip_level)) {
+        err_line("Failed to write series file.");
+        return false;
+    }
+    return true;
+}
+
 int cmd_refresh(QuiltState &q, int argc, char **argv) {
     if (q.applied.empty()) {
         err_line("No patches applied");
@@ -1368,6 +1387,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         err_line(", please specify -p0, -p1, or -pab instead");
         return 1;
     }
+    int strip_level = p_format == "0" ? 0 : 1;
 
     // Compute diff format and context lines
     DiffFormat diff_format = DiffFormat::unified;
@@ -1467,13 +1487,10 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         // Write .timestamp for the fork
         write_file(path_join(new_pc, ".timestamp"), "");
 
-        // Migrate per-patch metadata to fork
-        auto sl_it = q.patch_strip_level.find(old_name);
-        if (sl_it != q.patch_strip_level.end()) {
-            q.patch_strip_level[new_name] = sl_it->second;
-        }
-        if (q.patch_reversed.contains(old_name)) {
-            q.patch_reversed.insert(new_name);
+        // The fork is written forward with the strip level in use, which
+        // defaults to the original's.
+        if (strip_level != 1) {
+            q.patch_strip_level[new_name] = strip_level;
         }
 
         // Insert new patch after original in series
@@ -1669,7 +1686,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
             out("Patch "); out(patch_path_display(q, patch));
             out_line(" is unchanged");
         }
-        return 0;
+        return record_strip_level(q, patch, strip_level) ? 0 : 1;
     }
 
     // Ensure patches directory exists
@@ -1700,7 +1717,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
             out("Refreshed patch "); out_line(patch_path_display(q, patch));
         }
     }
-    return 0;
+    return record_strip_level(q, patch, strip_level) ? 0 : 1;
 }
 
 int cmd_diff(QuiltState &q, int argc, char **argv) {

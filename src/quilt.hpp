@@ -177,6 +177,10 @@ std::vector<std::string> read_series(std::string_view path,
 bool write_series(std::string_view path, std::span<const std::string> patches,
                   const std::map<std::string, int> &strip_levels,
                   const std::set<std::string> &reversed);
+// Record strip_level (omitted when 1) and drop -R on patch's series line,
+// leaving comments, other lines, and other options alone.
+bool set_series_strip_level(std::string_view path, std::string_view patch,
+                            int strip_level);
 std::vector<std::string> read_applied(std::string_view path);
 bool write_applied(std::string_view path, std::span<const std::string> patches);
 

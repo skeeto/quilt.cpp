@@ -36,7 +36,7 @@ patch3.diff -p2 -R                  # reversed patch, strip level 2
 patch4.diff -p1 # inline comment
 ```
 
-**Rules**: Each non-comment line contains a patch filename (relative to `QUILT_PATCHES`), followed by optional `patch(1)`-style options (`-p0`, `-p2`, `-R`), followed by an optional inline comment (` # text`). The **default strip level is `-p1`** when no `-p` option appears. Quilt updates the series file automatically during `new`, `delete`, `import`, `rename`, and `fork` operations. Users may manually edit the series while patches are applied, provided applied patches retain their original order.
+**Rules**: Each non-comment line contains a patch filename (relative to `QUILT_PATCHES`), followed by optional `patch(1)`-style options (`-p0`, `-p2`, `-R`), followed by an optional inline comment (` # text`). The **default strip level is `-p1`** when no `-p` option appears. Quilt updates the series file automatically during `new`, `delete`, `import`, `rename`, `fork`, and `refresh` operations. Users may manually edit the series while patches are applied, provided applied patches retain their original order.
 
 ### The `.pc/` directory structure
 
@@ -180,7 +180,7 @@ Prints the name of the next patch after the topmost or specified patch in the se
 
 Regenerates the specified (or topmost) patch file by running GNU `diff` between backup copies in `.pc/<patchname>/` and current source files. **This is the command that actually writes patch files.**
 
-**Exact behavior**: (1) Determines target patch (default: topmost). (2) For non-topmost patches without `-f`: checks if any patches above modify the same files and aborts if so. With `-f`: only includes changes in files not shadowed by upper patches, warns about shadowed files. (3) For each file tracked by the patch: runs `diff` between `.pc/<patchname>/<file>` (backup) and current `<file>`. (4) Preserves all header text from the existing patch file (everything before the first diff hunk). (5) Writes the combined diff output to `patches/<patchname>`. (6) Updates `.pc/<patchname>/.timestamp`.
+**Exact behavior**: (1) Determines target patch (default: topmost). (2) For non-topmost patches without `-f`: checks if any patches above modify the same files and aborts if so. With `-f`: only includes changes in files not shadowed by upper patches, warns about shadowed files. (3) For each file tracked by the patch: runs `diff` between `.pc/<patchname>/<file>` (backup) and current `<file>`. (4) Preserves all header text from the existing patch file (everything before the first diff hunk). (5) Writes the combined diff output to `patches/<patchname>`. (6) Updates `.pc/<patchname>/.timestamp`. (7) Records the strip level it used in the patch's series entry (`-p0`, or no `-p` option for `-p1` and `-p ab`) and removes any `-R`, since the patch is written forward. Only that line changes; comments and other options are kept. This happens even when the patch is unchanged.
 
 **Key flags**: `-p ab` produces `a/file` / `b/file` paths (recommended for Debian). `--no-timestamps` and `--no-index` suppress timestamp and `Index:` lines for cleaner patches. `--diffstat` adds/replaces a diffstat section in the header. `--sort` orders files alphabetically. `--backup` saves old patch as `patch~`. `-z[new_name]` writes changes to a new patch instead of updating the current one (fork-like). `--strip-trailing-whitespace` cleans up whitespace. `--diff-algorithm` selects the diff algorithm (see below; **quilt.cpp extension**).
 

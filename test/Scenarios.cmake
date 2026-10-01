@@ -420,6 +420,12 @@ set(QUILT_TEST_SCENARIOS
     fold_deletion
     files_unapplied_strip_deletion
     patches_unapplied_strip_deletion
+    refresh_p0_records_strip_level
+    refresh_pab_clears_p0
+    refresh_reversed_writes_forward
+    refresh_p1_clears_p2
+    refresh_z_pab_on_p0
+    refresh_series_comments_kept
     pop_reversed_patch
 )
 
@@ -590,6 +596,8 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     diff_algorithm_env_diff_cmd
     refresh_z_strip_migration
     annotate_P_missing_arg
+    refresh_z_reversed_fork
+    refresh_series_split_p_option
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -7829,6 +7837,22 @@ function(qt_run_named_scenario scenario)
         qt_scenario_refresh_z_strip_migration()
     elseif(scenario STREQUAL "annotate_P_missing_arg")
         qt_scenario_annotate_P_missing_arg()
+    elseif(scenario STREQUAL "refresh_p0_records_strip_level")
+        qt_scenario_refresh_p0_records_strip_level()
+    elseif(scenario STREQUAL "refresh_pab_clears_p0")
+        qt_scenario_refresh_pab_clears_p0()
+    elseif(scenario STREQUAL "refresh_reversed_writes_forward")
+        qt_scenario_refresh_reversed_writes_forward()
+    elseif(scenario STREQUAL "refresh_p1_clears_p2")
+        qt_scenario_refresh_p1_clears_p2()
+    elseif(scenario STREQUAL "refresh_z_pab_on_p0")
+        qt_scenario_refresh_z_pab_on_p0()
+    elseif(scenario STREQUAL "refresh_series_comments_kept")
+        qt_scenario_refresh_series_comments_kept()
+    elseif(scenario STREQUAL "refresh_z_reversed_fork")
+        qt_scenario_refresh_z_reversed_fork()
+    elseif(scenario STREQUAL "refresh_series_split_p_option")
+        qt_scenario_refresh_series_split_p_option()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -11795,6 +11819,10 @@ endfunction()
 # refresh -z. Upstream 0.69 intends to (refresh.in saves old_patch_args)
 # but looks up the strip level under the new name, which is not in the
 # series yet, so its fork falls back to -p1.
+# Without -p, refresh -z writes the fork with the original's strip level and
+# records that level for the fork. Native only because upstream 0.69 looks up
+# the strip level under the fork's name before the fork is in the series, so
+# it always writes the fork with -p1.
 function(qt_scenario_refresh_z_strip_migration)
     qt_begin_test("refresh_z_strip_migration")
     qt_write_file("${QT_WORK_DIR}/a/b/f.txt" "x\n")
@@ -11822,4 +11850,193 @@ function(qt_scenario_annotate_P_missing_arg)
     qt_assert_failure("${rc}" "annotate -P without a value should fail")
     qt_combine_output(combined "${out}" "${err}")
     qt_assert_contains("${combined}" "Usage: quilt annotate" "usage should be printed")
+endfunction()
+
+# refresh -p0 records -p0 in the series, so pop and push use the strip level
+# the patch was written with.
+function(qt_scenario_refresh_p0_records_strip_level)
+    qt_begin_test("refresh_p0_records_strip_level")
+    qt_write_file("${QT_WORK_DIR}/sub/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add sub/f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/sub/f.txt" "b\n")
+    qt_quilt_ok(ARGS refresh -p0 MESSAGE "refresh -p0 failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "p.patch -p0" "refresh -p0 should record -p0")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/p.patch" "+++ sub/f.txt" "patch should use -p0 file names")
+    qt_quilt_ok(ARGS pop MESSAGE "pop after refresh -p0 failed")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/f.txt" "a" "pop should restore the file")
+    qt_quilt_ok(ARGS push MESSAGE "push after refresh -p0 failed")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/f.txt" "b" "push should reapply the patch")
+endfunction()
+
+# Refreshing a -p0 patch with -p ab writes a/ b/ file names, so the series
+# entry drops its -p0.
+function(qt_scenario_refresh_pab_clears_p0)
+    qt_begin_test("refresh_pab_clears_p0")
+    qt_write_file("${QT_WORK_DIR}/sub/f.txt" "a\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p0.patch -p0\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p0.patch" [=[--- sub/f.txt.orig
++++ sub/f.txt
+@@ -1 +1 @@
+-a
++b
+]=])
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_write_file("${QT_WORK_DIR}/sub/f.txt" "c\n")
+    qt_quilt_ok(ENV "QUILT_REFRESH_ARGS=-p ab" ARGS refresh MESSAGE "refresh -p ab failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "p0.patch" "refresh -p ab should drop -p0")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/p0.patch" "+++ b/sub/f.txt" "patch should use b/ file names")
+    qt_quilt_ok(ARGS pop MESSAGE "pop after refresh -p ab failed")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/f.txt" "a" "pop should restore the file")
+    qt_quilt_ok(ARGS push MESSAGE "push after refresh -p ab failed")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/f.txt" "c" "push should reapply the patch")
+endfunction()
+
+# Refresh writes a reversed (-R) patch forward, so the series entry drops -R.
+function(qt_scenario_refresh_reversed_writes_forward)
+    qt_begin_test("refresh_reversed_writes_forward")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "r.patch -R\n")
+    qt_write_file("${QT_WORK_DIR}/patches/r.patch" [=[--- a/f.txt
++++ b/f.txt
+@@ -1 +1 @@
+-a
++b
+]=])
+    qt_quilt_ok(ARGS push MESSAGE "push of reversed patch failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "a" "push should reverse the patch")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "c\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "r.patch" "refresh should drop -R")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/r.patch" "-b\n+c\n" "patch should be written forward")
+    qt_quilt_ok(ARGS pop MESSAGE "pop after refresh failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "b" "pop should restore the file")
+    qt_quilt_ok(ARGS push MESSAGE "push after refresh failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "c" "push should reapply the patch")
+endfunction()
+
+# An explicit -p1 is the way to refresh a -p2 patch; the series entry then
+# drops its -p2.
+function(qt_scenario_refresh_p1_clears_p2)
+    qt_begin_test("refresh_p1_clears_p2")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p2.patch -p2\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p2.patch" [=[--- x/a/f.txt
++++ x/b/f.txt
+@@ -1 +1 @@
+-a
++b
+]=])
+    qt_quilt_ok(ARGS push MESSAGE "push of -p2 patch failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "c\n")
+    qt_quilt_ok(ARGS refresh -p1 MESSAGE "refresh -p1 failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "p2.patch" "refresh -p1 should drop -p2")
+    qt_quilt_ok(ARGS pop MESSAGE "pop after refresh -p1 failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "a" "pop should restore the file")
+    qt_quilt_ok(ARGS push MESSAGE "push after refresh -p1 failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "c" "push should reapply the patch")
+endfunction()
+
+# refresh -z with an explicit -p records that level for the fork and leaves
+# the original's entry alone.
+function(qt_scenario_refresh_z_pab_on_p0)
+    qt_begin_test("refresh_z_pab_on_p0")
+    qt_write_file("${QT_WORK_DIR}/sub/f.txt" "a\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.patch -p0\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch" [=[--- sub/f.txt.orig
++++ sub/f.txt
+@@ -1 +1 @@
+-a
++b
+]=])
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_write_file("${QT_WORK_DIR}/sub/f.txt" "c\n")
+    qt_quilt_ok(ARGS refresh -pab -zfork.patch MESSAGE "refresh -pab -z failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "p.patch -p0\nfork.patch" "fork should not inherit -p0")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/fork.patch" "+++ b/sub/f.txt" "fork should use b/ file names")
+    qt_quilt_ok(ARGS pop -a MESSAGE "pop -a after refresh -z failed")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/f.txt" "a" "pop -a should restore the file")
+    qt_quilt_ok(ARGS push -a MESSAGE "push -a after refresh -z failed")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/f.txt" "c" "push -a should reapply both patches")
+endfunction()
+
+# Recording the strip level rewrites only the patch's own series line, and
+# keeps comments, blank lines, and other options.
+function(qt_scenario_refresh_series_comments_kept)
+    qt_begin_test("refresh_series_comments_kept")
+    qt_write_file("${QT_WORK_DIR}/sub/f.txt" "a\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series"
+        "# top\n\np.patch -p0 --fuzz=3 # note\n# end\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch" [=[--- sub/f.txt.orig
++++ sub/f.txt
+@@ -1 +1 @@
+-a
++b
+]=])
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_write_file("${QT_WORK_DIR}/sub/f.txt" "c\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series"
+        "# top\n\np.patch -p0 --fuzz=3 # note\n# end"
+        "plain refresh should keep the series entry")
+    qt_quilt_ok(ARGS refresh -p1 MESSAGE "refresh -p1 failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series"
+        "# top\n\np.patch --fuzz=3 # note\n# end"
+        "refresh -p1 should drop only -p0")
+    qt_quilt_ok(ARGS refresh -p0 MESSAGE "refresh -p0 failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series"
+        "# top\n\np.patch -p0 --fuzz=3 # note\n# end"
+        "refresh -p0 should insert -p0 after the name")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/f.txt" "a" "pop should restore the file")
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/f.txt" "c" "push should reapply the patch")
+endfunction()
+
+# The fork of a reversed patch is written forward, so it gets no -R while the
+# original keeps its -R. Native only because upstream 0.69 splits the
+# original's arguments across lines when it inserts the fork, adding a bogus
+# "-p1" series entry.
+function(qt_scenario_refresh_z_reversed_fork)
+    qt_begin_test("refresh_z_reversed_fork")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "b\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "r.patch -R\n")
+    qt_write_file("${QT_WORK_DIR}/patches/r.patch" [=[--- a/f.txt
++++ b/f.txt
+@@ -1 +1 @@
+-a
++b
+]=])
+    qt_quilt_ok(ARGS push MESSAGE "push of reversed patch failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "c\n")
+    qt_quilt_ok(ARGS refresh -zfork.patch MESSAGE "refresh -z failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "r.patch -R\nfork.patch" "fork should not inherit -R")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/fork.patch" "-a\n+c\n" "fork should be written forward")
+    qt_quilt_ok(ARGS pop -a MESSAGE "pop -a after refresh -z failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "b" "pop -a should restore the file")
+    qt_quilt_ok(ARGS push -a MESSAGE "push -a after refresh -z failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "c" "push -a should reapply both patches")
+endfunction()
+
+# The series reader accepts "-p N" as two words; recording a new strip level
+# replaces both. Native only because upstream 0.69 replaces just the "-p" and
+# leaves the "N" behind as a stray argument.
+function(qt_scenario_refresh_series_split_p_option)
+    qt_begin_test("refresh_series_split_p_option")
+    qt_write_file("${QT_WORK_DIR}/sub/f.txt" "a\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.patch -p 0\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch" [=[--- sub/f.txt.orig
++++ sub/f.txt
+@@ -1 +1 @@
+-a
++b
+]=])
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_write_file("${QT_WORK_DIR}/sub/f.txt" "c\n")
+    qt_quilt_ok(ARGS refresh -p1 MESSAGE "refresh -p1 failed")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "p.patch" "refresh -p1 should drop -p 0")
+    qt_quilt_ok(ARGS pop MESSAGE "pop failed")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/f.txt" "a" "pop should restore the file")
+    qt_quilt_ok(ARGS push MESSAGE "push failed")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/f.txt" "c" "push should reapply the patch")
 endfunction()

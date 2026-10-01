@@ -313,6 +313,72 @@ bool write_series(std::string_view path, std::span<const std::string> patches,
     return write_file(path, content);
 }
 
+bool set_series_strip_level(std::string_view path, std::string_view patch,
+                            int strip_level) {
+    std::string content = read_file(path);
+    std::string result;
+    bool changed = false;
+    std::string_view rest = content;
+    while (!rest.empty()) {
+        auto nl = str_find(rest, '\n');
+        std::string_view line = rest.substr(0, nl < 0 ? rest.size() : checked_cast<size_t>(nl + 1));
+        rest.remove_prefix(line.size());
+
+        // Split off the line ending and inline comment as read_series does
+        std::string_view body = line;
+        if (body.ends_with('\n')) body.remove_suffix(1);
+        if (body.ends_with('\r')) body.remove_suffix(1);
+        std::string_view eol = line.substr(body.size());
+        std::string_view comment;
+        auto hash = str_find(body, " #");
+        if (hash >= 0) {
+            comment = body.substr(checked_cast<size_t>(hash + 1));
+            body = body.substr(0, checked_cast<size_t>(hash));
+        }
+        auto tokens = split_on_whitespace(body);
+        if (tokens.empty() || tokens[0].starts_with('#') || tokens[0] != patch) {
+            result += line;
+            continue;
+        }
+
+        // Drop -R and any -p option ("-pN" or "-p N"), then put the new
+        // level where the old one was, or right after the name.
+        std::vector<std::string> opts;
+        ptrdiff_t level_at = -1;
+        for (ptrdiff_t i = 1; i < std::ssize(tokens); ++i) {
+            const auto &tok = tokens[checked_cast<size_t>(i)];
+            if (tok == "-R") continue;
+            if (tok.starts_with("-p")) {
+                if (tok == "-p" && i + 1 < std::ssize(tokens)) ++i;
+                if (level_at < 0) level_at = std::ssize(opts);
+                continue;
+            }
+            opts.push_back(tok);
+        }
+        if (strip_level != 1) {
+            opts.insert(opts.begin() + std::max(level_at, ptrdiff_t{0}),
+                        "-p" + std::to_string(strip_level));
+        }
+        if (std::equal(opts.begin(), opts.end(), tokens.begin() + 1, tokens.end())) {
+            result += line;
+            continue;
+        }
+
+        result += tokens[0];
+        for (const auto &opt : opts) {
+            result += ' ';
+            result += opt;
+        }
+        if (!comment.empty()) {
+            result += ' ';
+            result += comment;
+        }
+        result += eol;
+        changed = true;
+    }
+    return !changed || write_file(path, result);
+}
+
 std::vector<std::string> read_applied(std::string_view path) {
     std::vector<std::string> patches;
     std::string content = read_file(path);
