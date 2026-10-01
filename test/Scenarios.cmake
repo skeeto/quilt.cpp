@@ -471,6 +471,7 @@ set(QUILT_TEST_SCENARIOS
     push_skip_missing_later_file
     fold_skip_missing_file
     fold_fail_rollback
+    fold_subdirectory
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -8150,6 +8151,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_push_skip_missing_later_file()
     elseif(scenario STREQUAL "fold_skip_missing_file")
         qt_scenario_fold_skip_missing_file()
+    elseif(scenario STREQUAL "fold_subdirectory")
+        qt_scenario_fold_subdirectory()
     elseif(scenario STREQUAL "push_context_diff_zero_context")
         qt_scenario_push_context_diff_zero_context()
     elseif(scenario STREQUAL "push_missing_patch_file")
@@ -13057,6 +13060,47 @@ function(qt_scenario_fold_skip_missing_file)
     qt_assert_not_exists("${QT_WORK_DIR}/new.txt.rej" "fold should write no reject file")
     qt_quilt_ok(OUTPUT out ARGS files MESSAGE "files failed")
     qt_assert_equal("${out}" "" "fold should not add new.txt to the patch")
+endfunction()
+
+# fold_subdirectory: fold run from a subdirectory applies the patch there,
+# like "patch -d", so file names, backups, and reject files are relative to
+# the subdirectory, and skipped files are left out of the top patch
+function(qt_scenario_fold_subdirectory)
+    qt_begin_test("fold_subdirectory")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "root\n")
+    qt_write_file("${QT_WORK_DIR}/sub/f.txt" "inner\n")
+    qt_write_file("${QT_WORK_DIR}/sub/g.txt" "other\n")
+    qt_quilt_ok(ARGS new top.diff MESSAGE "new failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS fold
+        WORKING_DIRECTORY "${QT_WORK_DIR}/sub"
+        INPUT "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-inner\n+changed\n--- a/new/h.txt\n+++ b/new/h.txt\n@@ -0,0 +1 @@\n+created\n")
+    qt_assert_success("${rc}" "fold from a subdirectory should succeed")
+    qt_assert_equal("${out}" "patching file f.txt\npatching file new/h.txt\n"
+                    "fold should name files relative to the subdirectory")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/f.txt" "changed" "fold should patch sub/f.txt")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "root" "fold should not touch the root f.txt")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/new/h.txt" "created" "fold should create sub/new/h.txt")
+    qt_assert_not_exists("${QT_WORK_DIR}/new" "fold should not create new/ at the root")
+    qt_assert_not_exists("${QT_WORK_DIR}/f.txt.rej" "fold should write no reject file")
+    qt_assert_file_text("${QT_WORK_DIR}/.pc/top.diff/sub/f.txt" "inner"
+                        "fold should back up sub/f.txt")
+    qt_quilt_ok(OUTPUT out ARGS files MESSAGE "files failed")
+    qt_assert_equal("${out}" "sub/f.txt\nsub/new/h.txt\n" "fold should track the subdirectory files")
+
+    # A forced fold leaves its reject file in the subdirectory and does not
+    # track a missing file it skips
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS fold -f -q
+        WORKING_DIRECTORY "${QT_WORK_DIR}/sub"
+        INPUT "--- a/g.txt\n+++ b/g.txt\n@@ -1 +1 @@\n-nomatch\n+x\n--- a/missing.txt\n+++ b/missing.txt\n@@ -1 +1 @@\n-a\n+b\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-changed\n+again\n")
+    qt_assert_success("${rc}" "fold -f from a subdirectory should succeed")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/f.txt" "again" "fold -f should patch sub/f.txt")
+    qt_assert_file_text("${QT_WORK_DIR}/sub/g.txt" "other" "fold -f should leave sub/g.txt")
+    qt_assert_exists("${QT_WORK_DIR}/sub/g.txt.rej" "fold -f should write sub/g.txt.rej")
+    qt_assert_not_exists("${QT_WORK_DIR}/g.txt.rej" "fold -f should write no reject file at the root")
+    qt_assert_not_exists("${QT_WORK_DIR}/sub/missing.txt" "fold -f should not create missing.txt")
+    qt_quilt_ok(OUTPUT out ARGS files MESSAGE "files failed")
+    qt_assert_equal("${out}" "sub/f.txt\nsub/g.txt\nsub/new/h.txt\n"
+                    "fold -f should track sub/g.txt but not the skipped file")
 endfunction()
 
 # push_context_diff_zero_context: a context diff from refresh -C 0, whose

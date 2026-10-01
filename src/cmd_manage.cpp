@@ -973,6 +973,14 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
         }
     }
 
+    // Like upstream's "patch -d $SUBDIR", file names in the patch are
+    // relative to the subdirectory quilt was run from
+    std::string patch_dir = path_join(q.work_dir, q.subdir);
+    if (!set_cwd(patch_dir)) {
+        err_line("Cannot change into directory " + patch_dir);
+        return 1;
+    }
+
     // Track new files in the current patch, including deletions. Snapshot
     // every target file so that a failed fold can be undone: backups of
     // files the top patch already tracks predate the top patch, not the fold.
@@ -989,7 +997,8 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
     auto is_tracked = [&](const std::string &f) {
         return std::ranges::find(currently_tracked, f) != currently_tracked.end();
     };
-    for (const auto &f : affected_files) {
+    for (auto &f : affected_files) {
+        f = subdir_path(q, f);
         std::string path = path_join(q.work_dir, f);
         Snapshot s{f, file_exists(path), {}, !is_tracked(f)};
         if (s.existed) s.content = read_file(path);
@@ -998,10 +1007,12 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
     }
 
     PatchResult r = builtin_patch(stdin_data, patch_opts);
+    set_cwd(q.work_dir);
 
     // GNU patch backs up only the files it patches, so leave the missing
     // files it skipped out of the patch
-    for (const auto &f : r.skipped) {
+    for (const auto &skipped : r.skipped) {
+        std::string f = subdir_path(q, skipped);
         if (!is_tracked(f)) {
             delete_file(path_join(pc_patch_dir(q, top), f));
         }
