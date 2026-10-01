@@ -180,12 +180,21 @@ std::optional<std::string> find_patch(const QuiltState &q, std::string_view name
 }
 
 std::optional<std::string> find_top_patch(const QuiltState &q) {
-    if (!q.applied.empty()) {
-        return q.applied.back();
-    }
+    // Upstream checks for the series file, and that it still matches the
+    // applied patches, before running any command that looks up a patch
     if (!q.series_file_exists) {
         err_line("No series file found");
-    } else if (q.series.empty()) {
+        return std::nullopt;
+    }
+    if (!q.applied.empty()) {
+        if (!q.find_in_series(q.applied.back())) {
+            err_line("The series file no longer matches the applied patches. "
+                     "Please run 'quilt pop -a'.");
+            return std::nullopt;
+        }
+        return q.applied.back();
+    }
+    if (q.series.empty()) {
         err_line("No patches in series");
     } else {
         err_line("No patches applied");

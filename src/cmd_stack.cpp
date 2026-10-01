@@ -684,8 +684,15 @@ int cmd_pop(QuiltState &q, int argc, char **argv) {
         stop_idx = 0;
     } else if (target) {
         // Like upstream, an empty name means the top patch, so nothing
-        // is popped
-        auto found = find_applied_patch(q, *target);
+        // is popped. Upstream does not check that the series still
+        // matches the applied patches for pop, so the top patch need not
+        // be in the series.
+        std::optional<std::string> found;
+        if (target->empty() && q.series_file_exists && !q.applied.empty()) {
+            found = q.applied.back();
+        } else {
+            found = find_applied_patch(q, *target);
+        }
         if (!found) return 1;
         ptrdiff_t found_idx = std::ranges::find(q.applied, *found) - q.applied.begin();
         // Pop down to (but not including) the target patch

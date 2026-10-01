@@ -458,6 +458,7 @@ set(QUILT_TEST_SCENARIOS
     prefix_only_patch_arg
     empty_patch_arg
     patch_lookup_errors
+    top_patch_series_checks
     refresh_diff_patch_lookup
     push_nothing_to_push_first
     push_pop_deletion
@@ -8388,6 +8389,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_empty_patch_arg()
     elseif(scenario STREQUAL "patch_lookup_errors")
         qt_scenario_patch_lookup_errors()
+    elseif(scenario STREQUAL "top_patch_series_checks")
+        qt_scenario_top_patch_series_checks()
     elseif(scenario STREQUAL "refresh_diff_patch_lookup")
         qt_scenario_refresh_diff_patch_lookup()
     elseif(scenario STREQUAL "push_nothing_to_push_first")
@@ -9751,9 +9754,9 @@ function(qt_scenario_push_reject_no_newline)
         "rej file should mark a context line without a newline once")
 endfunction()
 
-# fork_applied_not_in_series: cmd_manage.cpp lines 996-997
-# cmd_fork checks if the top applied patch is in the series. If it isn't,
-# it returns "is not in series" error. Achievable by crafting a state where
+# fork_applied_not_in_series: find_top_patch refuses a top applied patch
+# that is not in the series, which upstream reports as a mismatch between
+# the series and the applied patches. Achievable by crafting a state where
 # applied-patches lists a patch that is absent from the series file.
 function(qt_scenario_fork_applied_not_in_series)
     qt_begin_test("fork_applied_not_in_series")
@@ -9767,7 +9770,8 @@ function(qt_scenario_fork_applied_not_in_series)
     file(WRITE "${QT_WORK_DIR}/.pc/.quilt_series" "series\n")
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS fork)
     qt_assert_failure("${rc}" "fork should fail when applied patch not in series")
-    qt_assert_contains("${err}" "is not in series" "should report patch not in series")
+    qt_assert_contains("${err}" "The series file no longer matches the applied patches"
+                       "should report the mismatch")
 endfunction()
 
 # refresh_diffstat_double_newline: like upstream, refresh --diffstat keeps a
@@ -12751,6 +12755,63 @@ function(qt_scenario_patch_lookup_errors)
     qt_combine_output(combined "${out}" "${err}")
     qt_assert_contains("${combined}" "Usage: quilt rename" "rename with two names should print usage")
     qt_assert_file_text("${QT_WORK_DIR}/patches/series" "p1.patch" "series should be unchanged")
+endfunction()
+
+# The top patch is looked up only while the series file exists and still
+# lists it, as upstream checks before running a command. Commands that
+# default to the top patch must not act on it otherwise.
+function(qt_scenario_top_patch_series_checks)
+    qt_begin_test("top_patch_series_checks")
+    qt_setup_three_patch_stack()
+    qt_read_file_strip(applied_before "${QT_WORK_DIR}/.pc/applied-patches")
+    qt_read_file_strip(p2_before "${QT_WORK_DIR}/patches/p2.patch")
+    qt_write_file("${QT_WORK_DIR}/f2.txt" "dirty\n")
+
+    file(REMOVE "${QT_WORK_DIR}/patches/series")
+    foreach(cmd "rename;zz.patch" "graph" "annotate;f2.txt" "revert;f2.txt"
+                "header" "files" "fork" "add;f3.txt")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS ${cmd})
+        qt_assert_equal("${rc}" "1" "'${cmd}' should fail without a series file")
+        qt_assert_contains("${err}" "No series file found"
+                           "'${cmd}' should report the missing series file")
+    endforeach()
+    foreach(cmd unapplied pop)
+        qt_quilt_empty_arg(RESULT rc OUTPUT out ERROR err ARGS ${cmd})
+        qt_assert_equal("${rc}" "1" "'${cmd} ''' should fail without a series file")
+        qt_assert_contains("${err}" "No series file found"
+                           "'${cmd} ''' should report the missing series file")
+    endforeach()
+    qt_assert_not_exists("${QT_WORK_DIR}/patches/series" "no series file should be created")
+
+    # The top patch, p2, has been dropped from the series
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p1.patch\np3.patch\n")
+    foreach(cmd "rename;zz.patch" "graph" "annotate;f2.txt" "revert;f2.txt"
+                "header" "files" "fork" "add;f3.txt")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS ${cmd})
+        qt_assert_equal("${rc}" "1" "'${cmd}' should fail with the top patch not in the series")
+        qt_assert_contains("${err}" "The series file no longer matches the applied patches"
+                           "'${cmd}' should report the mismatch")
+    endforeach()
+    qt_quilt_empty_arg(RESULT rc OUTPUT out ERROR err ARGS unapplied)
+    qt_assert_equal("${rc}" "1" "'unapplied ''' should fail with the top patch not in the series")
+    qt_assert_contains("${err}" "The series file no longer matches the applied patches"
+                       "'unapplied ''' should report the mismatch")
+    # pop alone does not check the series against the applied patches
+    qt_quilt_empty_arg(RESULT rc OUTPUT out ERROR err ARGS pop)
+    qt_assert_equal("${rc}" "2" "'pop ''' should stop at the top patch")
+    qt_assert_contains("${err}" "No patch removed" "'pop ''' should remove nothing")
+
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "p1.patch\np3.patch"
+                        "series should be unchanged")
+    qt_assert_file_text("${QT_WORK_DIR}/.pc/applied-patches" "${applied_before}"
+                        "applied patches should be unchanged")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/p2.patch" "${p2_before}"
+                        "top patch file should be unchanged")
+    qt_assert_exists("${QT_WORK_DIR}/.pc/p2.patch/f2.txt" "top patch backup should remain")
+    qt_assert_not_exists("${QT_WORK_DIR}/.pc/p2.patch/f3.txt" "no file should be added")
+    qt_assert_not_exists("${QT_WORK_DIR}/patches/zz.patch" "patch should not be renamed")
+    qt_assert_not_exists("${QT_WORK_DIR}/patches/p2-2.patch" "patch should not be forked")
+    qt_assert_file_text("${QT_WORK_DIR}/f2.txt" "dirty" "f2.txt should not be reverted")
 endfunction()
 
 # refresh and diff look up a named patch like upstream's find_applied_patch,

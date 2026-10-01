@@ -116,13 +116,6 @@ int cmd_delete(QuiltState &q, int argc, char **argv) {
         patch = *found;
     }
 
-    // Verify patch is in series
-    auto idx = q.find_in_series(patch);
-    if (!idx) {
-        err("Patch "); err(patch); err_line(" is not in series");
-        return 1;
-    }
-
     // If patch is applied, only allow deleting the topmost patch
     if (q.is_applied(patch)) {
         if (patch != q.applied.back()) {
@@ -955,12 +948,6 @@ int cmd_fork(QuiltState &q, int argc, char **argv) {
         file_exists(path_join(q.work_dir, q.patches_dir, new_name))) {
         err("Patch "); err(patch_path_display(q, new_name));
         err_line(" exists already, please choose a new name");
-        return 1;
-    }
-
-    auto idx = q.find_in_series(old_name);
-    if (!idx) {
-        err("Patch "); err(old_name); err_line(" is not in series");
         return 1;
     }
 

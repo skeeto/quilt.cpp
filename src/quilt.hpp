@@ -186,7 +186,7 @@ std::string next_filename(std::string_view patch);
 // top patch. On failure, each prints the reason and returns nullopt.
 //
 // find_patch: the named patch must be in the series.
-// find_top_patch: the topmost applied patch.
+// find_top_patch: the topmost applied patch, which must be in the series.
 // find_patch_in_series: find_patch, except an empty name means the top patch.
 // find_applied_patch: find_patch_in_series, and the patch must be applied.
 std::optional<std::string> find_patch(const QuiltState &q, std::string_view name);
