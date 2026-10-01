@@ -836,9 +836,7 @@ int cmd_fold(QuiltState &q, int argc, char **argv) {
         if (o == "-R") patch_opts.reverse = true;
         else if (o == "-s") patch_opts.quiet = true;
         else if (o == "-E") patch_opts.remove_empty = true;
-        else if (o.starts_with("--fuzz=")) {
-            patch_opts.fuzz = checked_cast<int>(parse_int(o.substr(7)));
-        }
+        else if (o.starts_with("--fuzz=")) set_fuzz_option(patch_opts, o.substr(7));
     }
 
     // Like upstream's "patch -d $SUBDIR", file names in the patch are

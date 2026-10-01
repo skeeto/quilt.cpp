@@ -108,13 +108,16 @@ std::string replace_diffstat(std::string_view header, std::string_view diffstat)
 // missing files the patch does not create.
 struct PatchOptions {
     int strip_level = 1;       // -pN
-    int fuzz = 2;              // --fuzz=N (default 2)
+    int fuzz = 2;              // --fuzz=N (default 2), see set_fuzz_option
     bool reverse = false;      // -R
     bool dry_run = false;      // --dry-run
     bool remove_empty = false; // -E
     bool quiet = false;        // -s
     bool merge = false;        // --merge
     std::string merge_style;   // "" or "diff3"
+    // A bad option, such as a fuzz factor that is not a number, which like
+    // GNU patch ends the patch before it touches any file
+    std::string option_error;
     // In-memory filesystem for fuzz testing. When non-null, all file I/O
     // in builtin_patch uses this map instead of real syscalls.
     // Key present = file exists, value = content.
@@ -127,12 +130,19 @@ struct PatchResult {
     // error, which ends the patch, on stderr
     std::string out;
     std::string err;
-    // Missing files left alone because the patch does not create them,
-    // which GNU patch would not have backed up
+    // Files left alone that GNU patch would not have backed up: missing
+    // files the patch does not create, or every file when a bad option
+    // ends the patch before it starts
     std::vector<std::string> skipped;
 };
 
 PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts);
+
+// Set the fuzz factor from a --fuzz option's value, read as GNU patch
+// reads it: an optional sign, then digits, and not negative. A factor too
+// large for an int is clamped, since no hunk can use more fuzz than it has
+// context. A bad value, the first one only, goes in opts.option_error.
+void set_fuzz_option(PatchOptions &opts, std::string_view value);
 
 // Files builtin_patch would modify, without duplicates, in patch order.
 // A deleted file (+++ /dev/null) is named by its --- line.

@@ -21,9 +21,7 @@ static void apply_quilt_patch_opts(PatchOptions &opts, std::span<const std::stri
         if (o == "-R") opts.reverse = true;
         else if (o == "-s") opts.quiet = true;
         else if (o == "-E") opts.remove_empty = true;
-        else if (o.starts_with("--fuzz=")) {
-            opts.fuzz = checked_cast<int>(parse_int(o.substr(7)));
-        }
+        else if (o.starts_with("--fuzz=")) set_fuzz_option(opts, o.substr(7));
     }
 }
 
@@ -387,7 +385,7 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
     bool force = false;
     bool quiet = false;
     bool verbose = false;  // lists the files of each rollback, like upstream
-    int fuzz = -1;
+    std::string_view fuzz;  // like upstream, an empty value means none
     bool merge = false;
     std::string merge_style;
     bool leave_rejects = false;
@@ -414,7 +412,7 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
         case 'v': verbose = true; break;
         case 'a': push_all = true; break;
         case 'h': return command_help(argv[0]);
-        case FUZZ: fuzz = checked_cast<int>(parse_int(opt.value)); break;
+        case FUZZ: fuzz = opt.value; break;
         case 'm':
             if (!opt.value.empty() && opt.value != "merge" && opt.value != "diff3") {
                 return usage_error(argv[0]);
@@ -519,7 +517,7 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
         PatchOptions patch_opts;
         patch_opts.strip_level = q.get_strip_level(name);
         if (q.patch_reversed.contains(name)) patch_opts.reverse = true;
-        if (fuzz >= 0) patch_opts.fuzz = fuzz;
+        if (!fuzz.empty()) set_fuzz_option(patch_opts, fuzz);
         if (merge) {
             patch_opts.merge = true;
             patch_opts.merge_style = merge_style;
@@ -539,7 +537,10 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
             backup_file(q, name, file);
         }
 
-        PatchResult result = builtin_patch(patch_content, patch_opts);
+        // Like upstream, run patch only for a patch file with something in
+        // it, so that a bad option fails no empty patch
+        PatchResult result = patch_content.empty()
+            ? PatchResult{} : builtin_patch(patch_content, patch_opts);
 
         // GNU patch backs up only the files it patches, so forget the
         // missing files it skipped

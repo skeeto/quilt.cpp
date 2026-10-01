@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 
 // ── Patch parsing data structures ──────────────────────────────────────
 
@@ -779,7 +780,11 @@ static ptrdiff_t locate_hunk(std::span<const std::string> file_lines,
     ptrdiff_t max_pos = file_len - pat_old_count;
     if (max_pos < 0) max_pos = 0;
 
-    for (int fuzz = 0; fuzz <= max_fuzz; ++fuzz) {
+    // Past the hunk's context, more fuzz changes nothing, so like GNU
+    // patch stop there
+    int fuzz_limit = checked_cast<int>(
+        std::min(ptrdiff_t{max_fuzz}, std::max(ctx.prefix, ctx.suffix)));
+    for (int fuzz = 0; fuzz <= fuzz_limit; ++fuzz) {
         ptrdiff_t prefix_fuzz = std::min(static_cast<ptrdiff_t>(fuzz), ctx.prefix);
         ptrdiff_t suffix_fuzz = std::min(static_cast<ptrdiff_t>(fuzz), ctx.suffix);
         ptrdiff_t effective_pat_len = pat_old_count - prefix_fuzz - suffix_fuzz;
@@ -1238,10 +1243,47 @@ static std::string quote_name(std::string_view name)
     return result;
 }
 
+void set_fuzz_option(PatchOptions &opts, std::string_view value)
+{
+    std::string_view digits = value;
+    bool negative = digits.starts_with('-');
+    if (negative || digits.starts_with('+')) digits.remove_prefix(1);
+
+    std::string_view problem;
+    if (digits.empty() ||
+        !std::ranges::all_of(digits, [](char c) { return c >= '0' && c <= '9'; })) {
+        problem = "is not a number";
+    } else if (negative && digits.find_first_not_of('0') != std::string_view::npos) {
+        problem = "is negative";
+    }
+    if (!problem.empty()) {
+        if (opts.option_error.empty()) {
+            opts.option_error = "fuzz factor " + quote_name(value) + " " +
+                                std::string(problem);
+        }
+        return;
+    }
+
+    auto [ptr, ec] = std::from_chars(digits.data(), digits.data() + digits.size(),
+                                     opts.fuzz);
+    if (ec == std::errc::result_out_of_range) {
+        opts.fuzz = std::numeric_limits<int>::max();
+    }
+}
+
 PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
 {
     PatchResult result;
     result.exit_code = 0;
+
+    // Like GNU patch, a bad option ends the patch before it touches, or
+    // backs up, any file
+    if (!opts.option_error.empty()) {
+        result.exit_code = 2;
+        result.err = "patch: **** " + opts.option_error + "\n";
+        result.skipped = patch_target_files(patch_text, opts.strip_level, opts.reverse);
+        return result;
+    }
 
     // Filesystem abstraction: use in-memory map when opts.fs is set
     auto fs_exists = [&](std::string_view p) -> bool {
@@ -1393,7 +1435,9 @@ PatchResult builtin_patch(std::string_view patch_text, const PatchOptions &opts)
                 // Determine fuzz level used for this hunk
                 int fuzz_used = 0;
                 if (opts.fuzz > 0) {
-                    for (int f = 0; f <= opts.fuzz; ++f) {
+                    int fuzz_limit = checked_cast<int>(
+                        std::min(ptrdiff_t{opts.fuzz}, std::max(ctx.prefix, ctx.suffix)));
+                    for (int f = 0; f <= fuzz_limit; ++f) {
                         if (try_match(fc.lines, pos, pattern, f, ctx.prefix, ctx.suffix)) {
                             fuzz_used = f;
                             break;

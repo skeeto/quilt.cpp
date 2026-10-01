@@ -533,6 +533,7 @@ set(QUILT_TEST_SCENARIOS
     revert_reversed_patch
     revert_dot_slash_headers
     getopt_push_pop
+    push_fuzz_value
     getopt_stack_queries
 )
 
@@ -712,6 +713,7 @@ set(QUILT_TEST_SCENARIOS_NATIVE
     fork_leading_zero_suffix
     import_force_identical_header_once
     import_force_mode_per_patch
+    push_fuzz_value_forms
 )
 
 function(qt_strip_trailing_newlines out_var text)
@@ -8092,6 +8094,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_import_force_identical_header_once()
     elseif(scenario STREQUAL "import_force_mode_per_patch")
         qt_scenario_import_force_mode_per_patch()
+    elseif(scenario STREQUAL "push_fuzz_value_forms")
+        qt_scenario_push_fuzz_value_forms()
     elseif(scenario STREQUAL "annotate_no_series_file")
         qt_scenario_annotate_no_series_file()
     elseif(scenario STREQUAL "push_reject_no_newline")
@@ -8558,6 +8562,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_push_quoted_file_names()
     elseif(scenario STREQUAL "getopt_push_pop")
         qt_scenario_getopt_push_pop()
+    elseif(scenario STREQUAL "push_fuzz_value")
+        qt_scenario_push_fuzz_value()
     elseif(scenario STREQUAL "getopt_stack_queries")
         qt_scenario_getopt_stack_queries()
     else()
@@ -15741,6 +15747,23 @@ function(qt_scenario_import_force_mode_per_patch)
     qt_assert_equal("${text}" "D old\n${diff_z}" "d should keep its old header")
 endfunction()
 
+# Like upstream push with GNU getopt, --fuzz takes the next word as its
+# value even when it looks like an option, and patch then rejects it. An
+# empty value means no fuzz option at all. Homebrew's compat getopt
+# rejects the first form and hangs on "--fuzz=", so this is native only.
+function(qt_scenario_push_fuzz_value_forms)
+    qt_begin_test("push_fuzz_value_forms")
+    qt_setup_three_patch_stack()
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --fuzz -a)
+    qt_assert_equal("${rc}" "1" "push --fuzz -a should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "fuzz factor -a is not a number"
+                       "push --fuzz -a should take -a as the fuzz factor")
+    qt_assert_file_text("${QT_WORK_DIR}/f3.txt" "old3" "push --fuzz -a should apply nothing")
+    qt_quilt_ok(ARGS push --fuzz=1 --fuzz= MESSAGE "push --fuzz= failed")
+    qt_assert_file_text("${QT_WORK_DIR}/f3.txt" "new3" "push --fuzz= should push p3")
+endfunction()
+
 # Three patches for the option parsing tests: p1 changes a.txt and p2
 # changes b.txt, both applied, and p3, unapplied, changes a.txt again
 function(qt_setup_getopt_stack)
@@ -15814,6 +15837,51 @@ function(qt_scenario_getopt_push_pop)
     qt_combine_output(combined "${out}" "${err}")
     qt_assert_contains("${combined}" "Usage: quilt pop" "pop -ah should print help")
     qt_assert_file_text("${applied}" "p1.patch\np2.patch\np3.patch" "pop -ah should pop nothing")
+endfunction()
+
+# push hands its --fuzz value to patch, and like GNU patch, a value that is
+# not a number, or is negative, fails the push before any file changes.
+# A huge value fuzzes away all of a hunk's context.
+function(qt_scenario_push_fuzz_value)
+    qt_begin_test("push_fuzz_value")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "1\n2\n3\nX\n4\n5\n6\n")
+    qt_write_file("${QT_TEST_BASE}/d.diff" [=[--- a/f.txt
++++ b/f.txt
+@@ -1,7 +1,7 @@
+ a
+ b
+ c
+-X
++Y
+ d
+ e
+ f
+]=])
+    qt_quilt_ok(ARGS import "${QT_TEST_BASE}/d.diff" MESSAGE "import failed")
+    foreach(value abc 2x -1)
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --fuzz=${value})
+        qt_assert_equal("${rc}" "1" "push --fuzz=${value} should fail")
+        qt_combine_output(combined "${out}" "${err}")
+        qt_assert_contains("${combined}" "fuzz factor ${value} is"
+                           "push --fuzz=${value} should reject the value")
+        qt_assert_contains("${combined}" "Patch d.diff does not apply (enforce with -f)"
+                           "push --fuzz=${value} should not apply the patch")
+    endforeach()
+    qt_quilt(RESULT rc OUTPUT out ERROR err ENV "QUILT_PATCH_OPTS=--fuzz=abc"
+             ARGS push --fuzz=3)
+    qt_assert_equal("${rc}" "1" "a bad fuzz in QUILT_PATCH_OPTS should fail the push")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "fuzz factor abc is not a number"
+                       "a bad fuzz in QUILT_PATCH_OPTS should be reported")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "1\n2\n3\nX\n4\n5\n6"
+                        "a failed push should leave the file alone")
+    qt_assert_not_exists("${QT_WORK_DIR}/.pc/d.diff" "a failed push should leave no backup")
+
+    qt_quilt_ok(OUTPUT out ARGS push --fuzz=99999999999 MESSAGE "push with a huge fuzz failed")
+    qt_assert_contains("${out}" "Hunk #1 succeeded at 1 with fuzz 3."
+                       "a huge fuzz should fuzz away all of the context")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "1\n2\n3\nY\n4\n5\n6"
+                        "the patch should apply with all of its context fuzzed")
 endfunction()
 
 # The commands that show the stack take options like upstream's getopt,
