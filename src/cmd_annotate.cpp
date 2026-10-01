@@ -81,43 +81,23 @@ static std::vector<std::string> reannotate_lines(std::span<const std::string> ol
     return result;
 }
 
-std::optional<AnnotateOptions> parse_options(const QuiltState &q, int argc, char **argv)
-{
-    AnnotateOptions opts;
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
-        if (arg == "-P" && i + 1 < argc) {
-            opts.patch = argv[i + 1];
-            ++i;
-            continue;
-        }
-        if (!arg.empty() && arg[0] == '-') {
-            return std::nullopt;
-        }
-        if (!opts.file.empty()) {
-            return std::nullopt;
-        }
-        opts.file = subdir_path(q, arg);
-    }
-
-    if (opts.file.empty()) {
-        return std::nullopt;
-    }
-    return opts;
-}
-
 } // namespace
 
 int cmd_annotate(QuiltState &q, int argc, char **argv)
 {
-    auto opts = parse_options(q, argc, argv);
-    if (!opts.has_value()) {
-        err_line("Usage: quilt annotate [-P patch] file");
-        return 1;
+    auto args = parse_options(argc, argv, "P:h");
+    if (!args) return 1;
+    AnnotateOptions opts;
+    for (const auto &opt : args->options) {
+        if (opt.key == 'h') return command_help(argv[0]);
+        opts.patch = opt.value;
     }
+    if (std::ssize(args->operands) != 1) return usage_error(argv[0]);
+    opts.file = subdir_path(q, args->operands[0]);
+    if (opts.file.empty()) return usage_error(argv[0]);
 
     // No -P, or an empty one, means the top patch
-    auto found = find_applied_patch(q, opts->patch);
+    auto found = find_applied_patch(q, opts.patch);
     if (!found) return 1;
     std::string stop_patch = *found;
 
@@ -126,27 +106,27 @@ int cmd_annotate(QuiltState &q, int argc, char **argv)
     std::string next_patch;
 
     for (const auto &patch : q.applied) {
-        std::string old_file = path_join(pc_patch_dir(q, patch), opts->file);
+        std::string old_file = path_join(pc_patch_dir(q, patch), opts.file);
         if (file_exists(old_file)) {
             patches.push_back(patch);
             files.push_back(old_file);
         }
         if (patch == stop_patch) {
-            next_patch = next_patch_for_file(q, stop_patch, opts->file);
+            next_patch = next_patch_for_file(q, stop_patch, opts.file);
             break;
         }
     }
 
     if (next_patch.empty()) {
-        files.push_back(path_join(q.work_dir, opts->file));
+        files.push_back(path_join(q.work_dir, opts.file));
     } else {
-        files.push_back(path_join(pc_patch_dir(q, next_patch), opts->file));
+        files.push_back(path_join(pc_patch_dir(q, next_patch), opts.file));
     }
 
     if (patches.empty()) {
         std::string target = files.back();
         if (!file_exists(target)) {
-            err_line("File " + opts->file + " does not exist");
+            err_line("File " + opts.file + " does not exist");
             return 1;
         }
         for (const auto &line : read_lines(target)) {

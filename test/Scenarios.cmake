@@ -535,6 +535,9 @@ set(QUILT_TEST_SCENARIOS
     getopt_push_pop
     push_fuzz_value
     getopt_stack_queries
+    getopt_file_commands
+    getopt_new_snapshot
+    getopt_refresh_diff
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -5359,11 +5362,11 @@ function(qt_scenario_unknown_option_rejected)
     # Test unknown options on various commands
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh --bogus)
     qt_assert_not_equal("${rc}" "0" "refresh --bogus should fail")
-    qt_assert_contains("${err}" "Unrecognized option" "refresh --bogus error message")
+    qt_assert_contains("${err}" "unrecognized option '--bogus'" "refresh --bogus error message")
 
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS diff --bogus)
     qt_assert_not_equal("${rc}" "0" "diff --bogus should fail")
-    qt_assert_contains("${err}" "Unrecognized option" "diff --bogus error message")
+    qt_assert_contains("${err}" "unrecognized option '--bogus'" "diff --bogus error message")
 
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push --bogus)
     qt_assert_not_equal("${rc}" "0" "push --bogus should fail")
@@ -5391,7 +5394,7 @@ function(qt_scenario_unknown_option_rejected)
 
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS new --bogus)
     qt_assert_not_equal("${rc}" "0" "new --bogus should fail")
-    qt_assert_contains("${err}" "Unrecognized option" "new --bogus error message")
+    qt_assert_contains("${err}" "unrecognized option '--bogus'" "new --bogus error message")
 
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS pop --bogus)
     qt_assert_not_equal("${rc}" "0" "pop --bogus should fail")
@@ -8566,6 +8569,12 @@ function(qt_run_named_scenario scenario)
         qt_scenario_push_fuzz_value()
     elseif(scenario STREQUAL "getopt_stack_queries")
         qt_scenario_getopt_stack_queries()
+    elseif(scenario STREQUAL "getopt_file_commands")
+        qt_scenario_getopt_file_commands()
+    elseif(scenario STREQUAL "getopt_new_snapshot")
+        qt_scenario_getopt_new_snapshot()
+    elseif(scenario STREQUAL "getopt_refresh_diff")
+        qt_scenario_getopt_refresh_diff()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -15907,4 +15916,108 @@ function(qt_scenario_getopt_stack_queries)
     qt_assert_equal("${out}" "p3.patch\n" "next --")
     qt_quilt_ok(OUTPUT out ARGS previous -- p2.patch MESSAGE "previous -- p2.patch failed")
     qt_assert_equal("${out}" "p1.patch\n" "previous -- p2.patch")
+endfunction()
+
+# add, remove, revert, edit, and annotate take -P attached or in the next
+# word, before or after the files, and "--", and print their usage without
+# the files they need
+function(qt_scenario_getopt_file_commands)
+    qt_begin_test("getopt_file_commands")
+    qt_setup_getopt_stack()
+    set(pc "${QT_WORK_DIR}/.pc")
+
+    qt_assert_usage_error(add add)
+    qt_assert_usage_error(add add -P p1.patch)
+    qt_assert_usage_error(remove remove --)
+    qt_assert_usage_error(revert revert -P p2.patch)
+    qt_assert_usage_error(edit edit --)
+    qt_assert_usage_error(annotate annotate)
+    qt_assert_usage_error(annotate annotate a.txt b.txt)
+
+    qt_write_file("${QT_WORK_DIR}/c.txt" "c\n")
+    qt_write_file("${QT_WORK_DIR}/d.txt" "d\n")
+    qt_write_file("${QT_WORK_DIR}/e.txt" "e\n")
+    qt_quilt_ok(ARGS add -Pp1.patch c.txt MESSAGE "add -Pp1.patch c.txt failed")
+    qt_assert_exists("${pc}/p1.patch/c.txt" "add -Pp1.patch should add to p1")
+    qt_quilt_ok(ARGS add d.txt -P p1.patch MESSAGE "add d.txt -P p1.patch failed")
+    qt_assert_exists("${pc}/p1.patch/d.txt" "add d.txt -P p1.patch should add to p1")
+    qt_quilt_ok(ARGS remove -Pp1.patch -- c.txt d.txt MESSAGE "remove -Pp1.patch -- failed")
+    qt_assert_not_exists("${pc}/p1.patch/c.txt" "remove should take c.txt from p1")
+    qt_assert_not_exists("${pc}/p1.patch/d.txt" "remove should take d.txt from p1")
+    qt_quilt_ok(ENV "EDITOR=true" ARGS edit -- e.txt MESSAGE "edit -- e.txt failed")
+    qt_assert_exists("${pc}/p2.patch/e.txt" "edit -- e.txt should add to the top patch")
+
+    qt_write_file("${QT_WORK_DIR}/b.txt" "b1\nchanged\n")
+    qt_quilt_ok(ARGS revert -Pp2.patch -- b.txt MESSAGE "revert -Pp2.patch -- b.txt failed")
+    qt_assert_file_text("${QT_WORK_DIR}/b.txt" "b1\nB2" "revert should restore b.txt")
+
+    qt_quilt_ok(OUTPUT out ARGS annotate a.txt -Pp1.patch MESSAGE "annotate a.txt -Pp1.patch failed")
+    qt_assert_contains("${out}" "1\tA2" "annotate should credit p1 with A2")
+    qt_quilt_ok(OUTPUT out ARGS annotate -- a.txt MESSAGE "annotate -- a.txt failed")
+    qt_assert_contains("${out}" "1\tA2" "annotate -- a.txt should credit p1 with A2")
+endfunction()
+
+# new takes -p after the patch name and "--", and refuses more than one
+# name; snapshot takes "--" and no arguments
+function(qt_scenario_getopt_new_snapshot)
+    qt_begin_test("getopt_new_snapshot")
+    qt_setup_getopt_stack()
+    set(series "${QT_WORK_DIR}/patches/series")
+
+    qt_assert_usage_error(new new)
+    qt_assert_usage_error(new new x.patch y.patch)
+    qt_assert_usage_error(snapshot snapshot extra)
+    qt_assert_usage_error(snapshot snapshot -dx)
+    qt_assert_file_text("${series}" "p1.patch\np2.patch\np3.patch" "usage errors should change nothing")
+
+    qt_quilt_ok(ARGS new x.patch -p0 MESSAGE "new x.patch -p0 failed")
+    qt_quilt_ok(ARGS new -- y.patch MESSAGE "new -- y.patch failed")
+    qt_assert_file_text("${series}" "p1.patch\np2.patch\nx.patch -p0\ny.patch\np3.patch"
+                        "new should take -p0 after the name")
+
+    qt_quilt_ok(ARGS snapshot -- MESSAGE "snapshot -- failed")
+    qt_assert_dir_exists("${QT_WORK_DIR}/.pc/.snap" "snapshot -- should take a snapshot")
+    qt_quilt_ok(ARGS snapshot -d -- MESSAGE "snapshot -d -- failed")
+    qt_assert_not_exists("${QT_WORK_DIR}/.pc/.snap" "snapshot -d -- should remove the snapshot")
+endfunction()
+
+# refresh and diff group options, take values attached or in the next word,
+# before or after their arguments, and "--", along with QUILT_DIFF_ARGS
+function(qt_scenario_getopt_refresh_diff)
+    qt_begin_test("getopt_refresh_diff")
+    qt_setup_getopt_stack()
+    set(p2 "${QT_WORK_DIR}/patches/p2.patch")
+
+    qt_assert_usage_error(refresh refresh p1.patch p2.patch)
+    qt_assert_usage_error(refresh refresh -- p1.patch p2.patch)
+    qt_assert_usage_error(diff diff --color=bogus)
+
+    qt_write_file("${QT_WORK_DIR}/b.txt" "b1\nBB\n")
+    qt_quilt_ok(ARGS refresh -fu MESSAGE "refresh -fu failed")
+    qt_assert_file_contains("${p2}" "+BB" "refresh -fu should refresh p2")
+    qt_quilt_ok(ARGS refresh -c -- MESSAGE "refresh -c -- failed")
+    qt_assert_file_contains("${p2}" "***************" "refresh -c should write a context diff")
+    qt_quilt_ok(ARGS refresh p2.patch -U0 MESSAGE "refresh p2.patch -U0 failed")
+    qt_assert_file_contains("${p2}" "@@ -2 +2 @@" "refresh -U0 should write no context")
+
+    qt_quilt_ok(OUTPUT out ARGS diff -RU0 -Pp1.patch --no-index MESSAGE "diff -RU0 -Pp1.patch failed")
+    qt_assert_contains("${out}" "@@ -2 +2 @@\n-A2\n+a2\n" "diff -RU0 -Pp1.patch")
+    qt_quilt_ok(OUTPUT out ARGS diff --no-index a.txt -P p1.patch -U 0 MESSAGE "diff a.txt -P p1.patch failed")
+    qt_assert_contains("${out}" "@@ -2 +2 @@\n-a2\n+A2\n" "diff a.txt -P p1.patch")
+    qt_quilt_ok(OUTPUT out ARGS diff --combine p1.patch --color=tty -- b.txt MESSAGE "diff --combine p1.patch -- b.txt failed")
+    qt_assert_contains("${out}" "+BB" "diff --combine -- b.txt should show b.txt")
+    qt_assert_not_contains("${out}" "a.txt" "diff -- b.txt should only show b.txt")
+
+    qt_write_file("${QT_WORK_DIR}/b.txt" "b1\nZZ\n")
+    qt_quilt_ok(ARGS diff --color= -P p1.patch MESSAGE "diff --color= failed")
+    qt_quilt_ok(OUTPUT out ARGS diff -zR -U0 --color=never MESSAGE "diff -zR failed")
+    qt_assert_contains("${out}" "-ZZ\n+BB\n" "diff -zR should reverse the changes since refresh")
+
+    # The variable's words come first, in the same parse
+    qt_quilt_ok(OUTPUT out ENV "QUILT_DIFF_ARGS=-R --no-index" ARGS diff -U0 -P p1.patch
+                MESSAGE "diff with QUILT_DIFF_ARGS=-R failed")
+    qt_assert_contains("${out}" "@@ -2 +2 @@\n-A2\n+a2\n" "QUILT_DIFF_ARGS=-R should reverse the diff")
+    qt_quilt_ok(OUTPUT out ENV "QUILT_DIFF_ARGS=--" ARGS diff -P p1.patch
+                MESSAGE "diff with QUILT_DIFF_ARGS=-- failed")
+    qt_assert_equal("${out}" "" "after QUILT_DIFF_ARGS=--, -P and p1.patch should name files")
 endfunction()

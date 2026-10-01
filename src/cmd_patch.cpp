@@ -6,11 +6,11 @@
 #include <cstdlib>
 #include <set>
 
-int cmd_init(QuiltState &q, int argc, char **) {
-    if (argc != 1) {
-        err_line("Usage: quilt init");
-        return 1;
-    }
+int cmd_init(QuiltState &q, int argc, char **argv) {
+    auto args = parse_options(argc, argv, "h");
+    if (!args) return 1;
+    if (!args->options.empty()) return command_help(argv[0]);
+    if (!args->operands.empty()) return usage_error(argv[0]);
 
     q.work_dir = get_cwd();
     q.pc_dir = ".pc";
@@ -62,36 +62,25 @@ int cmd_init(QuiltState &q, int argc, char **) {
 }
 
 int cmd_new(QuiltState &q, int argc, char **argv) {
-    // Parse options
-    std::string patch_name;
+    auto args = parse_options(argc, argv, "p:h");
+    if (!args) return 1;
     std::string p_value;
-    int i = 1;  // skip argv[0] which is "new"
-    while (i < argc) {
-        std::string_view arg = argv[i];
-        if (arg == "-p" && i + 1 < argc) {
-            p_value = argv[i + 1];
-            i += 2;
-            continue;
-        }
-        if (arg.starts_with("-p") && std::ssize(arg) > 2) {
-            p_value = std::string(arg.substr(2));
-            i += 1;
-            continue;
-        }
-        // First non-option argument is the patch name
-        if (arg[0] != '-') {
-            patch_name = std::string(arg);
-            i += 1;
-            break;
-        }
-        err("Unrecognized option: "); err_line(arg);
+    for (const auto &opt : args->options) {
+        if (opt.key == 'h') return command_help(argv[0]);
+        p_value = opt.value;
+    }
+
+    // Like upstream, check the strip level before the arguments
+    if (!p_value.empty() && p_value != "0" && p_value != "1") {
+        err_line("Cannot create patches with -p" + p_value +
+                 ", please specify -p0 or -p1 instead");
         return 1;
     }
 
-    if (patch_name.empty()) {
-        err_line("Usage: quilt new [-p n] patchname");
-        return 1;
+    if (std::ssize(args->operands) != 1 || args->operands[0].empty()) {
+        return usage_error(argv[0]);
     }
+    std::string patch_name(args->operands[0]);
 
     // Verify patch doesn't already exist in series
     if (q.find_in_series(patch_name).has_value()) {
@@ -113,13 +102,6 @@ int cmd_new(QuiltState &q, int argc, char **argv) {
 
     if (!q.applied.empty() && q.top_index() < 0) {
         err_line("The series file no longer matches the applied patches. Please run 'quilt pop -a'.");
-        return 1;
-    }
-
-    // Validate strip level
-    if (!p_value.empty() && p_value != "0" && p_value != "1") {
-        err_line("Cannot create patches with -p" + p_value +
-                 ", please specify -p0 or -p1 instead");
         return 1;
     }
 
@@ -151,31 +133,42 @@ int cmd_new(QuiltState &q, int argc, char **argv) {
     return 0;
 }
 
-int cmd_add(QuiltState &q, int argc, char **argv) {
-    // Parse options
-    std::string_view patch_arg;
+// Parse the options of add, remove, and revert, which take "P:h" and at
+// least one file. Return nullopt, with the exit status in status, for -h
+// or wrong arguments.
+struct PatchFileArgs {
+    std::string_view patch;  // -P, empty for the top patch
     std::vector<std::string> files;
-    int i = 1;
-    while (i < argc) {
-        std::string_view arg = argv[i];
-        if (arg == "-P" && i + 1 < argc) {
-            patch_arg = argv[i + 1];
-            i += 2;
-            continue;
-        }
-        if (!arg.starts_with('-')) {
-            files.push_back(subdir_path(q, arg));
-        } else {
-            err("Unrecognized option: "); err_line(arg);
-            return 1;
-        }
-        i += 1;
-    }
+};
 
-    if (files.empty()) {
-        err_line("Usage: quilt add [-P patch] file ...");
-        return 1;
+static std::optional<PatchFileArgs> parse_patch_file_args(const QuiltState &q, int argc,
+                                                          char **argv, int &status)
+{
+    auto args = parse_options(argc, argv, "P:h");
+    status = 1;
+    if (!args) return std::nullopt;
+    PatchFileArgs result;
+    for (const auto &opt : args->options) {
+        if (opt.key == 'h') {
+            status = command_help(argv[0]);
+            return std::nullopt;
+        }
+        result.patch = opt.value;
     }
+    if (args->operands.empty()) {
+        status = usage_error(argv[0]);
+        return std::nullopt;
+    }
+    for (auto file : args->operands) result.files.push_back(subdir_path(q, file));
+    return result;
+}
+
+int cmd_add(QuiltState &q, int argc, char **argv) {
+    int rc;
+    auto args = parse_patch_file_args(q, argc, argv, rc);
+    if (!args) return rc;
+    std::string_view patch_arg = args->patch;
+    const auto &files = args->files;
 
     // No -P, or an empty one, means the top patch
     auto found = find_applied_patch(q, patch_arg);
@@ -220,30 +213,11 @@ int cmd_add(QuiltState &q, int argc, char **argv) {
 }
 
 int cmd_remove(QuiltState &q, int argc, char **argv) {
-    // Parse options
-    std::string_view patch_arg;
-    std::vector<std::string> files;
-    int i = 1;
-    while (i < argc) {
-        std::string_view arg = argv[i];
-        if (arg == "-P" && i + 1 < argc) {
-            patch_arg = argv[i + 1];
-            i += 2;
-            continue;
-        }
-        if (!arg.starts_with('-')) {
-            files.push_back(subdir_path(q, arg));
-        } else {
-            err("Unrecognized option: "); err_line(arg);
-            return 1;
-        }
-        i += 1;
-    }
-
-    if (files.empty()) {
-        err_line("Usage: quilt remove [-P patch] file ...");
-        return 1;
-    }
+    int rc;
+    auto args = parse_patch_file_args(q, argc, argv, rc);
+    if (!args) return rc;
+    std::string_view patch_arg = args->patch;
+    const auto &files = args->files;
 
     // No -P, or an empty one, means the top patch
     auto found = find_applied_patch(q, patch_arg);
@@ -276,25 +250,18 @@ int cmd_remove(QuiltState &q, int argc, char **argv) {
 }
 
 int cmd_edit(QuiltState &q, int argc, char **argv) {
+    auto args = parse_options(argc, argv, "h");
+    if (!args) return 1;
+    if (!args->options.empty()) return command_help(argv[0]);
+    if (args->operands.empty()) return usage_error(argv[0]);
+
     if (q.applied.empty()) {
         err_line("No patches applied");
         return 1;
     }
 
     std::vector<std::string> files;
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
-        if (arg[0] == '-') {
-            err("Unrecognized option: "); err_line(arg);
-            return 1;
-        }
-        files.push_back(subdir_path(q, arg));
-    }
-
-    if (files.empty()) {
-        err_line("Usage: quilt edit file ...");
-        return 1;
-    }
+    for (auto file : args->operands) files.push_back(subdir_path(q, file));
 
     std::string_view patch = q.applied.back();
 
@@ -750,17 +717,14 @@ static void apply_file_filter(std::vector<std::string> &tracked,
 }
 
 int cmd_snapshot(QuiltState &q, int argc, char **argv) {
+    auto args = parse_options(argc, argv, "dh");
+    if (!args) return 1;
     bool remove_snapshot = false;
-
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
-        if (arg == "-d") {
-            remove_snapshot = true;
-            continue;
-        }
-        err_line("Usage: quilt snapshot [-d]");
-        return 1;
+    for (const auto &opt : args->options) {
+        if (opt.key == 'h') return command_help(argv[0]);
+        remove_snapshot = true;
     }
+    if (!args->operands.empty()) return usage_error(argv[0]);
 
     if (!q.series_file_exists) {
         err_line("No series file found");
@@ -1126,11 +1090,21 @@ static bool record_strip_level(QuiltState &q, const std::string &patch,
 }
 
 int cmd_refresh(QuiltState &q, int argc, char **argv) {
-    // Parse options
-    std::optional<std::string_view> patch_arg;
-    int positional_count = 0;
+    enum { NO_TIMESTAMPS = 256, DIFFSTAT, BACKUP, SORT, NO_INDEX,
+           STRIP_TRAILING_WHITESPACE, DIFF_ALGORITHM };
+    static constexpr LongOpt longopts[] = {
+        {"no-timestamps", OptArg::none, NO_TIMESTAMPS},
+        {"diffstat", OptArg::none, DIFFSTAT},
+        {"backup", OptArg::none, BACKUP},
+        {"sort", OptArg::none, SORT},
+        {"no-index", OptArg::none, NO_INDEX},
+        {"strip-trailing-whitespace", OptArg::none, STRIP_TRAILING_WHITESPACE},
+        {"diff-algorithm", OptArg::required, DIFF_ALGORITHM, true},
+    };
+    auto args = parse_options(argc, argv, "p:uU:cC:fz::h", longopts);
+    if (!args) return 1;
+
     std::string p_format;
-    int i = 1;
     bool no_timestamps = !get_env("QUILT_NO_DIFF_TIMESTAMPS").empty();
     bool no_index = !get_env("QUILT_NO_DIFF_INDEX").empty();
     bool sort_files = true;
@@ -1155,134 +1129,48 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         }
     }
 
-    while (i < argc) {
-        std::string_view arg = argv[i];
-        if (arg == "-p" && i + 1 < argc) {
-            p_format = std::string(argv[i + 1]);
-            i += 2;
-            continue;
-        }
-        if (arg.starts_with("-p") && std::ssize(arg) > 2) {
-            p_format = std::string(arg.substr(2));
-            i += 1;
-            continue;
-        }
-        if (arg == "-f") {
-            force = true;
-            i += 1;
-            continue;
-        }
-        if (arg == "-u") {
-            diff_type = "u";
+    for (const auto &opt : args->options) {
+        switch (opt.key) {
+        case 'p': p_format = opt.value; break;
+        case 'f': force = true; break;
+        case 'u':
+        case 'c':
+            diff_type = static_cast<char>(opt.key);
             context_num.clear();
-            i += 1;
-            continue;
-        }
-        if (arg.starts_with("-U")) {
-            diff_type = "U";
-            if (arg == "-U" && i + 1 < argc) {
-                context_num = argv[i + 1];
-                i += 2;
-            } else {
-                context_num = std::string(arg.substr(2));
-                i += 1;
-            }
-            continue;
-        }
-        if (arg == "-c") {
-            diff_type = "c";
-            context_num.clear();
-            i += 1;
-            continue;
-        }
-        if (arg.starts_with("-C")) {
-            diff_type = "C";
-            if (arg == "-C" && i + 1 < argc) {
-                context_num = argv[i + 1];
-                i += 2;
-            } else {
-                context_num = std::string(arg.substr(2));
-                i += 1;
-            }
-            continue;
-        }
-        if (arg.starts_with("-z")) {
+            break;
+        case 'U':
+        case 'C':
+            diff_type = static_cast<char>(opt.key);
+            context_num = opt.value;
+            break;
+        case 'z':
             opt_fork = true;
-            if (std::ssize(arg) > 2) {
-                fork_name = strip_patches_prefix(q, arg.substr(2));
-            }
-            i += 1;
-            continue;
-        }
-        if (arg == "--no-timestamps" || arg == "--no-timestamp") {
-            no_timestamps = true;
-            i += 1;
-            continue;
-        }
-        if (arg == "--no-index") {
-            no_index = true;
-            i += 1;
-            continue;
-        }
-        if (arg == "--sort") {
-            sort_files = true;
-            i += 1;
-            continue;
-        }
-        if (arg == "--diffstat") {
-            opt_diffstat = true;
-            i += 1;
-            continue;
-        }
-        if (arg == "--backup") {
-            opt_backup = true;
-            i += 1;
-            continue;
-        }
-        if (arg == "--strip-trailing-whitespace") {
-            opt_strip_whitespace = true;
-            i += 1;
-            continue;
-        }
-        if (arg.starts_with("--diff-algorithm=")) {
-            auto name = arg.substr(17);
-            auto algo = parse_diff_algorithm(name);
+            fork_name = strip_patches_prefix(q, opt.value);
+            break;
+        case 'h': return command_help(argv[0]);
+        case NO_TIMESTAMPS: no_timestamps = true; break;
+        case NO_INDEX: no_index = true; break;
+        case DIFFSTAT: opt_diffstat = true; break;
+        case BACKUP: opt_backup = true; break;
+        case SORT: sort_files = true; break;
+        case STRIP_TRAILING_WHITESPACE: opt_strip_whitespace = true; break;
+        case DIFF_ALGORITHM: {
+            auto algo = parse_diff_algorithm(opt.value);
             if (!algo) {
-                err("Unknown diff algorithm: "); err_line(name);
+                err("Unknown diff algorithm: "); err_line(opt.value);
                 return 1;
             }
             diff_algorithm = *algo;
-            i += 1;
-            continue;
+            break;
         }
-        if (arg == "--diff-algorithm" && i + 1 < argc) {
-            std::string_view name = argv[i + 1];
-            auto algo = parse_diff_algorithm(name);
-            if (!algo) {
-                err("Unknown diff algorithm: "); err_line(name);
-                return 1;
-            }
-            diff_algorithm = *algo;
-            i += 2;
-            continue;
         }
-        if (arg.starts_with('-')) {
-            err("Unrecognized option: "); err_line(arg);
-            return 1;
-        }
-        // Non-option: patch name, given even when empty
-        patch_arg = arg;
-        ++positional_count;
-        i += 1;
     }
 
-    if (positional_count > 1) {
-        err_line("Usage: quilt refresh [-p n|-p ab] [-u|-U num|-c|-C num] "
-                 "[-z[new_name]] [-f] [--no-timestamps] [--no-index] "
-                 "[--diffstat] [--sort] [--backup] "
-                 "[--strip-trailing-whitespace] [patch]");
-        return 1;
-    }
+    // Like upstream, any argument names the patch, even an empty one
+    if (std::ssize(args->operands) > 1) return usage_error(argv[0]);
+    std::optional<std::string_view> patch_arg;
+    if (!args->operands.empty()) patch_arg = args->operands[0];
+
     if (!q.series_file_exists) {
         err_line("No series file found");
         return 1;
@@ -1641,7 +1529,21 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
 }
 
 int cmd_diff(QuiltState &q, int argc, char **argv) {
-    // Parse options
+    enum { DIFF = 256, SNAPSHOT, NO_TIMESTAMPS, NO_INDEX, COMBINE, COLOR, SORT,
+           DIFF_ALGORITHM };
+    static constexpr LongOpt longopts[] = {
+        {"diff", OptArg::required, DIFF},
+        {"snapshot", OptArg::none, SNAPSHOT},
+        {"no-timestamps", OptArg::none, NO_TIMESTAMPS},
+        {"no-index", OptArg::none, NO_INDEX},
+        {"combine", OptArg::required, COMBINE},
+        {"color", OptArg::optional, COLOR},
+        {"sort", OptArg::none, SORT},
+        {"diff-algorithm", OptArg::required, DIFF_ALGORITHM, true},
+    };
+    auto args = parse_options(argc, argv, "p:P:RuU:cC:zh", longopts);
+    if (!args) return 1;
+
     std::string_view patch_arg;
     std::string p_format;
     std::vector<std::string> file_filter;
@@ -1667,146 +1569,50 @@ int cmd_diff(QuiltState &q, int argc, char **argv) {
             diff_algorithm = *parsed;
         }
     }
-    int i = 1;
 
-    while (i < argc) {
-        std::string_view arg = argv[i];
-        if (arg == "-P" && i + 1 < argc) {
-            patch_arg = argv[i + 1];
-            i += 2;
-            continue;
-        }
-        if (arg == "-p" && i + 1 < argc) {
-            p_format = std::string(argv[i + 1]);
-            i += 2;
-            continue;
-        }
-        if (arg.starts_with("-p") && std::ssize(arg) > 2) {
-            p_format = std::string(arg.substr(2));
-            i += 1;
-            continue;
-        }
-        if (arg == "-u") {
-            diff_type = "u";
+    for (const auto &opt : args->options) {
+        switch (opt.key) {
+        case 'p': p_format = opt.value; break;
+        case 'P': patch_arg = opt.value; break;
+        case COMBINE: combine_arg = opt.value; break;
+        case 'R': reverse = true; break;
+        case 'z': since_refresh = true; break;
+        case 'u':
+        case 'c':
+            diff_type = static_cast<char>(opt.key);
             context_num.clear();
-            i += 1;
-            continue;
-        }
-        if (arg == "-c") {
-            diff_type = "c";
-            context_num.clear();
-            i += 1;
-            continue;
-        }
-        if (arg.starts_with("-C")) {
-            diff_type = "C";
-            if (arg == "-C" && i + 1 < argc) {
-                context_num = argv[i + 1];
-                i += 2;
-            } else {
-                context_num = std::string(arg.substr(2));
-                i += 1;
-            }
-            continue;
-        }
-        if (arg.starts_with("-U")) {
-            diff_type = "U";
-            if (arg == "-U" && i + 1 < argc) {
-                context_num = argv[i + 1];
-                i += 2;
-            } else {
-                context_num = std::string(arg.substr(2));
-                i += 1;
-            }
-            continue;
-        }
-        if (arg == "-z") {
-            since_refresh = true;
-            i += 1;
-            continue;
-        }
-        if (arg == "--snapshot") {
-            against_snapshot = true;
-            i += 1;
-            continue;
-        }
-        if (arg == "-R") {
-            reverse = true;
-            i += 1;
-            continue;
-        }
-        if (arg == "--no-timestamps" || arg == "--no-timestamp") {
-            no_timestamps = true;
-            i += 1;
-            continue;
-        }
-        if (arg == "--no-index") {
-            no_index = true;
-            i += 1;
-            continue;
-        }
-        if (arg == "--sort") {
-            sort_files = true;
-            i += 1;
-            continue;
-        }
-        if (arg == "--combine" && i + 1 < argc) {
-            combine_arg = argv[i + 1];
-            i += 2;
-            continue;
-        }
-        if (arg.starts_with("--combine=")) {
-            combine_arg = arg.substr(10);
-            i += 1;
-            continue;
-        }
-        if (arg.starts_with("--diff=")) {
-            diff_utility = std::string(arg.substr(7));
-            i += 1;
-            continue;
-        }
-        if (arg.starts_with("--diff-algorithm=")) {
-            auto name = arg.substr(17);
-            auto algo = parse_diff_algorithm(name);
+            break;
+        case 'U':
+        case 'C':
+            diff_type = static_cast<char>(opt.key);
+            context_num = opt.value;
+            break;
+        case 'h': return command_help(argv[0]);
+        case SNAPSHOT: against_snapshot = true; break;
+        case DIFF: diff_utility = opt.value; break;
+        case NO_TIMESTAMPS: no_timestamps = true; break;
+        case NO_INDEX: no_index = true; break;
+        case SORT: sort_files = true; break;
+        case COLOR:
+            if (!valid_color_value(opt.value)) return usage_error(argv[0]);
+            break;
+        case DIFF_ALGORITHM: {
+            auto algo = parse_diff_algorithm(opt.value);
             if (!algo) {
-                err("Unknown diff algorithm: "); err_line(name);
+                err("Unknown diff algorithm: "); err_line(opt.value);
                 return 1;
             }
             diff_algorithm = *algo;
-            i += 1;
-            continue;
+            break;
         }
-        if (arg == "--diff-algorithm" && i + 1 < argc) {
-            std::string_view name = argv[i + 1];
-            auto algo = parse_diff_algorithm(name);
-            if (!algo) {
-                err("Unknown diff algorithm: "); err_line(name);
-                return 1;
-            }
-            diff_algorithm = *algo;
-            i += 2;
-            continue;
         }
-        if (arg == "--color" || arg.starts_with("--color=")) {
-            if (!valid_color_option(arg)) {
-                err_line("Usage: quilt diff [-p n|-p ab] [-u|-U num|-c|-C num] "
-                         "[--combine patch|-z] [-R] [-P patch] [--snapshot] "
-                         "[--diff=utility] [--no-timestamps] [--no-index] [--sort] "
-                         "[--color[=always|auto|never]] [file ...]");
-                return 1;
-            }
-            i += 1;
-            continue;
-        }
-        if (arg.starts_with('-')) {
-            err("Unrecognized option: "); err_line(arg);
-            return 1;
-        }
-        // Non-option: file name. Like upstream, an empty name names no
-        // file, unless the subdirectory prefix makes it one.
+    }
+
+    // Like upstream, an empty name names no file, unless the subdirectory
+    // prefix makes it one
+    for (auto arg : args->operands) {
         std::string file = subdir_path(q, arg);
         if (!file.empty()) file_filter.push_back(std::move(file));
-        i += 1;
     }
 
     if (!q.series_file_exists) {
@@ -2277,30 +2083,11 @@ static std::string normalize_relative_path(std::string_view path) {
 }
 
 int cmd_revert(QuiltState &q, int argc, char **argv) {
-    // Parse options
-    std::string_view patch_arg;
-    std::vector<std::string> files;
-    int i = 1;
-    while (i < argc) {
-        std::string_view arg = argv[i];
-        if (arg == "-P" && i + 1 < argc) {
-            patch_arg = argv[i + 1];
-            i += 2;
-            continue;
-        }
-        if (!arg.starts_with('-')) {
-            files.push_back(subdir_path(q, arg));
-        } else {
-            err("Unrecognized option: "); err_line(arg);
-            return 1;
-        }
-        i += 1;
-    }
-
-    if (files.empty()) {
-        err_line("Usage: quilt revert [-P patch] file ...");
-        return 1;
-    }
+    int rc;
+    auto args = parse_patch_file_args(q, argc, argv, rc);
+    if (!args) return rc;
+    std::string_view patch_arg = args->patch;
+    const auto &files = args->files;
 
     // No -P, or an empty one, means the top patch
     auto found = find_applied_patch(q, patch_arg);
