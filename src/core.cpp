@@ -1778,48 +1778,58 @@ static std::string to_upper(std::string_view s) {
 }
 
 int quilt_main(int argc, char **argv) {
-    // --- Phase 1: Extract global options (--quiltrc) from argv ---
+    // --- Phase 1: Scan the arguments like upstream's bin/quilt ---
+    // The first argument not starting with "-" names the command, and the
+    // others go to it in order, so "quilt -a push" runs "push -a".
+    // --quiltrc and --trace are taken out wherever they appear.
     std::string quiltrc_path;   // empty = default search, "-" = disabled
     bool quiltrc_set = false;
-    std::vector<char *> clean_argv;
-    clean_argv.push_back(argv[0]);
+    std::optional<std::string> command;
+    std::vector<std::string> command_args;
+    bool bad_trace = false;
     for (int i = 1; i < argc; ++i) {
         std::string_view a = argv[i];
-        if (a == "--quiltrc" && i + 1 < argc) {
-            quiltrc_path = argv[i + 1];
-            quiltrc_set = true;
-            ++i; // skip the argument
-            continue;
-        }
-        if (a.starts_with("--quiltrc=")) {
+        if (!a.empty() && a[0] != '-') {
+            if (!command) command = std::string(a);
+            else command_args.emplace_back(a);
+        } else if (a.starts_with("--quiltrc=")) {
             quiltrc_path = std::string(a.substr(10));
             quiltrc_set = true;
-            continue;
+        } else if (a == "--quiltrc") {
+            // Without a value, upstream reads no configuration file
+            quiltrc_path = i + 1 < argc ? argv[++i] : "-";
+            quiltrc_set = true;
+        } else if (a.starts_with("--trace")) {
+            // Accepted but ignored; any other form prints the usage
+            if (a != "--trace" && a != "--trace=verbose") {
+                bad_trace = true;
+                break;
+            }
+        } else {
+            command_args.emplace_back(a);
         }
-        if (a == "--trace") {
-            continue;  // accepted but ignored
-        }
-        clean_argv.push_back(argv[i]);
     }
-    int clean_argc = checked_cast<int>(std::ssize(clean_argv));
 
-    // Handle no arguments
-    if (clean_argc < 2) {
+    auto usage = [] {
         err_line("Usage: quilt [--quiltrc file] <command> [options] [args]");
         err_line("Use \"quilt --help\" for a list of commands.");
         return 1;
-    }
+    };
+    if (bad_trace) return usage();
 
-    std::string_view arg1 = clean_argv[1];
-
-    // Handle --version
-    if (arg1 == "--version" || arg1 == "-v") {
-        out_line(QUILT_VERSION);
-        return 0;
+    if (!command) {
+        if (std::ssize(command_args) == 1 && command_args[0] == "--version") {
+            out_line(QUILT_VERSION);
+            return 0;
+        }
+        if (std::ranges::find(command_args, "--help") == command_args.end() &&
+            std::ranges::find(command_args, "-h") == command_args.end()) {
+            return usage();
+        }
     }
 
     // Handle --help
-    if (arg1 == "--help" || arg1 == "-h" || arg1 == "help") {
+    if (!command || *command == "help") {
         out_line("Usage: quilt [--quiltrc file] <command> [options] [args]");
         out_line("");
         out_line("Commands:");
@@ -1850,7 +1860,7 @@ int quilt_main(int argc, char **argv) {
     }
 
     // --- Phase 3: Find command ---
-    std::string cmd_name(arg1);
+    std::string cmd_name(*command);
 
     // Find command (supports unique prefix abbreviation)
     Command *found = nullptr;
@@ -1901,7 +1911,6 @@ int quilt_main(int argc, char **argv) {
     // Build the final argv for the command: [cmd_name, extra_args..., user_args...]
     // Like upstream, the command parses the variable's words and the command
     // line in one pass, so a "--" in the variable ends the options for both.
-    // Command argv starts at clean_argv+1
     std::vector<std::string> final_argv_storage;
     std::vector<char *> final_argv;
 
@@ -1909,8 +1918,8 @@ int quilt_main(int argc, char **argv) {
     for (auto &ea : extra_args) {
         final_argv_storage.push_back(ea);
     }
-    for (int i = 2; i < clean_argc; ++i) {
-        final_argv_storage.push_back(clean_argv[checked_cast<size_t>(i)]);
+    for (auto &arg : command_args) {
+        final_argv_storage.push_back(arg);
     }
 
     for (auto &s : final_argv_storage) {

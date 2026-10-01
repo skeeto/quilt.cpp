@@ -530,9 +530,11 @@ The `diff`, `patches`, `push`, and `series` commands take `--color[=always|auto|
 
 ### Global options
 
-- **`--trace`**: Runs the command in bash trace mode (`set -x`), showing every internal command executed. Invaluable for debugging.
-- **`--quiltrc file`**: Use specified config file; `"-"` means no config file.
-- **`--version`**: Print version and exit.
+- **`--trace[=verbose]`**: The original quilt runs the command in bash trace mode (`set -x`, plus `-v` for `verbose`), showing every internal command executed. Quilt.cpp accepts and ignores it.
+- **`--quiltrc file`**, **`--quiltrc=file`**: Use specified config file; `"-"` means no config file.
+- **`--version`**: Print version and exit, when it is the only argument.
+
+These may appear anywhere on the command line. The first argument that does not start with `-` names the command, and every other argument goes to it in order, so `quilt -a push` is `quilt push -a`.
 
 ---
 

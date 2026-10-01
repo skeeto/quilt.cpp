@@ -530,6 +530,7 @@ set(QUILT_TEST_SCENARIOS
     files_combine_dash_patch_no_applied
     files_per_patch_listing
     diff_utility_files
+    global_options_anywhere
     fork_next_filename_shapes
     fork_target_exists
     fork_patches_prefix
@@ -5585,6 +5586,27 @@ function(qt_scenario_color_option_invalid)
         "patches without a file should print usage")
 endfunction()
 
+# Like upstream's bin/quilt, the first argument not starting with "-"
+# names the command, and the others go to it in order, while --quiltrc and
+# --trace (or --trace=verbose) are taken out wherever they appear
+function(qt_scenario_global_options_anywhere)
+    qt_begin_test("global_options_anywhere")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
+    qt_quilt_ok(ARGS new p.patch MESSAGE "new p failed")
+    qt_quilt_ok(ARGS new q.patch MESSAGE "new q failed")
+    qt_quilt_ok(ARGS pop -a MESSAGE "pop -a failed")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS -a push MESSAGE "-a push failed")
+    qt_assert_contains("${out}" "Now at patch q.patch" "-a should go to push")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS pop --quiltrc=- -a MESSAGE "pop --quiltrc=- -a failed")
+    qt_assert_contains("${out}" "No patches applied" "--quiltrc after the command should be taken out")
+    qt_quilt_ok(OUTPUT out ERROR err ARGS --trace=verbose series MESSAGE "--trace=verbose series failed")
+    qt_assert_equal("${out}" "p.patch\nq.patch\n" "--trace=verbose series output")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS --trace=bogus series)
+    qt_assert_failure("${rc}" "an unknown --trace form should print usage")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "Usage:" "an unknown --trace form should print usage")
+endfunction()
+
 function(qt_scenario_trace_option_accepted)
     qt_begin_test("trace_option_accepted")
     qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
@@ -7741,6 +7763,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_color_option_invalid()
     elseif(scenario STREQUAL "color_option_no_escapes")
         qt_scenario_color_option_no_escapes()
+    elseif(scenario STREQUAL "global_options_anywhere")
+        qt_scenario_global_options_anywhere()
     elseif(scenario STREQUAL "trace_option_accepted")
         qt_scenario_trace_option_accepted()
     elseif(scenario STREQUAL "applied_with_target")
