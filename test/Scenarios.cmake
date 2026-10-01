@@ -579,6 +579,7 @@ set(QUILT_TEST_SCENARIOS
 # differ from upstream quilt.
 # Skipped when testing an external quilt binary.
 set(QUILT_TEST_SCENARIOS_NATIVE
+    push_missing_patch_file_no_force
     mail_basic
     mail_subject_lookalike
     mail_single_patch
@@ -2345,6 +2346,9 @@ function(qt_scenario_subdirectory_patches_prefix)
     qt_write_file("${QT_WORK_DIR}/a/b/f.txt" "x\n")
     qt_quilt_ok(ARGS new p.patch MESSAGE "new p failed")
     qt_quilt_ok(ARGS new q.patch MESSAGE "new q failed")
+    # Debian's quilt refuses to push a patch whose file is missing
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch" "")
+    qt_write_file("${QT_WORK_DIR}/patches/q.patch" "")
     set(sub "${QT_WORK_DIR}/a/b")
     qt_quilt(RESULT rc OUTPUT out ERROR err WORKING_DIRECTORY "${sub}"
         ENV "QUILT_PATCHES_PREFIX=1" ARGS series)
@@ -5594,6 +5598,9 @@ function(qt_scenario_global_options_anywhere)
     qt_write_file("${QT_WORK_DIR}/f.txt" "a\n")
     qt_quilt_ok(ARGS new p.patch MESSAGE "new p failed")
     qt_quilt_ok(ARGS new q.patch MESSAGE "new q failed")
+    # Debian's quilt refuses to push a patch whose file is missing
+    qt_write_file("${QT_WORK_DIR}/patches/p.patch" "")
+    qt_write_file("${QT_WORK_DIR}/patches/q.patch" "")
     qt_quilt_ok(ARGS pop -a MESSAGE "pop -a failed")
     qt_quilt_ok(OUTPUT out ERROR err ARGS -a push MESSAGE "-a push failed")
     qt_assert_contains("${out}" "Now at patch q.patch" "-a should go to push")
@@ -8573,6 +8580,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_diff_last_line_newline_change()
     elseif(scenario STREQUAL "push_context_diff_zero_context")
         qt_scenario_push_context_diff_zero_context()
+    elseif(scenario STREQUAL "push_missing_patch_file_no_force")
+        qt_scenario_push_missing_patch_file_no_force()
     elseif(scenario STREQUAL "push_missing_patch_file")
         qt_scenario_push_missing_patch_file()
     elseif(scenario STREQUAL "fold_fail_rollback")
@@ -14249,9 +14258,30 @@ function(qt_scenario_push_context_diff_zero_context)
 endfunction()
 
 # A missing patch file applies as an empty patch, with a note that -q does
-# not suppress, and push --refresh notes it before refreshing it
+# not suppress. Upstream applies an empty patch for a series entry whose patch file is
+# missing. Debian's quilt refuses unless -f is given, so this part is shared
+# only with -f; push_missing_patch_file_no_force has the rest.
 function(qt_scenario_push_missing_patch_file)
     qt_begin_test("push_missing_patch_file")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "a.patch\nb.patch\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -f)
+    qt_assert_success("${rc}" "push -f of a missing patch should succeed")
+    qt_assert_equal("${out}"
+        "Applying patch a.patch\nPatch a.patch does not exist; applied empty patch\n\nNow at patch a.patch\n"
+        "push -f should note the missing patch")
+    qt_assert_equal("${err}" "" "push -f should print nothing on stderr")
+    qt_assert_not_exists("${QT_WORK_DIR}/patches/a.patch"
+        "push should not create the missing patch")
+    qt_quilt_ok(ARGS push -q -f OUTPUT out MESSAGE "push -q -f failed")
+    qt_assert_equal("${out}"
+        "Applying patch b.patch\nPatch b.patch does not exist; applied empty patch\nNow at patch b.patch\n"
+        "push -q -f should still note the missing patch")
+endfunction()
+
+# Like upstream, though unlike Debian's quilt, push applies a missing patch
+# as an empty one even without -f
+function(qt_scenario_push_missing_patch_file_no_force)
+    qt_begin_test("push_missing_patch_file_no_force")
     qt_write_file("${QT_WORK_DIR}/patches/series" "a.patch\nb.patch\n")
     qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
     qt_assert_success("${rc}" "push of a missing patch should succeed")
@@ -14259,12 +14289,6 @@ function(qt_scenario_push_missing_patch_file)
         "Applying patch a.patch\nPatch a.patch does not exist; applied empty patch\n\nNow at patch a.patch\n"
         "push should note the missing patch")
     qt_assert_equal("${err}" "" "push should print nothing on stderr")
-    qt_assert_not_exists("${QT_WORK_DIR}/patches/a.patch"
-        "push should not create the missing patch")
-    qt_quilt_ok(ARGS push -q OUTPUT out MESSAGE "push -q failed")
-    qt_assert_equal("${out}"
-        "Applying patch b.patch\nPatch b.patch does not exist; applied empty patch\nNow at patch b.patch\n"
-        "push -q should still note the missing patch")
     qt_quilt_ok(ARGS pop -q -a MESSAGE "pop -q -a failed")
     qt_quilt_ok(ARGS push --refresh OUTPUT out MESSAGE "push --refresh failed")
     qt_assert_equal("${out}"
