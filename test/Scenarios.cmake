@@ -446,6 +446,7 @@ set(QUILT_TEST_SCENARIOS
     empty_patch_arg
     patch_lookup_errors
     refresh_diff_patch_lookup
+    push_nothing_to_push_first
     push_pop_deletion
     push_keeps_emptied_file
     fold_deletion
@@ -8338,6 +8339,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_patch_lookup_errors()
     elseif(scenario STREQUAL "refresh_diff_patch_lookup")
         qt_scenario_refresh_diff_patch_lookup()
+    elseif(scenario STREQUAL "push_nothing_to_push_first")
+        qt_scenario_push_nothing_to_push_first()
     elseif(scenario STREQUAL "push_pop_deletion")
         qt_scenario_push_pop_deletion()
     elseif(scenario STREQUAL "push_keeps_emptied_file")
@@ -12771,6 +12774,38 @@ function(qt_scenario_refresh_diff_patch_lookup)
         qt_assert_equal("${rc}" "1" "'${cmd}' should fail without a series file")
         qt_assert_contains("${err}" "No series file found" "'${cmd}' should report the missing series file")
     endforeach()
+endfunction()
+
+# Like upstream's find_unapplied_patch, push finds the patch it would push
+# before it checks whether the top patch needs a refresh, so a fully
+# applied series says so even when its last patch was forced.
+function(qt_scenario_push_nothing_to_push_first)
+    qt_begin_test("push_nothing_to_push_first")
+    qt_setup_three_patch_stack()
+    qt_write_file("${QT_WORK_DIR}/f3.txt" "conflict\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -f)
+    qt_assert_failure("${rc}" "push -f of a failing patch should fail")
+    qt_combine_output(combined "${out}" "${err}")
+    qt_assert_contains("${combined}" "forced; needs refresh" "push -f should force the patch")
+    foreach(cmd "push" "push;1" "push;-a")
+        qt_quilt(RESULT rc OUTPUT out ERROR err ARGS ${cmd})
+        qt_assert_equal("${rc}" "2" "'${cmd}' should have nothing to push")
+        qt_assert_contains("${err}" "File series fully applied, ends at patch p3.patch"
+                           "'${cmd}' should report the fully applied series")
+    endforeach()
+    qt_quilt_empty_arg(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_equal("${rc}" "2" "push '' should have nothing to push")
+    qt_assert_contains("${err}" "File series fully applied, ends at patch p3.patch"
+                       "push '' should report the fully applied series")
+    qt_quilt_ok(ARGS pop -a -f MESSAGE "pop -a failed")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_equal("${rc}" "2" "push with an empty series should fail")
+    qt_assert_contains("${err}" "No patches in series" "push should report the empty series")
+    file(REMOVE "${QT_WORK_DIR}/patches/series")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_equal("${rc}" "1" "push without a series file should fail")
+    qt_assert_contains("${err}" "No series file found" "push should report the missing series file")
 endfunction()
 
 # A file deleted by a patch (+++ /dev/null) is named only by its --- line.

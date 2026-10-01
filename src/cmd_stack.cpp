@@ -453,7 +453,8 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
     ptrdiff_t top = q.top_index();
     ptrdiff_t start_idx = top + 1;
 
-    // Like upstream, look up a named target before anything else
+    // Like upstream's find_unapplied_patch, find the named target, or else
+    // the next patch, before checking anything else
     ptrdiff_t target_idx = -1;
     if (!push_all && !target.empty()) {
         auto found = find_patch(q, target);
@@ -463,6 +464,16 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
             err("Patch "); err(format_patch(q, *found)); err_line(" is currently applied");
             return 2;
         }
+    } else if (!q.series_file_exists) {
+        err_line("No series file found");
+        return 1;
+    } else if (q.series.empty()) {
+        err_line("No patches in series");
+        return 2;
+    } else if (start_idx >= std::ssize(q.series)) {
+        err_line("File series fully applied, ends at patch " +
+                 patch_path_display(q, q.applied.back()));
+        return 2;
     }
 
     // Refuse to push if top patch needs refresh (was force-applied)
@@ -473,21 +484,6 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
                      " needs to be refreshed first.");
             return 1;
         }
-    }
-
-    if (q.series.empty()) {
-        if (q.series_file_exists) {
-            err_line("No patches in series");
-        } else {
-            err_line("No series file found");
-        }
-        return 2;
-    }
-
-    if (start_idx >= std::ssize(q.series)) {
-        err_line("File series fully applied, ends at patch " +
-                 patch_path_display(q, q.applied.back()));
-        return 2;
     }
 
     ptrdiff_t end_idx;  // inclusive
