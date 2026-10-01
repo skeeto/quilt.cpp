@@ -1389,8 +1389,9 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     // inserts a new patch *after* the original and refreshes the fork.
     // The original patch keeps its content. The fork captures only the
     // delta between the original's refreshed state and the current working
-    // tree.
-    bool did_fork = false;
+    // tree. Like upstream, the fork joins the series only once its patch is
+    // written, so a fork with nothing in it leaves everything as it was.
+    std::string fork_of;
     if (opt_fork) {
         if (patch != q.applied.back()) {
             err_line("Can only use -z with the topmost applied patch");
@@ -1411,6 +1412,11 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
             }
         }
 
+        if (file_exists(path_join(q.work_dir, q.patches_dir, new_name))) {
+            err("Patch "); err(patch_path_display(q, new_name));
+            err_line(" exists already");
+            return 1;
+        }
         if (q.find_in_series(new_name)) {
             err("Patch "); err(new_name); err_line(" already exists in series");
             return 1;
@@ -1428,6 +1434,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         // the original patch to the backup copies in an in-memory FS.
         std::string old_pc = pc_patch_dir(q, old_name);
         std::string new_pc = pc_patch_dir(q, new_name);
+        if (is_directory(new_pc)) delete_dir_recursive(new_pc);
         make_dirs(new_pc);
 
         std::string orig_patch_path = path_join(q.work_dir, q.patches_dir, old_name);
@@ -1467,36 +1474,22 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
             }
         }
 
-        // Write .timestamp for the fork
-        write_file(path_join(new_pc, ".timestamp"), "");
-
-        // Like upstream, insert the fork after the original (the top) with
-        // the original's options. Refresh then records the strip level the
-        // fork is written with, which defaults to the original's, and drops -R.
-        if (!insert_in_series(q, new_name, series_patch_args(q, old_name),
-                              q.patch_after_top())) {
-            err_line("Failed to write series file.");
-            return 1;
-        }
-
-        // Update applied: add fork after original
-        q.applied.push_back(new_name);
-        std::string applied_path = path_join(q.work_dir, q.pc_dir, "applied-patches");
-        write_applied(applied_path, q.applied);
-
-        out_line("Fork of patch " + patch_path_display(q, old_name) +
-                 " created as " + patch_path_display(q, new_name));
         patch = new_name;
-        // Suppress the "Refreshed patch" message; the fork message is sufficient
-        did_fork = true;
+        fork_of = old_name;
     }
+
+    // An unfinished fork leaves nothing behind
+    auto fail = [&] {
+        if (!fork_of.empty()) delete_dir_recursive(pc_patch_dir(q, patch));
+        return 1;
+    };
 
     // Compute shadowed files (files modified by patches above this one)
     // For each shadowed file, record the first patch above that tracks it
     // (needed to find its backup as the "new" side of the diff).
     std::set<std::string> shadowed;
     std::map<std::string, std::string> shadow_next_patch;
-    if (patch != q.applied.back()) {
+    if (fork_of.empty() && patch != q.applied.back()) {
         bool above = false;
         for (const auto &a : q.applied) {
             if (above) {
@@ -1584,7 +1577,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
                                                    diff_algorithm);
         if (diff_out.starts_with("Binary files ")) {
             err("Diff failed on file '"); err(file); err_line("', aborting");
-            return 1;
+            return fail();
         }
         {
             std::string stripped = diff_out;
@@ -1609,6 +1602,11 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         }
     }
 
+    if (!fork_of.empty() && patch_content == header) {
+        err("Nothing in patch "); err_line(patch_path_display(q, patch));
+        return fail();
+    }
+
     for (const auto &[file, lines] : ws_lines) {
         std::string list;
         for (auto n : lines) {
@@ -1626,7 +1624,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         err(list); err(" of "); err_line(file);
         if (!strip_file_trailing_ws(path_join(q.work_dir, file), lines)) {
             err("Failed to write "); err_line(file);
-            return 1;
+            return fail();
         }
     }
 
@@ -1682,7 +1680,28 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
     // Write the patch file
     if (!write_file(patch_file, patch_content)) {
         err_line("Failed to write patch file " + patch_file);
-        return 1;
+        return fail();
+    }
+
+    if (!fork_of.empty()) {
+        // Like upstream, insert the fork after the original (the top) with
+        // the original's options. Refresh then records the strip level the
+        // fork is written with, which defaults to the original's, and drops -R.
+        if (!insert_in_series(q, patch, series_patch_args(q, fork_of),
+                              q.patch_after_top())) {
+            err_line("Failed to write series file.");
+            delete_file(patch_file);
+            return fail();
+        }
+
+        // Update applied: add fork after original
+        q.applied.push_back(patch);
+        std::string applied_path = path_join(q.work_dir, q.pc_dir, "applied-patches");
+        write_applied(applied_path, q.applied);
+
+        // The fork message replaces the "Refreshed patch" message
+        out_line("Fork of patch " + patch_path_display(q, fork_of) +
+                 " created as " + patch_path_display(q, patch));
     }
 
     // Update .timestamp
@@ -1694,7 +1713,7 @@ int cmd_refresh(QuiltState &q, int argc, char **argv) {
         delete_file(nr);
     }
 
-    if (!did_fork) {
+    if (fork_of.empty()) {
         if (!has_diff) {
             out("Nothing in patch "); out_line(patch_path_display(q, patch));
         } else {

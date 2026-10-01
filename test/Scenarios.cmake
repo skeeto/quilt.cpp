@@ -244,6 +244,7 @@ set(QUILT_TEST_SCENARIOS
     refresh_trailing_ws_warning_lines
     refresh_fork_named
     refresh_fork_not_top
+    refresh_fork_nothing
     refresh_diffstat
     refresh_U_combined
     refresh_C_combined
@@ -4838,6 +4839,32 @@ function(qt_scenario_refresh_fork_not_top)
     qt_assert_failure("${rc}" "refresh -z on non-top patch should fail")
 endfunction()
 
+# refresh -z with nothing to put in the fork fails without creating it
+function(qt_scenario_refresh_fork_nothing)
+    qt_begin_test("refresh_fork_nothing")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "base\n")
+    qt_quilt_ok(ARGS new a.patch MESSAGE "new failed")
+    qt_quilt_ok(ARGS add f.txt MESSAGE "add failed")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "changed\n")
+    qt_quilt_ok(ARGS refresh MESSAGE "refresh failed")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS refresh -z)
+    qt_assert_failure("${rc}" "refresh -z with no changes should fail")
+    qt_assert_equal("${out}" "" "refresh -z should not announce a fork")
+    qt_assert_equal("${err}" "Nothing in patch a-2.patch\n" "refresh -z should report the empty fork")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "a.patch" "series should be untouched")
+    qt_assert_file_text("${QT_WORK_DIR}/.pc/applied-patches" "a.patch" "applied-patches should be untouched")
+    qt_assert_not_exists("${QT_WORK_DIR}/.pc/a-2.patch" "no .pc/ directory for the fork")
+    qt_assert_not_exists("${QT_WORK_DIR}/patches/a-2.patch" "no patch file for the fork")
+    # A later fork with real changes still works
+    qt_write_file("${QT_WORK_DIR}/f.txt" "forked\n")
+    qt_quilt_ok(OUTPUT fork_out ARGS refresh -z MESSAGE "refresh -z with changes failed")
+    qt_assert_equal("${fork_out}" "Fork of patch a.patch created as a-2.patch\n" "fork message")
+    qt_assert_file_text("${QT_WORK_DIR}/patches/series" "a.patch\na-2.patch" "series should list the fork")
+    qt_assert_file_text("${QT_WORK_DIR}/.pc/applied-patches" "a.patch\na-2.patch" "fork should be applied")
+    qt_assert_file_contains("${QT_WORK_DIR}/patches/a-2.patch" "+forked" "fork should hold the new change")
+    qt_assert_file_not_contains("${QT_WORK_DIR}/patches/a-2.patch" "-base" "fork should not repeat a.patch")
+endfunction()
+
 function(qt_scenario_refresh_diffstat)
     qt_begin_test("refresh_diffstat")
     qt_write_file("${QT_WORK_DIR}/a.txt" "aaa\n")
@@ -7257,6 +7284,8 @@ function(qt_run_named_scenario scenario)
         qt_scenario_refresh_fork_named()
     elseif(scenario STREQUAL "refresh_fork_not_top")
         qt_scenario_refresh_fork_not_top()
+    elseif(scenario STREQUAL "refresh_fork_nothing")
+        qt_scenario_refresh_fork_nothing()
     elseif(scenario STREQUAL "refresh_diffstat")
         qt_scenario_refresh_diffstat()
     elseif(scenario STREQUAL "header_strip_diffstat")
