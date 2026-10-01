@@ -95,6 +95,54 @@ static bool removes_cleanly(const QuiltState &q, std::string_view name,
     return true;
 }
 
+// Like upstream push, check whether a patch that does not apply is applied
+// already by applying it in reverse, here to copies of its files.  Set files
+// to those the reverse patch would have backed up.
+static bool reverse_applies(const QuiltState &q, std::string_view name,
+                            std::string_view patch_content, PatchOptions opts,
+                            std::span<const std::string> extra_patch_opts,
+                            std::vector<std::string> &files)
+{
+    // Flip the series' direction, though as with patch given -R twice, a
+    // -R in QUILT_PATCH_OPTS keeps the patch reversed
+    opts.reverse = !q.patch_reversed.contains(std::string(name));
+    apply_quilt_patch_opts(opts, extra_patch_opts);
+    opts.quiet = true;
+
+    files = patch_target_files(patch_content, opts.strip_level, opts.reverse);
+    std::map<std::string, std::string> memfs;
+    for (const auto &file : files) {
+        std::string path = path_join(q.work_dir, file);
+        if (file_exists(path)) memfs[file] = read_file(path);
+    }
+    opts.fs = &memfs;
+    PatchResult result = builtin_patch(patch_content, opts);
+
+    std::erase_if(files, [&](const std::string &file) {
+        return std::ranges::find(result.skipped, file) != result.skipped.end();
+    });
+    return result.exit_code == 0;
+}
+
+// List the files that rolling back a patch restored from their backups, as
+// upstream push -v does through backup-files: first those it removed, whose
+// empty backups mean they were missing or empty, then the rest.
+static void show_rollback(const QuiltState &q, std::span<const std::string> files)
+{
+    std::vector<std::string_view> restored;
+    for (const auto &file : files) {
+        if (read_file(path_join(q.work_dir, file)).empty()) {
+            out_line("Removing " + file);
+        } else {
+            restored.push_back(file);
+        }
+    }
+    for (auto file : restored) {
+        out("Restoring ");
+        out_line(file);
+    }
+}
+
 int cmd_series(QuiltState &q, int argc, char **argv) {
     bool verbose = false;
     // color: 0=never, 1=auto, 2=always
@@ -385,7 +433,7 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
     bool push_all = false;
     bool force = false;
     bool quiet = false;
-    [[maybe_unused]] bool verbose = false;  // accepted for compat, patch output is unchanged
+    bool verbose = false;  // lists the files of each rollback, like upstream
     int fuzz = -1;
     bool merge = false;
     std::string merge_style;
@@ -549,7 +597,18 @@ int cmd_push(QuiltState &q, int argc, char **argv) {
                 for (const auto &file : affected) {
                     restore_file(q, name, file);
                 }
-                out_line("Patch " + display + " does not apply (enforce with -f)");
+                if (verbose) show_rollback(q, affected);
+
+                std::vector<std::string> reversed_files;
+                if (reverse_applies(q, name, patch_content, patch_opts,
+                                    extra_patch_opts, reversed_files)) {
+                    out_line("Patch " + display + " can be reverse-applied");
+                } else {
+                    out_line("Patch " + display + " does not apply (enforce with -f)");
+                }
+                // Upstream rolls back its trial too
+                if (verbose) show_rollback(q, reversed_files);
+
                 if (!leave_rejects) {
                     for (const auto &file : affected) {
                         std::string rej = path_join(q.work_dir, file + ".rej");

@@ -486,6 +486,8 @@ set(QUILT_TEST_SCENARIOS
     fold_failed_hunk_output
     push_crlf_patch_output
     diff_last_line_newline_change
+    push_reverse_applied
+    push_verbose_rollback
 )
 
 # Scenarios that test quilt.cpp-specific behavior (mail command format).
@@ -8203,6 +8205,10 @@ function(qt_run_named_scenario scenario)
         qt_scenario_fold_failed_hunk_output()
     elseif(scenario STREQUAL "push_crlf_patch_output")
         qt_scenario_push_crlf_patch_output()
+    elseif(scenario STREQUAL "push_reverse_applied")
+        qt_scenario_push_reverse_applied()
+    elseif(scenario STREQUAL "push_verbose_rollback")
+        qt_scenario_push_verbose_rollback()
     else()
         qt_fail("Unknown scenario: ${scenario}")
     endif()
@@ -13778,4 +13784,121 @@ function(qt_scenario_diff_last_line_newline_change)
         "*** a/gain\n--- b/gain\n***************\n*** 1 ****\n! a\n${nl}--- 1,2 ----\n! a\n! b\n")
     qt_check_diff_round_trip(add "a" "a\nb" -u
         "--- a/add\n+++ b/add\n@@ -1 +1,2 @@\n-a\n${nl}+a\n+b\n${nl}")
+endfunction()
+
+# push_reverse_applied: when a patch does not apply, push tries it in
+# reverse, and if that works says the patch is applied already.  It leaves
+# the working tree as it was, whichever message it prints.
+function(qt_scenario_push_reverse_applied)
+    qt_begin_test("push_reverse_applied")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "A\nb\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -1,2 +1,2 @@\n-a\n+A\n b\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_failure("${rc}" "push of an applied patch should fail")
+    qt_assert_contains("${out}" "\nHunk #1 FAILED at 1.\n" "push should show the failed hunk")
+    qt_assert_matches("${out}" "\nPatch p\\.diff can be reverse-applied\n$"
+        "push should say the patch can be reverse-applied")
+    qt_assert_not_contains("${out}" "does not apply" "push should not say the patch does not apply")
+    qt_assert_equal("${err}" "" "push should write everything to stdout")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "A\nb" "push should leave f.txt alone")
+    qt_assert_not_exists("${QT_WORK_DIR}/f.txt.rej" "push should leave no rejects")
+    qt_assert_not_exists("${QT_WORK_DIR}/.pc/p.diff" "push should leave no backups")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -q)
+    qt_assert_failure("${rc}" "push -q of an applied patch should fail")
+    qt_assert_equal("${out}"
+        "Applying patch p.diff\n1 out of 1 hunk FAILED\nPatch p.diff can be reverse-applied\n"
+        "push -q should say the patch can be reverse-applied")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS applied)
+    qt_assert_failure("${rc}" "no patch should be applied")
+
+    # Only one of the two hunks reverses, so the patch does not apply
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-a\n+A\n@@ -2 +2 @@\n-q\n+Q\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -q)
+    qt_assert_failure("${rc}" "push -q of a half-applied patch should fail")
+    qt_assert_equal("${out}"
+        "Applying patch p.diff\n2 out of 2 hunks FAILED\nPatch p.diff does not apply (enforce with -f)\n"
+        "push -q should say a half-applied patch does not apply")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "A\nb" "push should leave f.txt alone (half)")
+
+    # A patch reversed in the series is applied when its old side is there
+    qt_write_file("${QT_WORK_DIR}/f.txt" "a\nb\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff -R\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -1,2 +1,2 @@\n-a\n+A\n b\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -q)
+    qt_assert_failure("${rc}" "push -q of an applied reversed patch should fail")
+    qt_assert_equal("${out}"
+        "Applying patch p.diff\n1 out of 1 hunk FAILED\nPatch p.diff can be reverse-applied\n"
+        "push -q should say the reversed patch can be reverse-applied")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "a\nb" "push should leave f.txt alone (-R)")
+
+    # Reversing a patch that creates a file deletes it, but only in trial
+    qt_write_file("${QT_WORK_DIR}/new.txt" "n\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+a\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+n\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_failure("${rc}" "push of an applied file creation should fail")
+    qt_assert_matches("${out}" "\nPatch p\\.diff can be reverse-applied\n$"
+        "push should say the file creation can be reverse-applied")
+    qt_assert_file_text("${QT_WORK_DIR}/new.txt" "n" "push should leave new.txt alone")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "a\nb" "push should leave f.txt alone (new)")
+
+    # Forced, push applies what it can and does not try the reverse
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -f)
+    qt_assert_failure("${rc}" "push -f of an applied patch should fail")
+    qt_assert_contains("${out}" "Applied patch p.diff (forced; needs refresh)\n"
+        "push -f should force the patch")
+    qt_assert_not_contains("${out}" "reverse-applied" "push -f should not try the reverse")
+endfunction()
+
+# push_verbose_rollback: push -v lists the files it restores from their
+# backups each time it rolls back a patch that does not apply: after the
+# failed patch, and after trying it in reverse.  Like backup-files, it
+# lists the files it removes first.
+function(qt_scenario_push_verbose_rollback)
+    qt_begin_test("push_verbose_rollback")
+    qt_write_file("${QT_WORK_DIR}/f.txt" "y\n")
+    qt_write_file("${QT_WORK_DIR}/patches/series" "p.diff\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-q\n+Q\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+n\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -q -v)
+    qt_assert_failure("${rc}" "push -q -v should fail")
+    qt_assert_equal("${out}"
+        "Applying patch p.diff\n1 out of 1 hunk FAILED\nRemoving new.txt\nRestoring f.txt\nPatch p.diff does not apply (enforce with -f)\nRemoving new.txt\nRestoring f.txt\n"
+        "push -q -v should list the files of each rollback")
+    qt_assert_equal("${err}" "" "push -q -v should write everything to stdout")
+    qt_assert_not_exists("${QT_WORK_DIR}/new.txt" "push should remove new.txt")
+    qt_assert_file_text("${QT_WORK_DIR}/f.txt" "y" "push should restore f.txt")
+
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -v)
+    qt_assert_failure("${rc}" "push -v should fail")
+    qt_assert_matches("${out}"
+        "\nRemoving new\\.txt\nRestoring f\\.txt\nPatch p\\.diff does not apply \\(enforce with -f\\)\nRemoving new\\.txt\nRestoring f\\.txt\n$"
+        "push -v should list the files of each rollback")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push)
+    qt_assert_failure("${rc}" "push should fail")
+    qt_assert_not_contains("${out}" "Restoring" "push without -v should not list restored files")
+    qt_assert_not_contains("${out}" "Removing" "push without -v should not list removed files")
+
+    # The trial in reverse backs up only the files it patches.  The order
+    # of the restored files depends on the file system upstream.
+    qt_write_file("${QT_WORK_DIR}/f.txt" "X\n")
+    qt_write_file("${QT_WORK_DIR}/z.txt" "Z\n")
+    qt_write_file("${QT_WORK_DIR}/patches/p.diff"
+        "--- a/z.txt\n+++ b/z.txt\n@@ -1 +1 @@\n-z\n+Z\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-x\n+X\n--- a/missing.txt\n+++ b/missing.txt\n@@ -1 +1 @@\n-m\n+M\n")
+    qt_quilt(RESULT rc OUTPUT out ERROR err ARGS push -q -v)
+    qt_assert_failure("${rc}" "push -q -v of a partly missing patch should fail")
+    set(restored "(Restoring (f|z)\\.txt\n)(Restoring (f|z)\\.txt\n)")
+    qt_assert_matches("${out}"
+        "\n${restored}Patch p\\.diff does not apply \\(enforce with -f\\)\n${restored}$"
+        "push -q -v should restore only the files it found")
+    qt_assert_contains("${out}" "Restoring f.txt\n" "push -q -v should restore f.txt")
+    qt_assert_contains("${out}" "Restoring z.txt\n" "push -q -v should restore z.txt")
+    qt_assert_not_contains("${out}" "Restoring missing.txt" "push -q -v should not restore missing.txt")
+    qt_assert_not_contains("${out}" "Removing missing.txt" "push -q -v should not remove missing.txt")
+    qt_assert_not_exists("${QT_WORK_DIR}/missing.txt" "push should not create missing.txt")
 endfunction()
